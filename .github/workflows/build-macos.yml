@@ -1,0 +1,56 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          brew install bison flex texinfo libxml2 libxslt automake autoconf
+
+      - name: Build vrecord .pkg and .dmg (Release_Mac.sh)
+        env:
+          MACOS_CODESIGN_IDENTITY: ""
+        run: |
+          chmod +x Release/Release_Mac.sh
+          ./Release/Release_Mac.sh || echo "::warning::Release_Mac.sh incomplete - collecting partial output"
+        continue-on-error: true
+
+      - name: Build vrecord .app bundle
+        run: |
+          chmod +x Release/build-mac-app.sh
+          ./Release/build-mac-app.sh
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          find Release -maxdepth 1 -name 'vrecord_*_Mac.dmg' -exec cp {} artifacts/ \; || true
+          find Release -maxdepth 1 -name 'vrecord.pkg' -exec cp {} artifacts/ \; || true
+          cp -a Release/artifacts/vrecord.app artifacts/ 2>/dev/null || true
+          ls -la artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrecord-macos
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/vrecord_*_Mac.dmg
+            artifacts/vrecord.app.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

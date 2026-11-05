@@ -1,0 +1,64 @@
+name: Build Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl libgtk2.0-dev libgtk-3-dev bison flex texinfo \
+            git mkvtoolnix gnuplot xmlstarlet mpv mediaconch \
+            libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools \
+            binutils file desktop-file-utils
+          # homebrew-on-linux for the tap deps (ffmpeg-ma, gtkdialog)
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew tap amiaopensource/amiaos
+          brew tap mediaarea/mediaarea
+          brew install vrecord ffmpeg-ma gtkdialog
+
+      - name: Build .deb package
+        run: |
+          chmod +x Release/build-deb.sh
+          ./Release/build-deb.sh
+
+      - name: Build .AppImage
+        run: |
+          chmod +x Release/build-appimage.sh
+          ./Release/build-appimage.sh
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp Release/artifacts/*.deb artifacts/ 2>/dev/null || true
+          cp Release/artifacts/*.AppImage artifacts/ 2>/dev/null || true
+          ls -la artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrecord-linux
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.deb
+            artifacts/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,95 @@
+name: Build Windows
+
+# NOTE: vrecord does not currently run on Windows. The vrecord main script
+# is a bash/gtkdialog application and depends on X11 (decklink via ffmpeg-ma,
+# gtkdialog GUI, mpv playback). This workflow lays out the packaging
+# infrastructure for a future Windows port (e.g., via WSL, MSYS2, or a
+# rewrite). It builds a placeholder portable zip and an NSIS installer
+# skeleton that will fail gracefully until real Windows binaries exist.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Windows build prerequisites
+        id: check
+        shell: bash
+        run: |
+          # vrecord has no Windows port yet - check and report
+          echo "::warning::vrecord has no Windows build. This job lays out the CI scaffolding only."
+          echo "::group::Windows port notes"
+          cat Release/windows-port-notes.md 2>/dev/null || echo "No port notes found"
+          echo "::endgroup::"
+
+      - name: Build portable zip (placeholder)
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          # placeholder: package the scripts + resources + docs for now
+          # (a future port would package real Windows binaries here)
+          mkdir -p "vrecord-windows-${VERSION}/Resources"
+          cp vrecord vtest vplay "vrecord-windows-${VERSION}/" 2>/dev/null || true
+          cp -a Resources/* "vrecord-windows-${VERSION}/Resources/"
+          cp README.md "vrecord-windows-${VERSION}/" 2>/dev/null || true
+          cat > "vrecord-windows-${VERSION}/NOT-WINDOWS-NATIVE.txt" << 'EOF'
+          vrecord does not currently run natively on Windows.
+          This is a CI scaffolding package. To use vrecord on Windows,
+          see the windows-port-notes.md or use WSL2 + X server.
+          EOF
+          cd "vrecord-windows-${VERSION}" && zip -qry "../artifacts/vrecord_${VERSION}_windows_portable.zip" . && cd ..
+          rm -rf "vrecord-windows-${VERSION}"
+
+      - name: Build NSIS installer (placeholder)
+        shell: bash
+        run: |
+          # download NSIS
+          curl -L "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.09/nsis-3.09-setup.exe" -o nsis-setup.exe || true
+          # placeholder: generate a minimal NSIS script for the future port
+          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          cat > installer.nsi << EOF
+          !define VERSION "${VERSION}"
+          Name "vrecord"
+          OutFile "artifacts/vrecord_\${VERSION}_setup.exe"
+          InstallDir "\$PROGRAMFILES64\vrecord"
+          Page directory
+          Page instfiles
+          Section ""
+            ; placeholder - a future Windows port installs real binaries here
+            SetOutPath "\$INSTDIR"
+            File /r "vrecord-windows-\${VERSION}\*"
+            CreateDirectory "\$SMPROGRAMS\vrecord"
+            CreateShortCut "\$SMPROGRAMS\vrecord\vrecord.lnk" "\$INSTDIR\vrecord" ""
+          SectionEnd
+          EOF
+          # try to build with NSIS if available (choco install nsis)
+          choco install nsis -y 2>/dev/null || true
+          if command -v makensis >/dev/null 2>&1; then
+            makensis installer.nsi || echo "::warning::NSIS build skipped (no real Windows binaries yet)"
+          else
+            echo "::warning::NSIS not available - installer skipped"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrecord-windows
+          path: artifacts/
+          if-no-files-found: warn
+
+      - name: Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
