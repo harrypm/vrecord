@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- vrecord app icon: monitor with a white V on a black screen (after the MISRC GUI icon) -->
+  <!-- monitor body: gray bezel with a thin dark outline -->
+  <rect x="5" y="5" width="118" height="87" rx="9" fill="#5c5c5c"/>
+  <rect x="5" y="5" width="118" height="87" rx="9" fill="none" stroke="#212121" stroke-width="3"/>
+  <!-- black screen -->
+  <rect x="15" y="15" width="98" height="67" fill="#000000"/>
+  <!-- white V -->
+  <path d="M 37 21 L 51 21 L 64 52 L 77 21 L 91 21 L 71 76 L 57 76 Z" fill="#ffffff"/>
+  <!-- power light (rust accent, as on the MISRC icon) -->
+  <rect x="58" y="85" width="12" height="3" rx="1.5" fill="#a14f2f"/>
+  <!-- stand: neck, flare, and base -->
+  <rect x="49" y="92" width="30" height="7" fill="#5c5c5c"/>
+  <path d="M 42 99 L 86 99 L 80 106 L 48 106 Z" fill="#5c5c5c"/>
+  <rect x="32" y="106" width="64" height="9" rx="4" fill="#5c5c5c"/>
+  <rect x="32" y="106" width="64" height="9" rx="4" fill="none" stroke="#212121" stroke-width="2"/>
+</svg>
