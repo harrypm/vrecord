@@ -1698,7 +1698,7 @@ PREVIEW_FORM
 export MAIN_DIALOG='
 <window title="Welcome to Vrecord!">
     <vbox shadow-type="0">
-        <vbox scrollable="true" shadow-type="0">
+        <vbox scrollable="true" width="1080" height="520" shadow-type="0">
             <vbox>
                 <hbox homogenous="true" space-expand="true">
                     <button image-position="Top">
@@ -1757,7 +1757,7 @@ export MAIN_DIALOG='
             <variable export="false">MAIN</variable>
             <action signal="show" type="refresh">VRECORD_SETTINGS_SUMMARY</action>
         </vbox>
-        <vbox scrollable="true" shadow-type="0">
+        <vbox scrollable="true" width="1420" height="520" shadow-type="0">
             <frame Input Options>
             <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview">
                 '"${DECKLINK_INPUT_GUI}"'
@@ -1998,7 +1998,6 @@ export MAIN_DIALOG='
     <action signal="realize" type="show">MAIN</action>
     <action signal="realize" type="hide">INPUTSETTINGS</action>
     <action signal="realize">_start_video_preview</action>
-    <action signal="realize">{ sleep 0.2 ; wmctrl -r :ACTIVE: -b remove,maximized_vert,maximized_horz 2>/dev/null ; wmctrl -r :ACTIVE: -e "0,250,100,1420,880" 2>/dev/null ; } &</action>
     <action signal="realize" condition="command_is_true( [ \"$STARTUP_VIEW\" = \"INPUTSETTINGS\" ] && echo true)" type="show">INPUTSETTINGS</action>
     <action signal="realize" condition="command_is_true( [ \"$STARTUP_VIEW\" = \"INPUTSETTINGS\" ] && echo true)" type="hide">MAIN</action>
     <action signal="show" type="refresh">VRECORD_FORM_VALIDATION</action>
