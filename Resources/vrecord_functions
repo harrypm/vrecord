@@ -88,7 +88,7 @@ _start_video_preview(){
         set -- "$@" -audio_input "${PREVIEW_AINPUT}"
     fi
     set -- "$@" -f decklink -i "${DECKLINK_INPUT_CHOICE}"
-    set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
+    set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
         PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
         if [ -n "${PREVIEW_RELAY_DEV_CHOICE}" ] ; then
@@ -200,7 +200,7 @@ _start_file_playback(){
     # lossless preview of the outgoing file for the output side of the tab: raw RGB frames
     # through a fifo (same stream and timeline as the device output; scaled to the pane
     # because gtkdialog pixmaps render at natural size), wrapped in PPM atomically
-    set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
+    set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
     # converted feed to the device output
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
