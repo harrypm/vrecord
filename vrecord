@@ -1618,7 +1618,6 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <default>true</default>
                     <variable export="false">preview_toggle</variable>
                     <input file stock="gtk-media-play"></input>
-                    <action signal="realize">_start_video_preview</action>
                     <action>if true _start_video_preview</action>
                     <action>if false _stop_video_preview</action>
                 </togglebutton>
@@ -1991,6 +1990,7 @@ export MAIN_DIALOG='
     <variable export="false">MAIN_DIALOG</variable>
     <action signal="realize" type="show">MAIN</action>
     <action signal="realize" type="hide">INPUTSETTINGS</action>
+    <action signal="realize">_start_video_preview</action>
     <action signal="realize" condition="command_is_true( [ \"$STARTUP_VIEW\" = \"INPUTSETTINGS\" ] && echo true)" type="show">INPUTSETTINGS</action>
     <action signal="realize" condition="command_is_true( [ \"$STARTUP_VIEW\" = \"INPUTSETTINGS\" ] && echo true)" type="hide">MAIN</action>
     <action signal="show" type="refresh">VRECORD_FORM_VALIDATION</action>
@@ -3624,8 +3624,13 @@ VRECORD_RECORD_PID_TMP="$(_maketemp .vrecord_recording.pid)"
 VRECORD_RECORD_STATUS_TMP="$(_maketemp .vrecord_recording.status.txt)"
 VRECORD_RECORD_LOG_TMP="$(_maketemp .vrecord_recording.log.txt)"
 echo "idle" > "${VRECORD_RECORD_STATUS_TMP}"
-INPUT_MEM_TMP="$(_maketemp .vrecord_input_mem.txt)"
-echo "${DEVICE_INPUT_CHOICE}" > "${INPUT_MEM_TMP}"
+INPUT_MEM_TMP="$(_maketemp .vrecord_input_mem.txt)
+# only remember real input tabs (a config saved from the Config or Video Preview
+# tab can carry a tab index that is not an input choice)
+case "${DEVICE_INPUT_CHOICE}" in
+    0|1|2)  echo "${DEVICE_INPUT_CHOICE}" > "${INPUT_MEM_TMP}" ;;
+    *)     : > "${INPUT_MEM_TMP}" ;;
+esac
 
 # resolve this script's absolute path so GUI actions can launch recording processes
 case "${0}" in

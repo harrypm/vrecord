@@ -612,8 +612,8 @@ _combine_duration_fields(){
 _update_config_file(){
     # write config file
     _combine_duration_fields
-    # the Video Preview tab is not an input choice; keep the last real input tab
-    if [ "${DEVICE_INPUT_CHOICE}" = "4" ] ; then
+    # the Config and Video Preview tabs are not input choices; keep the last real input tab
+    if [ "${DEVICE_INPUT_CHOICE}" = "3" ] || [ "${DEVICE_INPUT_CHOICE}" = "4" ] ; then
         DEVICE_INPUT_CHOICE="${INPUT_CHOICE_MEM}"
     fi
     {
