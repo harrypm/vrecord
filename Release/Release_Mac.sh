@@ -234,6 +234,7 @@ pushd "${release_directory}/"
     cp -a ../Resources/audio_mode.gif vrecord_ROOT/usr/local/share/vrecord/Resources
     cp -a ../Resources/dvrecord.png vrecord_ROOT/usr/local/share/vrecord/Resources
     cp -a ../Resources/qcview.lua vrecord_ROOT/usr/local/share/vrecord/Resources
+    cp -a ../Resources/vrecord_preview_reader.c vrecord_ROOT/usr/local/share/vrecord/Resources
     cp -a ../Resources/vrecord-dark.gtkrc vrecord_ROOT/usr/local/share/vrecord/Resources
     cp -a ../Resources/vrecord_functions vrecord_ROOT/usr/local/share/vrecord/Resources
     cp -a ../Resources/vrecord_logo.png vrecord_ROOT/usr/local/share/vrecord/Resources

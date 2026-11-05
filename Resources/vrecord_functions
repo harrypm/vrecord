@@ -37,8 +37,38 @@ _check_ffmpeg_install(){
     fi
 }
 
+# build (and cache) the small compiled helper that reads preview frames from a
+# fifo through a one-second ring buffer and re-clocks them to the display file;
+# without a C compiler the preview falls back to a capped shell reader
+_ensure_preview_reader(){
+    PREVIEW_READER=""
+    PREVIEW_READER_CC=""
+    if command -v cc >/dev/null 2>&1 ; then
+        PREVIEW_READER_CC="cc"
+    elif command -v gcc >/dev/null 2>&1 ; then
+        PREVIEW_READER_CC="gcc"
+    elif command -v clang >/dev/null 2>&1 ; then
+        PREVIEW_READER_CC="clang"
+    fi
+    if [ -z "${PREVIEW_READER_CC}" ] || [ ! -f "${RESOURCE_PATH}/vrecord_preview_reader.c" ] ; then
+        return 0
+    fi
+    PREVIEW_CACHE="${HOME}/.cache/vrecord"
+    mkdir -p "${PREVIEW_CACHE}" 2>/dev/null
+    PREVIEW_READER="${PREVIEW_CACHE}/vrecord-preview-reader"
+    PREVIEW_STAMP="$(cksum "${RESOURCE_PATH}/vrecord_preview_reader.c" 2>/dev/null | cut -d' ' -f1)"
+    if [ ! -x "${PREVIEW_READER}" ] || [ "${PREVIEW_STAMP}" != "$(cat "${PREVIEW_CACHE}/reader.stamp" 2>/dev/null)" ] ; then
+        if "${PREVIEW_READER_CC}" -O2 -o "${PREVIEW_READER}.new" "${RESOURCE_PATH}/vrecord_preview_reader.c" 2>/dev/null ; then
+            mv -f "${PREVIEW_READER}.new" "${PREVIEW_READER}"
+            echo "${PREVIEW_STAMP}" > "${PREVIEW_CACHE}/reader.stamp"
+        else
+            PREVIEW_READER=""
+        fi
+    fi
+}
+
 # Video Preview tab: launch a background preview of the decklink input that
-# writes a regularly updated JPEG for the settings window and, when the relay
+# writes a regularly updated preview for the settings window and, when the relay
 # option is on, sends the feed to the selected device's output through the
 # Blackmagic SDK (SDI, HDMI, or analogue, depending on the card's connectors)
 _start_video_preview(){
@@ -77,6 +107,8 @@ _start_video_preview(){
         "S-Video")   PREVIEW_VINPUT="s_video" ;;
         *)           PREVIEW_VINPUT="sdi" ;;
     esac
+    # build the compiled frame reader (falls back to a shell reader without a C compiler)
+    _ensure_preview_reader
     # build the ffmpeg arguments as positional parameters so device names with spaces stay intact
     set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}"
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
@@ -88,7 +120,12 @@ _start_video_preview(){
         set -- "$@" -audio_input "${PREVIEW_AINPUT}"
     fi
     set -- "$@" -f decklink -i "${DECKLINK_INPUT_CHOICE}"
-    set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
+    if [ -n "${PREVIEW_READER}" ] ; then
+        # native frame rate: the compiled reader re-clocks the output on a wall-clock schedule
+        set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
+    else
+        set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
+    fi
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
         PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
         if [ -n "${PREVIEW_RELAY_DEV_CHOICE}" ] ; then
@@ -102,13 +139,18 @@ _start_video_preview(){
     # PPM header and renames it into place atomically so the pane never shows a torn frame
     PREVIEW_W=480
     PREVIEW_H="$(awk -v w="${PREVIEW_SRCW}" -v h="${PREVIEW_SRCH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
-    PREVIEW_PIX=$(( PREVIEW_W * PREVIEW_H * 3 ))
-    PREPIX="${PREVIEW_PIX}" PREW="${PREVIEW_W}" PREH="${PREVIEW_H}" PREDISP="${VRECORD_PREVIEW_TMP}" \
-        sh -c 'while head -c "${PREPIX}" > "${PREDISP}.frame" 2>/dev/null ; do
-                  [ "$(wc -c < "${PREDISP}.frame")" = "${PREPIX}" ] || break
-                  { printf "P6\n%s %s\n255\n" "${PREW}" "${PREH}" ; cat "${PREDISP}.frame" ; } > "${PREDISP}.new"
-                  mv -f "${PREDISP}.new" "${PREDISP}"
-              done' < "${VRECORD_PREVIEW_FIFO}" > /dev/null 2>&1 &
+    if [ -n "${PREVIEW_READER}" ] ; then
+        # one second software playout delay: the reader buffers the frames and re-clocks them
+        "${PREVIEW_READER}" "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}" "${PREVIEW_W}" "${PREVIEW_H}" 1 > /dev/null 2>&1 &
+    else
+        PREVIEW_PIX=$(( PREVIEW_W * PREVIEW_H * 3 ))
+        PREPIX="${PREVIEW_PIX}" PREW="${PREVIEW_W}" PREH="${PREVIEW_H}" PREDISP="${VRECORD_PREVIEW_TMP}" \
+            sh -c 'while head -c "${PREPIX}" > "${PREDISP}.frame" 2>/dev/null ; do
+                      [ "$(wc -c < "${PREDISP}.frame")" = "${PREPIX}" ] || break
+                      { printf "P6\n%s %s\n255\n" "${PREW}" "${PREH}" ; cat "${PREDISP}.frame" ; } > "${PREDISP}.new"
+                      mv -f "${PREDISP}.new" "${PREDISP}"
+                  done' < "${VRECORD_PREVIEW_FIFO}" > /dev/null 2>&1 &
+    fi
     echo $! > "${VRECORD_PREVIEW_RPID_TMP}"
     echo "starting preview..." > "${VRECORD_PREVIEW_STATUS_TMP}"
     "$@" > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
@@ -200,20 +242,29 @@ _start_file_playback(){
     # lossless preview of the outgoing file for the output side of the tab: raw RGB frames
     # through a fifo (same stream and timeline as the device output; scaled to the pane
     # because gtkdialog pixmaps render at natural size), wrapped in PPM atomically
-    set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
+    if [ -n "${PREVIEW_READER}" ] ; then
+        set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
+    else
+        set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
+    fi
     # converted feed to the device output
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
+    _ensure_preview_reader
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
     mkfifo "${VRECORD_FILEPLAY_FIFO}"
     FP_W=480
     FP_H="$(awk -v w="${FP_FW}" -v h="${FP_FH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
-    FP_PIX=$(( FP_W * FP_H * 3 ))
-    FPPIX="${FP_PIX}" FPW="${FP_W}" FPH="${FP_H}" FPDISP="${VRECORD_FILEPLAY_IMG_TMP}" \
-        sh -c 'while head -c "${FPPIX}" > "${FPDISP}.frame" 2>/dev/null ; do
-                  [ "$(wc -c < "${FPDISP}.frame")" = "${FPPIX}" ] || break
-                  { printf "P6\n%s %s\n255\n" "${FPW}" "${FPH}" ; cat "${FPDISP}.frame" ; } > "${FPDISP}.new"
-                  mv -f "${FPDISP}.new" "${FPDISP}"
-              done' < "${VRECORD_FILEPLAY_FIFO}" > /dev/null 2>&1 &
+    if [ -n "${PREVIEW_READER}" ] ; then
+        "${PREVIEW_READER}" "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}" "${FP_W}" "${FP_H}" 1 > /dev/null 2>&1 &
+    else
+        FP_PIX=$(( FP_W * FP_H * 3 ))
+        FPPIX="${FP_PIX}" FPW="${FP_W}" FPH="${FP_H}" FPDISP="${VRECORD_FILEPLAY_IMG_TMP}" \
+            sh -c 'while head -c "${FPPIX}" > "${FPDISP}.frame" 2>/dev/null ; do
+                      [ "$(wc -c < "${FPDISP}.frame")" = "${FPPIX}" ] || break
+                      { printf "P6\n%s %s\n255\n" "${FPW}" "${FPH}" ; cat "${FPDISP}.frame" ; } > "${FPDISP}.new"
+                      mv -f "${FPDISP}.new" "${FPDISP}"
+                  done' < "${VRECORD_FILEPLAY_FIFO}" > /dev/null 2>&1 &
+    fi
     echo $! > "${VRECORD_FILEPLAY_RPID_TMP}"
     echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "$@" > "${VRECORD_FILEPLAY_LOG_TMP}" 2>&1 &
