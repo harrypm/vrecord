@@ -1363,7 +1363,7 @@ DECKLINK_INPUT_GUI=$(cat << DECKLINK_FORM
             $(_gtk_vbox_list "DECKLINK_INPUT_CHOICE"    "120" "Video Card"             "${DECKLINK_DEVICES[@]}")
             $(_gtk_vbox_list "VIDEO_INPUT_CHOICE"       "80" "Video Input"            "${VIDEO_INPUT_OPTIONS[@]}")
             $(_gtk_vbox_list "AUDIO_INPUT_CHOICE"       "130" "Audio Input"            "${AUDIO_INPUT_OPTIONS[@]}")
-            $(_gtk_vbox_list "AUDIO_MAPPING_CHOICE"     "300" "Audio Channel Mapping"  "${CHANNEL_MAPPING_OPTIONS[@]}" )
+            $(_gtk_vbox_list "AUDIO_MAPPING_CHOICE"      "-1" "Audio Channel Mapping"  "${CHANNEL_MAPPING_OPTIONS[@]}" )
             $(_gtk_vbox_list "STANDARD_CHOICE"           "110" "Standard"               "${STANDARD_OPTIONS[@]}")
             $(_gtk_vbox_list "VIDEO_BIT_DEPTH_CHOICE"    "40" "Video Bit Depth"        "${VIDEO_BITDEPTH_OPTIONS[@]}")
             $(_gtk_vbox_list "ASPECT_RATIO_CHOICE"       "40" "Display Aspect Ratio"   "${ASPECT_RATIO_OPTIONS[@]}")
@@ -1692,7 +1692,7 @@ PREVIEW_FORM
 export MAIN_DIALOG='
 <window title="Welcome to Vrecord!">
     <vbox shadow-type="0">
-        <vbox scrollable="true" shadow-type="0">
+        <vbox scrollable="true" width="1080" height="520" shadow-type="0">
             <vbox>
                 <hbox homogenous="true" space-expand="true">
                     <button image-position="Top">
@@ -1751,7 +1751,7 @@ export MAIN_DIALOG='
             <variable export="false">MAIN</variable>
             <action signal="show" type="refresh">VRECORD_SETTINGS_SUMMARY</action>
         </vbox>
-        <vbox scrollable="true" shadow-type="0">
+        <vbox scrollable="true" width="1420" height="520" shadow-type="0">
             <frame Input Options>
             <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview">
                 '"${DECKLINK_INPUT_GUI}"'
@@ -1957,12 +1957,12 @@ export MAIN_DIALOG='
                 <action type="refresh">STARTUP_VIEW</action>
             </button>
             <button tooltip-text="Snap the window to the left half of the screen (split-screen with another application)">
-                <label>1/2L</label>
+                <label>1/2 Left</label>
                 <variable export="false">snap_left_button</variable>
                 <action>_snap_window left</action>
             </button>
             <button tooltip-text="Snap the window to the right half of the screen">
-                <label>1/2R</label>
+                <label>1/2 Right</label>
                 <variable export="false">snap_right_button</variable>
                 <action>_snap_window right</action>
             </button>
@@ -2012,7 +2012,6 @@ export MAIN_DIALOG='
     <action signal="realize" type="show">MAIN</action>
     <action signal="realize" type="hide">INPUTSETTINGS</action>
     <action signal="realize">_start_video_preview</action>
-    <action signal="realize">{ sleep 0.3 ; _snap_window default ; } &</action>
     <action signal="realize" condition="command_is_true( [ \"$STARTUP_VIEW\" = \"INPUTSETTINGS\" ] && echo true)" type="show">INPUTSETTINGS</action>
     <action signal="realize" condition="command_is_true( [ \"$STARTUP_VIEW\" = \"INPUTSETTINGS\" ] && echo true)" type="hide">MAIN</action>
     <action signal="show" type="refresh">VRECORD_FORM_VALIDATION</action>
@@ -2076,7 +2075,6 @@ _edit_mode(){
     echo "VRECORD_FILEPLAY_RPID_TMP=\"${VRECORD_FILEPLAY_RPID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PLAY_OFFSET_TMP=\"${VRECORD_PLAY_OFFSET_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_OUTPUT_DISPLAY_TMP=\"${VRECORD_OUTPUT_DISPLAY_TMP}\"" >> "${GTK_INC}"
-    echo "VRECORD_PANE_W_TMP=\"${VRECORD_PANE_W_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PLAY_POS_TMP=\"${VRECORD_PLAY_POS_TMP}\"" >> "${GTK_INC}"
@@ -3640,8 +3638,6 @@ VRECORD_FILEPLAY_FIFO="$(_maketemp .vrecord_fileplay.fifo)"
 VRECORD_FILEPLAY_RPID_TMP="$(_maketemp .vrecord_fileplay.reader.pid)"
 VRECORD_PLAY_OFFSET_TMP="$(_maketemp .vrecord_fileplay.offset.txt)"
 VRECORD_OUTPUT_DISPLAY_TMP="$(_maketemp .vrecord_output_display.ppm)"
-VRECORD_PANE_W_TMP="$(_maketemp .vrecord_pane_w.txt)"
-echo "480" > "${VRECORD_PANE_W_TMP}"
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"
