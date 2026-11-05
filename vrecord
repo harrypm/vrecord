@@ -1749,7 +1749,9 @@ export MAIN_DIALOG='
                         <variable export="false">record_button_main</variable>
                         <width>100</width>
                         <input file>"'"${RESOURCE_PATH}/vrecord_logo.png"'"</input>
-                        <action type="exit">record_button</action>
+                        <action>_update_config_file</action>
+                        <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)" type="exit">record_button</action>
+                        <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">_start_gui_recording</action>
                     </button>
                     <button image-position="Top">
                         <label>Passthrough</label>
@@ -1810,10 +1812,10 @@ export MAIN_DIALOG='
                 <action signal="button-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" -le 2 ] && echo true)">echo \"$DEVICE_INPUT_CHOICE\" > \"'\"$INPUT_MEM_TMP\"'\"</action>
                 <action signal="button-release-event" type="refresh">INPUT_CHOICE_MEM</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
             </notebook>
@@ -1873,10 +1875,10 @@ export MAIN_DIALOG='
                             <default>"'"${ID}"'"</default>
                             <variable>ID</variable>
                             <action signal="key-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
                             <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
                             <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
                         </entry>
@@ -1996,7 +1998,8 @@ export MAIN_DIALOG='
                 <input file stock="gtk-media-record"></input>
                 <variable export="false">record_button</variable>
                 <action>_update_config_file</action>
-                <action type="exit">record</action>
+                <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)" type="exit">record</action>
+                <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">_start_gui_recording</action>
             </button>
             <button>
                 <label>Passthrough</label>
@@ -2032,10 +2035,10 @@ export MAIN_DIALOG='
     <action signal="show" type="refresh">VRECORD_OUTPUT_NAME</action>
     <action signal="show" condition="command_is_true(echo \"$AUDIO_DEV_CHOICE\" | grep -vq Blackmagic && echo true)">enable:AUDIO_MODE_SR_CHOICE</action>
     <action signal="show" condition="command_is_true(echo \"$AUDIO_DEV_CHOICE\" | grep -q Blackmagic && echo true)">disable:AUDIO_MODE_SR_CHOICE</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
     <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
     <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
 </window>

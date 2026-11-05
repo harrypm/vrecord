@@ -77,7 +77,7 @@ _start_video_preview(){
         set -- "$@" -audio_input "${PREVIEW_AINPUT}"
     fi
     set -- "$@" -f decklink -i "${DECKLINK_INPUT_CHOICE}"
-    set -- "$@" -map 0:v -vf scale=640:-2 -r 5 -f image2 -update 1 "${VRECORD_PREVIEW_TMP}"
+    set -- "$@" -map 0:v -vf scale=480:-2 -r 15 -f image2 -update 1 "${VRECORD_PREVIEW_TMP}"
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
         PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
         if [ -n "${PREVIEW_RELAY_DEV_CHOICE}" ] ; then
@@ -166,8 +166,8 @@ _start_file_playback(){
         set -- "$@" -ss "${FP_RESUME}"
     fi
     set -- "$@" -i "${VRECORD_PLAY_FILE}"
-    # small preview of the outgoing file for the output side of the tab
-    set -- "$@" -map 0:v -vf scale=320:-2 -r 5 -f image2 -update 1 "${VRECORD_FILEPLAY_IMG_TMP}"
+    # preview of the outgoing file for the output side of the tab (same stream and timeline as the device output)
+    set -- "$@" -map 0:v -vf scale=480:-2 -r 15 -f image2 -update 1 "${VRECORD_FILEPLAY_IMG_TMP}"
     # converted feed to the device output
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
