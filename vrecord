@@ -3624,7 +3624,7 @@ VRECORD_RECORD_PID_TMP="$(_maketemp .vrecord_recording.pid)"
 VRECORD_RECORD_STATUS_TMP="$(_maketemp .vrecord_recording.status.txt)"
 VRECORD_RECORD_LOG_TMP="$(_maketemp .vrecord_recording.log.txt)"
 echo "idle" > "${VRECORD_RECORD_STATUS_TMP}"
-INPUT_MEM_TMP="$(_maketemp .vrecord_input_mem.txt)
+INPUT_MEM_TMP="$(_maketemp .vrecord_input_mem.txt)"
 # only remember real input tabs (a config saved from the Config or Video Preview
 # tab can carry a tab index that is not an input choice)
 case "${DEVICE_INPUT_CHOICE}" in
