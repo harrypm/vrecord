@@ -46,6 +46,10 @@ _start_video_preview(){
         echo "preview already running" > "${VRECORD_PREVIEW_STATUS_TMP}"
         return 0
     fi
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_RECORD_PID_TMP}")" 2>/dev/null ; then
+        echo "recording in progress - stop it first" > "${VRECORD_PREVIEW_STATUS_TMP}"
+        return 1
+    fi
     if [ -z "${DECKLINK_INPUT_CHOICE}" ] ; then
         echo "select a video card on the Decklink tab first" > "${VRECORD_PREVIEW_STATUS_TMP}"
         return 1
@@ -94,6 +98,10 @@ _start_file_playback(){
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
         echo "file playback already running" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 0
+    fi
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_RECORD_PID_TMP}")" 2>/dev/null ; then
+        echo "recording in progress - stop it first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
     fi
     if [ -z "${VRECORD_PLAY_FILE}" ] ; then
         echo "select a file to play first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
@@ -217,6 +225,121 @@ _seek_file_playback(){
     fi
 }
 
+# Video Preview tab: start a recording in a separate vrecord process so the
+# settings window stays open with its controls while capturing
+_start_gui_recording(){
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_RECORD_PID_TMP}")" 2>/dev/null ; then
+        echo "already recording" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 0
+    fi
+    if [ -z "${ID}" ] ; then
+        echo "enter a Name of Recording first" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 1
+    fi
+    GUIREC_INPUT="${DEVICE_INPUT_CHOICE}"
+    if [ "${GUIREC_INPUT}" = "4" ] ; then
+        GUIREC_INPUT="${INPUT_CHOICE_MEM}"
+    fi
+    if [ -z "${GUIREC_INPUT}" ] || [ "${GUIREC_INPUT}" = "3" ] ; then
+        echo "select an input on the Decklink, DV, or Audio tab first" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 1
+    fi
+    _stop_video_preview
+    _stop_file_playback
+    _update_config_file
+    rm -f "${VRECORD_RECORD_LOG_TMP}"
+    echo "starting recording..." > "${VRECORD_RECORD_STATUS_TMP}"
+    "${VRECORD_BIN}" "${ID}" < /dev/null > "${VRECORD_RECORD_LOG_TMP}" 2>&1 &
+    echo $! > "${VRECORD_RECORD_PID_TMP}"
+}
+
+# Video Preview tab: stop a recording started from the settings window by
+# ending its playback window, so the recording process runs its post-processing
+_stop_gui_recording(){
+    if [ ! -f "${VRECORD_RECORD_PID_TMP}" ] ; then
+        echo "not recording" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 0
+    fi
+    GUIREC_PID="$(cat "${VRECORD_RECORD_PID_TMP}")"
+    if [ -n "${GUIREC_PID}" ] && kill -0 "${GUIREC_PID}" 2>/dev/null ; then
+        echo "stopping recording..." > "${VRECORD_RECORD_STATUS_TMP}"
+        # end the playback window first, like closing it in the classic flow
+        GUIREC_PLAYER="$(pgrep -P "${GUIREC_PID}" ffplay-ma 2>/dev/null | head -n 1)"
+        [ -z "${GUIREC_PLAYER}" ] && GUIREC_PLAYER="$(pgrep -P "${GUIREC_PID}" ffplay 2>/dev/null | head -n 1)"
+        [ -z "${GUIREC_PLAYER}" ] && GUIREC_PLAYER="$(pgrep -P "${GUIREC_PID}" mpv 2>/dev/null | head -n 1)"
+        if [ -n "${GUIREC_PLAYER}" ] ; then
+            kill "${GUIREC_PLAYER}" 2>/dev/null
+        fi
+        # if the recorder is still running shortly after, end it too so the post-processing begins
+        GUIREC_WAIT=0
+        while [ "${GUIREC_WAIT}" -lt 30 ] && kill -0 "${GUIREC_PID}" 2>/dev/null ; do
+            sleep 0.1
+            GUIREC_WAIT=$(( GUIREC_WAIT + 1 ))
+        done
+        if kill -0 "${GUIREC_PID}" 2>/dev/null ; then
+            GUIREC_FFMPEG="$(pgrep -P "${GUIREC_PID}" ffmpeg-ma 2>/dev/null | head -n 1)"
+            [ -n "${GUIREC_FFMPEG}" ] && kill "${GUIREC_FFMPEG}" 2>/dev/null
+        fi
+    fi
+    rm -f "${VRECORD_RECORD_PID_TMP}"
+}
+
+# Video Preview tab: keep the recording status line in sync with the recording process
+_refresh_gui_recording_status(){
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] ; then
+        GUIREC_PID="$(cat "${VRECORD_RECORD_PID_TMP}")"
+        if [ -n "${GUIREC_PID}" ] && kill -0 "${GUIREC_PID}" 2>/dev/null ; then
+            GUIREC_TIME="$(tail -c 4096 "${VRECORD_RECORD_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+            echo "recording ${GUIREC_TIME:-starting...}" > "${VRECORD_RECORD_STATUS_TMP}"
+            return 0
+        fi
+    fi
+    GUIREC_LAST="$(tail -n 3 "${VRECORD_RECORD_LOG_TMP}" 2>/dev/null | grep -vE '^frame=' | tail -n 1)"
+    if [ -n "${GUIREC_LAST}" ] ; then
+        echo "done: ${GUIREC_LAST}" > "${VRECORD_RECORD_STATUS_TMP}"
+    else
+        echo "idle" > "${VRECORD_RECORD_STATUS_TMP}"
+    fi
+}
+
+# Video Preview tab: start the recording in a terminal window (classic vrecord
+# style) while the settings window stays open with its controls
+_popout_recording(){
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_RECORD_PID_TMP}")" 2>/dev/null ; then
+        echo "already recording from this window" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 0
+    fi
+    if [ -z "${ID}" ] ; then
+        echo "enter a Name of Recording first" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 1
+    fi
+    GUIREC_INPUT="${DEVICE_INPUT_CHOICE}"
+    if [ "${GUIREC_INPUT}" = "4" ] ; then
+        GUIREC_INPUT="${INPUT_CHOICE_MEM}"
+    fi
+    if [ -z "${GUIREC_INPUT}" ] || [ "${GUIREC_INPUT}" = "3" ] ; then
+        echo "select an input on the Decklink, DV, or Audio tab first" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 1
+    fi
+    _stop_video_preview
+    _stop_file_playback
+    _update_config_file
+    if command -v gnome-terminal >/dev/null 2>&1 ; then
+        GUIREC_TERM="gnome-terminal --"
+    elif command -v mate-terminal >/dev/null 2>&1 ; then
+        GUIREC_TERM="mate-terminal --"
+    elif command -v konsole >/dev/null 2>&1 ; then
+        GUIREC_TERM="konsole -e"
+    elif command -v xterm >/dev/null 2>&1 ; then
+        GUIREC_TERM="xterm -e"
+    else
+        echo "no terminal emulator found - use Record instead" > "${VRECORD_RECORD_STATUS_TMP}"
+        return 1
+    fi
+    VRECORD_BIN="${VRECORD_BIN}" VRECORD_ID="${ID}" ${GUIREC_TERM} bash -c '"${VRECORD_BIN}" "${VRECORD_ID}" ; echo "" ; echo "vrecord finished - press Enter to close" ; read VRECORD_CLOSE' &
+    echo "popped out to a terminal window - this window stays open" > "${VRECORD_RECORD_STATUS_TMP}"
+}
+
 # Video Preview tab: stop a background preview/playback process
 # (SIGTERM with a short grace period, then SIGKILL, so the device is always released)
 _stop_bg_process(){
@@ -317,9 +440,9 @@ _combine_duration_fields(){
 _update_config_file(){
     # write config file
     _combine_duration_fields
-    # do not persist the Video Preview tab index as an input choice
+    # the Video Preview tab is not an input choice; keep the last real input tab
     if [ "${DEVICE_INPUT_CHOICE}" = "4" ] ; then
-        DEVICE_INPUT_CHOICE=""
+        DEVICE_INPUT_CHOICE="${INPUT_CHOICE_MEM}"
     fi
     {
         echo "# Set these variables to a valid option or leave as empty quotes (like \"\") to request each run."

@@ -1701,11 +1701,38 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                 <timer milliseconds="true" interval="400" visible="false">
                     <variable export="false">fileplay_timer</variable>
                     <action>_refresh_file_playback_status &</action>
+                    <action>_refresh_gui_recording_status &</action>
                     <action>refresh:fileplay_status</action>
                     <action>refresh:fileplay_image</action>
+                    <action>refresh:gui_record_status</action>
                 </timer>
             </vbox>
         </hbox>
+        <frame Recording from this window>
+            <hbox>
+                <button>
+                    <label>Record</label>
+                    <input file stock="gtk-media-record"></input>
+                    <variable export="false">gui_record_button</variable>
+                    <action>_start_gui_recording</action>
+                </button>
+                <button tooltip-text="Start the recording in a terminal window, classic vrecord style, while this window stays open">
+                    <label>Pop Out to Terminal</label>
+                    <variable export="false">gui_popout_button</variable>
+                    <action>_popout_recording</action>
+                </button>
+                <button>
+                    <label>Stop</label>
+                    <input file stock="gtk-stop"></input>
+                    <variable export="false">gui_record_stop_button</variable>
+                    <action>_stop_gui_recording</action>
+                </button>
+                <entry editable="false" has-frame="false">
+                    <variable export="false">gui_record_status</variable>
+                    <input file>"${VRECORD_RECORD_STATUS_TMP}"</input>
+                </entry>
+            </hbox>
+        </frame>
     </vbox>
 </frame>
 PREVIEW_FORM
@@ -1781,6 +1808,8 @@ export MAIN_DIALOG='
                 '"${PREVIEW_INPUT_GUI}"'
                 <variable>DEVICE_INPUT_CHOICE</variable>
                 <action signal="button-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" -le 2 ] && echo true)">echo \"$DEVICE_INPUT_CHOICE\" > \"'\"$INPUT_MEM_TMP\"'\"</action>
+                <action signal="button-release-event" type="refresh">INPUT_CHOICE_MEM</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
@@ -1825,6 +1854,12 @@ export MAIN_DIALOG='
                 <default>'"${STARTUP_VIEW:-MAIN}"'</default>
                 <input file>'"${STARTUP_VIEW_TMP}"'</input>
                 <action type="refresh">STARTUP_VIEW</action>
+            </entry>
+            <entry visible="false">
+                <variable>INPUT_CHOICE_MEM</variable>
+                <default>'"${DEVICE_INPUT_CHOICE}"'</default>
+                <input file>'"${INPUT_MEM_TMP}"'</input>
+                <action type="refresh">INPUT_CHOICE_MEM</action>
             </entry>
         </hbox>
         <hbox>
@@ -2049,6 +2084,11 @@ _edit_mode(){
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PLAY_POS_TMP=\"${VRECORD_PLAY_POS_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_RECORD_PID_TMP=\"${VRECORD_RECORD_PID_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_RECORD_STATUS_TMP=\"${VRECORD_RECORD_STATUS_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_RECORD_LOG_TMP=\"${VRECORD_RECORD_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "INPUT_MEM_TMP=\"${INPUT_MEM_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_BIN=\"${VRECORD_BIN}\"" >> "${GTK_INC}"
     cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
 
     if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
@@ -3603,6 +3643,18 @@ VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"
 VRECORD_PLAY_POS_TMP="$(_maketemp .vrecord_fileplay.pos.txt)"
 rm -f "${VRECORD_PLAY_POS_TMP}"
+VRECORD_RECORD_PID_TMP="$(_maketemp .vrecord_recording.pid)"
+VRECORD_RECORD_STATUS_TMP="$(_maketemp .vrecord_recording.status.txt)"
+VRECORD_RECORD_LOG_TMP="$(_maketemp .vrecord_recording.log.txt)"
+echo "idle" > "${VRECORD_RECORD_STATUS_TMP}"
+INPUT_MEM_TMP="$(_maketemp .vrecord_input_mem.txt)"
+echo "${DEVICE_INPUT_CHOICE}" > "${INPUT_MEM_TMP}"
+
+# resolve this script's absolute path so GUI actions can launch recording processes
+case "${0}" in
+    /*) VRECORD_BIN="$(readlink -f "${0}" 2>/dev/null || echo "${0}")" ;;
+    *)  VRECORD_BIN="$(readlink -f "$(pwd)/${0}" 2>/dev/null || echo "$(pwd)/${0}")" ;;
+esac
 
 # manage an include file to pass variables to gtkdialog
 VRECORD_VARS_FILE="/tmp/v_$(echo "${0}" | sed -e "s/[^A-Za-z0-9.]/_/g")_variables.txt"
