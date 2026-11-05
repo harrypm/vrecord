@@ -1624,7 +1624,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>if false _stop_video_preview</action>
                     <action>if false disable:preview_timer</action>
                 </togglebutton>
-                <timer milliseconds="true" interval="400" visible="false" disabled="true">
+                <timer milliseconds="true" interval="50" visible="false" disabled="true">
                     <variable export="false">preview_timer</variable>
                     <visible>disabled</visible>
                     <action>_refresh_video_preview_status &</action>
@@ -1698,7 +1698,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         </hscale>
                     </vbox>
                 </hbox>
-                <timer milliseconds="true" interval="400" visible="false">
+                <timer milliseconds="true" interval="50" visible="false">
                     <variable export="false">fileplay_timer</variable>
                     <action>_refresh_file_playback_status &</action>
                     <action>_refresh_gui_recording_status &</action>
