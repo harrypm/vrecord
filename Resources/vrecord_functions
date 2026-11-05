@@ -196,6 +196,8 @@ _start_file_playback(){
         echo "select an output device first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 1
     fi
+    # remember the selected file across sessions
+    _update_config_file
     # the file is converted to the output mode of the selected standard (matching the capture settings)
     case "${STANDARD_CHOICE}" in
         "NTSC") FP_SIZE="720:486" ; FP_RATE="30000/1001" ; FP_FIELD="bff" ;;
@@ -534,6 +536,11 @@ _refresh_bg_status(){
             return 0
         fi
     fi
+    # process never started this session: keep any start-guard message instead
+    # of overwriting it with "stopped"
+    if [ ! -f "${2}" ] ; then
+        return 0
+    fi
     BG_LASTLINE="$(tail -n 1 "${2}" 2>/dev/null)"
     if [ -n "${BG_LASTLINE}" ] ; then
         echo "stopped: ${BG_LASTLINE}" > "${3}"
@@ -568,6 +575,11 @@ _refresh_file_playback_status(){
             echo "playing ${FP_TIME:-00:00:00.00}${FP_DURHMS:+ / ${FP_DURHMS}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
             return 0
         fi
+    fi
+    # playout never started this session: keep any start-guard message instead
+    # of overwriting it with "stopped" (the message explains why nothing ran)
+    if [ ! -f "${VRECORD_FILEPLAY_LOG_TMP}" ] ; then
+        return 0
     fi
     FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
     if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
