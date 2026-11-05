@@ -1601,14 +1601,14 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
 <frame Video Preview options>
     <vbox>
         <hbox>
-            <pixmap>
-                <variable export="false">vrecord_preview_image</variable>
-                <input file>"${VRECORD_PREVIEW_TMP}"</input>
-            </pixmap>
             <vbox>
                 <text>
-                    <label>Preview status</label>
+                    <label>Record: input preview</label>
                 </text>
+                <pixmap>
+                    <variable export="false">vrecord_preview_image</variable>
+                    <input file>"${VRECORD_PREVIEW_TMP}"</input>
+                </pixmap>
                 <entry editable="false" has-frame="false">
                     <variable export="false">preview_status</variable>
                     <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
@@ -1618,6 +1618,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <default>false</default>
                     <variable export="false">preview_toggle</variable>
                     <input file stock="gtk-media-play"></input>
+                    <action>if true _stop_file_playback</action>
                     <action>if true enable:preview_timer</action>
                     <action>if true _start_video_preview</action>
                     <action>if false _stop_video_preview</action>
@@ -1630,14 +1631,57 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>refresh:preview_status</action>
                     <action>refresh:vrecord_preview_image</action>
                 </timer>
-                <checkbox tooltip-text="While the preview runs, the incoming feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording.">
-                    <label>Relay feed to the capture device output</label>
+                <text width-chars="-1">
+                    <label>The preview stops automatically when recording starts.</label>
+                </text>
+            </vbox>
+            <vbox>
+                <text>
+                    <label>Output: device feed</label>
+                </text>
+                <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording.">
+                    <label>Relay live feed to the device output</label>
                     <default>"${PREVIEW_RELAY_CHOICE}"</default>
                     <variable>PREVIEW_RELAY_CHOICE</variable>
                 </checkbox>
                 $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
+                <text>
+                    <label>or play a file to the output</label>
+                </text>
+                <hbox>
+                    <entry accept="file" fs-title="Select a file to play to the output device">
+                        <variable>VRECORD_PLAY_FILE</variable>
+                        <default>"${VRECORD_PLAY_FILE}"</default>
+                    </entry>
+                    <button>
+                        <input file stock="gtk-open"></input>
+                        <variable export="false">playfile_browse</variable>
+                        <action type="fileselect">VRECORD_PLAY_FILE</action>
+                    </button>
+                </hbox>
+                <togglebutton>
+                    <label>Play File</label>
+                    <default>false</default>
+                    <variable export="false">fileplay_toggle</variable>
+                    <input file stock="gtk-media-play"></input>
+                    <action>if true _stop_video_preview</action>
+                    <action>if true enable:fileplay_timer</action>
+                    <action>if true _start_file_playback</action>
+                    <action>if false _stop_file_playback</action>
+                    <action>if false disable:fileplay_timer</action>
+                </togglebutton>
+                <entry editable="false" has-frame="false">
+                    <variable export="false">fileplay_status</variable>
+                    <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
+                </entry>
+                <timer milliseconds="true" interval="400" visible="false" disabled="true">
+                    <variable export="false">fileplay_timer</variable>
+                    <visible>disabled</visible>
+                    <action>_refresh_file_playback_status &</action>
+                    <action>refresh:fileplay_status</action>
+                </timer>
                 <text width-chars="-1">
-                    <label>Toggle Start Preview to monitor the incoming Decklink signal inside this window. The preview releases the capture device automatically before recording starts. The relay output follows the selected device's connectors: SDI, HDMI, or analogue, depending on the card.</label>
+                    <label>The output side feeds the selected device's connectors through the Blackmagic SDK: SDI, HDMI, or analogue, depending on the card. Relay sends the live input to the output while previewing, or play a file to send a recording or test signal to the monitor. Starting one stops the other.</label>
                 </text>
             </vbox>
         </hbox>
@@ -1978,6 +2022,9 @@ _edit_mode(){
     echo "VRECORD_PREVIEW_PID_TMP=\"${VRECORD_PREVIEW_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PREVIEW_STATUS_TMP=\"${VRECORD_PREVIEW_STATUS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PREVIEW_LOG_TMP=\"${VRECORD_PREVIEW_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_PID_TMP=\"${VRECORD_FILEPLAY_PID_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_STATUS_TMP=\"${VRECORD_FILEPLAY_STATUS_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_LOG_TMP=\"${VRECORD_FILEPLAY_LOG_TMP}\"" >> "${GTK_INC}"
     cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
 
     if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
@@ -1993,10 +2040,12 @@ _edit_mode(){
     # process the results of the edit form
     if   [[ "${EXIT}" = "abort" ]] ; then
         _stop_video_preview
+        _stop_file_playback
         _report -d "Exiting Vrecord. Goodbye!"
         exit 0
     elif [[ "${EXIT}" = "Cancel" ]] ; then
         _stop_video_preview
+        _stop_file_playback
         _report -d "Editing of preferences was canceled by the user."
         _report -d "Exiting Vrecord. Goodbye!"
         exit 0
@@ -2010,6 +2059,7 @@ _edit_mode(){
         RUNTYPE="edit"
     elif [[ "${EXIT}" = "timecode_scan" ]] ; then
         _stop_video_preview
+        _stop_file_playback
         _report -dt "Scanning each supported type of timecode."
         _review_all_options
         _report -dt "Note: some types of timecode are only supported if the video input is set to 'sdi' (currently the video input is set to '${VIDEO_INPUT}')."
@@ -3521,6 +3571,10 @@ VRECORD_PREVIEW_PID_TMP="$(_maketemp .vrecord_preview.pid)"
 VRECORD_PREVIEW_STATUS_TMP="$(_maketemp .vrecord_preview.status.txt)"
 VRECORD_PREVIEW_LOG_TMP="$(_maketemp .vrecord_preview.log.txt)"
 echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+VRECORD_FILEPLAY_PID_TMP="$(_maketemp .vrecord_fileplay.pid)"
+VRECORD_FILEPLAY_STATUS_TMP="$(_maketemp .vrecord_fileplay.status.txt)"
+VRECORD_FILEPLAY_LOG_TMP="$(_maketemp .vrecord_fileplay.log.txt)"
+echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 
 # manage an include file to pass variables to gtkdialog
 VRECORD_VARS_FILE="/tmp/v_$(echo "${0}" | sed -e "s/[^A-Za-z0-9.]/_/g")_variables.txt"
@@ -3707,8 +3761,9 @@ while [[ "${RUNTYPE}" = "edit" ]] ; do
     STARTUP_VIEW="INPUTSETTINGS"
     _edit_mode
 done
-# the capture device can only be opened by one process at a time, so stop the settings window preview before capturing
+# the capture device can only be opened by one process at a time, so stop the settings window preview and file playback before capturing
 _stop_video_preview
+_stop_file_playback
 
 _start_mediaconch_policy
 _add_mediaconch_rule_set "${CONTAINER_GENERAL_TEST}"

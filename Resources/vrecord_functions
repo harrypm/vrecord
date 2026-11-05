@@ -87,42 +87,85 @@ _start_video_preview(){
     echo $! > "${VRECORD_PREVIEW_PID_TMP}"
 }
 
-# Video Preview tab: stop the background preview and release the capture device
-_stop_video_preview(){
-    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] ; then
-        PREVIEW_PID="$(cat "${VRECORD_PREVIEW_PID_TMP}")"
-        if [ -n "${PREVIEW_PID}" ] && kill -0 "${PREVIEW_PID}" 2>/dev/null ; then
-            kill "${PREVIEW_PID}" 2>/dev/null
-            # wait briefly for a graceful exit before forcing the capture device free
-            PREVIEW_WAIT=0
-            while [ "${PREVIEW_WAIT}" -lt 30 ] && kill -0 "${PREVIEW_PID}" 2>/dev/null ; do
-                sleep 0.1
-                PREVIEW_WAIT=$(( PREVIEW_WAIT + 1 ))
-            done
-            if kill -0 "${PREVIEW_PID}" 2>/dev/null ; then
-                kill -9 "${PREVIEW_PID}" 2>/dev/null
-            fi
-        fi
-        rm -f "${VRECORD_PREVIEW_PID_TMP}"
+# Video Preview tab: play a media file out to the selected device's output
+# through the Blackmagic SDK (paced with -re for playout)
+_start_file_playback(){
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        echo "file playback already running" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
     fi
-    echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+    if [ -z "${VRECORD_PLAY_FILE}" ] ; then
+        echo "select a file to play first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    if [ ! -f "${VRECORD_PLAY_FILE}" ] ; then
+        echo "file not found: ${VRECORD_PLAY_FILE}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    FILEPLAY_DEV="${PREVIEW_RELAY_DEV_CHOICE:-${DECKLINK_INPUT_CHOICE}}"
+    if [ -z "${FILEPLAY_DEV}" ] ; then
+        echo "select an output device first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re -i "${VRECORD_PLAY_FILE}"
+    set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
+    echo "playing ${VRECORD_PLAY_FILE} to ${FILEPLAY_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    "$@" > "${VRECORD_FILEPLAY_LOG_TMP}" 2>&1 &
+    echo $! > "${VRECORD_FILEPLAY_PID_TMP}"
 }
 
-# Video Preview tab: keep the status display in sync with the background preview process
-_refresh_video_preview_status(){
-    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] ; then
-        PREVIEW_PID="$(cat "${VRECORD_PREVIEW_PID_TMP}")"
-        if [ -n "${PREVIEW_PID}" ] && kill -0 "${PREVIEW_PID}" 2>/dev/null ; then
-            echo "running (pid ${PREVIEW_PID})" > "${VRECORD_PREVIEW_STATUS_TMP}"
+# Video Preview tab: stop a background preview/playback process
+# (SIGTERM with a short grace period, then SIGKILL, so the device is always released)
+_stop_bg_process(){
+    if [ -f "${1}" ] ; then
+        BG_PID="$(cat "${1}")"
+        if [ -n "${BG_PID}" ] && kill -0 "${BG_PID}" 2>/dev/null ; then
+            kill "${BG_PID}" 2>/dev/null
+            BG_WAIT=0
+            while [ "${BG_WAIT}" -lt 30 ] && kill -0 "${BG_PID}" 2>/dev/null ; do
+                sleep 0.1
+                BG_WAIT=$(( BG_WAIT + 1 ))
+            done
+            if kill -0 "${BG_PID}" 2>/dev/null ; then
+                kill -9 "${BG_PID}" 2>/dev/null
+            fi
+        fi
+        rm -f "${1}"
+    fi
+    echo "stopped" > "${2}"
+}
+
+_stop_video_preview(){
+    _stop_bg_process "${VRECORD_PREVIEW_PID_TMP}" "${VRECORD_PREVIEW_STATUS_TMP}"
+}
+
+_stop_file_playback(){
+    _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+}
+
+# Video Preview tab: keep a status display in sync with a background preview/playback process
+_refresh_bg_status(){
+    if [ -f "${1}" ] ; then
+        BG_PID="$(cat "${1}")"
+        if [ -n "${BG_PID}" ] && kill -0 "${BG_PID}" 2>/dev/null ; then
+            echo "${4} (pid ${BG_PID})" > "${3}"
             return 0
         fi
     fi
-    PREVIEW_LASTLINE="$(tail -n 1 "${VRECORD_PREVIEW_LOG_TMP}" 2>/dev/null)"
-    if [ -n "${PREVIEW_LASTLINE}" ] ; then
-        echo "stopped: ${PREVIEW_LASTLINE}" > "${VRECORD_PREVIEW_STATUS_TMP}"
+    BG_LASTLINE="$(tail -n 1 "${2}" 2>/dev/null)"
+    if [ -n "${BG_LASTLINE}" ] ; then
+        echo "stopped: ${BG_LASTLINE}" > "${3}"
     else
-        echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+        echo "stopped" > "${3}"
     fi
+}
+
+_refresh_video_preview_status(){
+    _refresh_bg_status "${VRECORD_PREVIEW_PID_TMP}" "${VRECORD_PREVIEW_LOG_TMP}" "${VRECORD_PREVIEW_STATUS_TMP}" "running"
+}
+
+_refresh_file_playback_status(){
+    _refresh_bg_status "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_LOG_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}" "playing"
 }
 
 # combine the HH/MM/SS recording time boxes into DURATION (POSIX; all boxes blank means an unlimited recording)
@@ -198,6 +241,7 @@ _update_config_file(){
         echo "THEME_CHOICE=\"${THEME_CHOICE}\""
         echo "PREVIEW_RELAY_CHOICE=\"${PREVIEW_RELAY_CHOICE}\""
         echo "PREVIEW_RELAY_DEV_CHOICE=\"${PREVIEW_RELAY_DEV_CHOICE}\""
+        echo "VRECORD_PLAY_FILE=\"${VRECORD_PLAY_FILE}\""
     } > "${CONFIG_FILE}"
     . "${CONFIG_FILE}"
 }
