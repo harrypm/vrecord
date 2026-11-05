@@ -107,7 +107,7 @@ _snap_window(){
         left)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ;;
         right)   SNAP_X=$(( SNAP_W / 2 )) ; SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ;;
         quarter) SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH=$(( SNAP_H / 2 )) ;;
-        full)    wmctrl -r :ACTIVE: -b toggle,maximized 2>/dev/null ; return 0 ;;
+        full)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW="${SNAP_W}" ; SNAP_GH="${SNAP_H}" ;;
         *) return 1 ;;
     esac
     wmctrl -r :ACTIVE: -b remove,maximized_vert,maximized_horz 2>/dev/null
