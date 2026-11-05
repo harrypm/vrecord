@@ -1956,26 +1956,6 @@ export MAIN_DIALOG='
                 <action>echo "INPUTSETTINGS" > "'"$STARTUP_VIEW_TMP"'"</action>
                 <action type="refresh">STARTUP_VIEW</action>
             </button>
-            <button tooltip-text="Snap the window to the left half of the screen (split-screen with another application)">
-                <label>1/2 Left</label>
-                <variable export="false">snap_left_button</variable>
-                <action>_snap_window left</action>
-            </button>
-            <button tooltip-text="Snap the window to the right half of the screen">
-                <label>1/2 Right</label>
-                <variable export="false">snap_right_button</variable>
-                <action>_snap_window right</action>
-            </button>
-            <button tooltip-text="Snap the window to a quarter of the screen (top left)">
-                <label>1/4</label>
-                <variable export="false">snap_quarter_button</variable>
-                <action>_snap_window quarter</action>
-            </button>
-            <button tooltip-text="Maximize or restore the window">
-                <label>1x</label>
-                <variable export="false">snap_full_button</variable>
-                <action>_snap_window full</action>
-            </button>
             <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
             <button>
                 <label>Record</label>
