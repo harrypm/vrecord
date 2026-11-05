@@ -57,7 +57,7 @@ GenericName=Video Capture
 Comment=Capture video signals to digital files
 Exec=${VRECORD_BIN}
 Icon=vrecord
-Terminal=true
+Terminal=false
 Categories=AudioVideo;Video;Recorder;
 StartupWMClass=Gtkdialog
 DESKTOP

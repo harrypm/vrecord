@@ -1614,19 +1614,16 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
                 </entry>
                 <togglebutton>
-                    <label>Start Preview</label>
-                    <default>false</default>
+                    <label>Preview</label>
+                    <default>true</default>
                     <variable export="false">preview_toggle</variable>
                     <input file stock="gtk-media-play"></input>
-                    <action>if true _stop_file_playback</action>
-                    <action>if true enable:preview_timer</action>
+                    <action signal="realize">_start_video_preview</action>
                     <action>if true _start_video_preview</action>
                     <action>if false _stop_video_preview</action>
-                    <action>if false disable:preview_timer</action>
                 </togglebutton>
-                <timer milliseconds="true" interval="33" visible="false" disabled="true">
+                <timer milliseconds="true" interval="33" visible="false">
                     <variable export="false">preview_timer</variable>
-                    <visible>disabled</visible>
                     <action>refresh:preview_status</action>
                     <action>refresh:vrecord_preview_image</action>
                 </timer>
@@ -1670,24 +1667,14 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                                 <action type="fileselect">VRECORD_PLAY_FILE</action>
                             </button>
                         </hbox>
-                        <hbox>
-                            <togglebutton>
-                                <label>Play/Pause</label>
-                                <default>false</default>
-                                <variable export="false">fileplay_toggle</variable>
-                                <input file stock="gtk-media-play"></input>
-                                <action>if true _stop_video_preview</action>
-                                <action>if true enable:fileplay_timer</action>
-                                <action>if true _start_file_playback</action>
-                                <action>if false _pause_file_playback</action>
-                            </togglebutton>
-                            <button>
-                                <label>Stop</label>
-                                <input file stock="gtk-stop"></input>
-                                <variable export="false">fileplay_stop_button</variable>
-                                <action>_stop_file_playback</action>
-                            </button>
-                        </hbox>
+                        <togglebutton>
+                            <label>Play / Stop</label>
+                            <default>false</default>
+                            <variable export="false">fileplay_toggle</variable>
+                            <input file stock="gtk-media-play"></input>
+                            <action>if true _start_file_playback</action>
+                            <action>if false _stop_file_playback</action>
+                        </togglebutton>
                         <text>
                             <label>scrub (percent of file):</label>
                         </text>
@@ -1701,7 +1688,6 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <variable export="false">fileplay_timer</variable>
                     <action>refresh:fileplay_status</action>
                     <action>refresh:fileplay_image</action>
-                    <action>refresh:gui_record_status</action>
                 </timer>
                 <timer milliseconds="true" interval="300" visible="false">
                     <variable export="false">preview_status_timer</variable>
@@ -1709,31 +1695,6 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                 </timer>
             </vbox>
         </hbox>
-        <frame Recording from this window>
-            <hbox>
-                <button>
-                    <label>Record</label>
-                    <input file stock="gtk-media-record"></input>
-                    <variable export="false">gui_record_button</variable>
-                    <action>_start_gui_recording</action>
-                </button>
-                <button tooltip-text="Start the recording in a terminal window, classic vrecord style, while this window stays open">
-                    <label>Pop Out to Terminal</label>
-                    <variable export="false">gui_popout_button</variable>
-                    <action>_popout_recording</action>
-                </button>
-                <button>
-                    <label>Stop</label>
-                    <input file stock="gtk-stop"></input>
-                    <variable export="false">gui_record_stop_button</variable>
-                    <action>_stop_gui_recording</action>
-                </button>
-                <entry editable="false" has-frame="false">
-                    <variable export="false">gui_record_status</variable>
-                    <input file>"${VRECORD_RECORD_STATUS_TMP}"</input>
-                </entry>
-            </hbox>
-        </frame>
     </vbox>
 </frame>
 PREVIEW_FORM
@@ -1803,7 +1764,7 @@ export MAIN_DIALOG='
         </vbox>
         <vbox scrollable="true" width="1420" height="520" shadow-type="0">
             <frame Input Options>
-            <notebook page="'${DEVICE_INPUT_CHOICE}'" tab-labels="Decklink|DV|Audio|Config|Video Preview">
+            <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview">
                 '"${DECKLINK_INPUT_GUI}"'
                 '"${DVRESCUE_INPUT_GUI}"'
                 '"${AUDIO_INPUT_GUI}"'
@@ -3994,8 +3955,12 @@ if [[ "${DEVICE_INPUT_CHOICE}" = "0" ]] ; then
     fi
 fi
 
-_report -q "Hit enter to start recording"
-read
+# when launched without a terminal (e.g. from the desktop entry) there is
+# nothing to read, so start the capture immediately
+if [[ -t 0 ]] ; then
+    _report -q "Hit enter to start recording"
+    read
+fi
 
 # create log of vrecord decisions
 INGESTLOG="${LOGDIR}/${FULL_OUTPUT_ID}_capture_options.log"

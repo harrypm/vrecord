@@ -133,6 +133,8 @@ _start_video_preview(){
         fi
         set -- "$@" -map 0:v -map 0:a -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${PREVIEW_RELAY_DEV}"
     fi
+    # the preview and the file playout share the output device: playout yields
+    _stop_file_playback
     rm -f "${VRECORD_PREVIEW_TMP}" "${VRECORD_PREVIEW_FIFO}"
     mkfifo "${VRECORD_PREVIEW_FIFO}"
     # lossless preview: raw RGB frames through a fifo; a reader wraps each frame in a
@@ -250,6 +252,7 @@ _start_file_playback(){
     # converted feed to the device output
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     _ensure_preview_reader
+    _stop_video_preview
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
     mkfifo "${VRECORD_FILEPLAY_FIFO}"
     FP_W=480
@@ -314,7 +317,7 @@ _seek_file_playback(){
     FP_HMS="$(awk -v s="${FP_SEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
     echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
-        _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+        _halt_file_playback
         _start_file_playback
     else
         echo "cued at ${FP_HMS} - toggle Play to start there" > "${VRECORD_FILEPLAY_STATUS_TMP}"
@@ -457,22 +460,42 @@ _stop_bg_process(){
     echo "stopped" > "${2}"
 }
 
+# instant stop for preview/playout processes: they write no files, so there is
+# nothing to finalize and SIGKILL is exact (ffmpeg ignores SIGTERM for seconds
+# while blocked on the decklink output, which made stops and pauses hold the
+# wrong position)
+_kill_bg_process(){
+    if [ -f "${1}" ] ; then
+        BG_PID="$(cat "${1}")"
+        if [ -n "${BG_PID}" ] ; then
+            kill -9 "${BG_PID}" 2>/dev/null
+        fi
+        rm -f "${1}"
+    fi
+    echo "stopped" > "${2}"
+}
+
 _stop_video_preview(){
-    _stop_bg_process "${VRECORD_PREVIEW_PID_TMP}" "${VRECORD_PREVIEW_STATUS_TMP}"
+    _kill_bg_process "${VRECORD_PREVIEW_PID_TMP}" "${VRECORD_PREVIEW_STATUS_TMP}"
     if [ -f "${VRECORD_PREVIEW_RPID_TMP}" ] ; then
         kill "$(cat "${VRECORD_PREVIEW_RPID_TMP}")" 2>/dev/null
         rm -f "${VRECORD_PREVIEW_RPID_TMP}"
     fi
-    rm -f "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}.frame" "${VRECORD_PREVIEW_TMP}.new" 2>/dev/null
+    rm -f "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}.frame" "${VRECORD_PREVIEW_TMP}.new" "${VRECORD_PREVIEW_TMP}.tmp" 2>/dev/null
 }
 
-_stop_file_playback(){
-    _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+# stop the file playout without clearing the cued position (used by the scrub bar)
+_halt_file_playback(){
+    _kill_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
     if [ -f "${VRECORD_FILEPLAY_RPID_TMP}" ] ; then
         kill "$(cat "${VRECORD_FILEPLAY_RPID_TMP}")" 2>/dev/null
         rm -f "${VRECORD_FILEPLAY_RPID_TMP}"
     fi
-    rm -f "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}.frame" "${VRECORD_FILEPLAY_IMG_TMP}.new" 2>/dev/null
+    rm -f "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}.frame" "${VRECORD_FILEPLAY_IMG_TMP}.new" "${VRECORD_FILEPLAY_IMG_TMP}.tmp" 2>/dev/null
+}
+
+_stop_file_playback(){
+    _halt_file_playback
     rm -f "${VRECORD_PLAY_POS_TMP}"
 }
 
@@ -480,7 +503,6 @@ _stop_file_playback(){
 _refresh_preview_page(){
     _refresh_video_preview_status
     _refresh_file_playback_status
-    _refresh_gui_recording_status
 }
 
 # Video Preview tab: keep a status display in sync with a background preview/playback process
