@@ -522,6 +522,8 @@ _gtk_vbox_list() {
     SELECTION="$(_get_index_of_value "${!VARIABLE_NAME}" "${OPTION_LIST[@]}")"
     if [[ "${VARIABLE_NAME}" == "DECKLINK_INPUT_CHOICE" ]] ; then
         LIST="<input>_get_decklink_input_list</input>"
+    elif [[ "${VARIABLE_NAME}" == "PREVIEW_RELAY_DEV_CHOICE" ]] ; then
+        LIST="<input>_get_decklink_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "DVRESCUE_INPUT_CHOICE" ]] ; then
         LIST="<input>_get_dvrescue_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "AUDIO_DEV_CHOICE" ]] ; then
@@ -550,7 +552,14 @@ _gtk_vbox_list() {
     }
 
     _get_vbox_extras(){
-        if [[ "${VARIABLE_NAME}" == "STANDARD_CHOICE" ]] ; then
+        if [[ "${VARIABLE_NAME}" == "PREVIEW_RELAY_DEV_CHOICE" ]] ; then
+            echo "
+            <button>
+                <label>Rescan</label>
+                <action type=\"clear\">PREVIEW_RELAY_DEV_CHOICE</action>
+                <action type=\"refresh\">PREVIEW_RELAY_DEV_CHOICE</action>
+            </button>"
+        elif [[ "${VARIABLE_NAME}" == "STANDARD_CHOICE" ]] ; then
             echo "
             <checkbox>
                 <label>Show HD Formats</label>
@@ -776,6 +785,19 @@ _setup_vrecord_process(){
                 done
             fi
 
+            # relay the video feed to the capture device output during recording when the preview relay is enabled
+            unset RELAY_DEV RELAY_V_IDX
+            if [[ "${PREVIEW_RELAY_CHOICE}" = "true" ]] ; then
+                RELAY_DEV="${PREVIEW_RELAY_DEV_CHOICE:-${DECKLINK_INPUT_CHOICE}}"
+                if [[ -n "${RELAY_DEV}" ]] ; then
+                    RELAY_V_IDX="${VIDEO_STREAM_IDX}"
+                    SPLIT_PADS+=("RELAY_V")
+                    SPLIT_MAPS+=(-map "[RELAY_V]")
+                    (( VIDEO_STREAM_IDX++ ))
+                    EXTRAOPTIONS+=(-c:v:"${RELAY_V_IDX}" v210)
+                fi
+            fi
+
             # construct end of video filterchain
             SPLIT_COUNT=$(( 1 + ${#SPLIT_PADS[@]} ))
             if [[ "${SPLIT_COUNT}" -gt 1 ]] ; then
@@ -831,6 +853,9 @@ _setup_vrecord_process(){
             if [[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] ; then
                 QCTOOLS_THUMB_MKV_TMP="$(_maketemp .qc_thumb.mkv)"
                 RECORD_COMMAND_TEE_STR+="|[f=matroska:onfail=ignore:select=v\\\\:${QC_THUMB_V_IDX}]${QCTOOLS_THUMB_MKV_TMP}"
+            fi
+            if [[ -n "${RELAY_DEV}" ]] ; then
+                RECORD_COMMAND_TEE_STR+="|[f=decklink:onfail=ignore:select=v\\\\:${RELAY_V_IDX}]${RELAY_DEV}"
             fi
             RECORD_COMMAND+=(-f tee "${RECORD_COMMAND_TEE_STR}")
         else
@@ -1572,6 +1597,55 @@ AUDIO_INPUT_GUI=$(cat << AUDIO_INPUT_FORM
 AUDIO_INPUT_FORM
 )
 
+PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
+<frame Video Preview options>
+    <vbox>
+        <hbox>
+            <pixmap>
+                <variable export="false">vrecord_preview_image</variable>
+                <input file>"${VRECORD_PREVIEW_TMP}"</input>
+            </pixmap>
+            <vbox>
+                <text>
+                    <label>Preview status</label>
+                </text>
+                <entry editable="false" has-frame="false">
+                    <variable export="false">preview_status</variable>
+                    <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
+                </entry>
+                <togglebutton>
+                    <label>Start Preview</label>
+                    <default>false</default>
+                    <variable export="false">preview_toggle</variable>
+                    <input file stock="gtk-media-play"></input>
+                    <action>if true enable:preview_timer</action>
+                    <action>if true _start_video_preview</action>
+                    <action>if false _stop_video_preview</action>
+                    <action>if false disable:preview_timer</action>
+                </togglebutton>
+                <timer milliseconds="true" interval="400" visible="false" disabled="true">
+                    <variable export="false">preview_timer</variable>
+                    <visible>disabled</visible>
+                    <action>_refresh_video_preview_status &</action>
+                    <action>refresh:preview_status</action>
+                    <action>refresh:vrecord_preview_image</action>
+                </timer>
+                <checkbox tooltip-text="While the preview runs, the incoming feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording.">
+                    <label>Relay feed to the capture device output</label>
+                    <default>"${PREVIEW_RELAY_CHOICE}"</default>
+                    <variable>PREVIEW_RELAY_CHOICE</variable>
+                </checkbox>
+                $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
+                <text width-chars="-1">
+                    <label>Toggle Start Preview to monitor the incoming Decklink signal inside this window. The preview releases the capture device automatically before recording starts. The relay output follows the selected device's connectors: SDI, HDMI, or analogue, depending on the card.</label>
+                </text>
+            </vbox>
+        </hbox>
+    </vbox>
+</frame>
+PREVIEW_FORM
+)
+
 export MAIN_DIALOG='
 <window title="Welcome to Vrecord!">
     <vbox shadow-type="0">
@@ -1634,19 +1708,20 @@ export MAIN_DIALOG='
         </vbox>
         <vbox scrollable="true" width="1420" height="520" shadow-type="0">
             <frame Input Options>
-            <notebook page="'"${DEVICE_INPUT_CHOICE}"'" tab-labels="Decklink|DV|Audio|Config">
+            <notebook page="'${DEVICE_INPUT_CHOICE}'" tab-labels="Decklink|DV|Audio|Config|Video Preview">
                 '"${DECKLINK_INPUT_GUI}"'
                 '"${DVRESCUE_INPUT_GUI}"'
                 '"${AUDIO_INPUT_GUI}"'
                 '"${OPTIONAL_TOOLS_GUI}"'
+                '"${PREVIEW_INPUT_GUI}"'
                 <variable>DEVICE_INPUT_CHOICE</variable>
                 <action signal="button-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 ] && echo true)">enable:passthrough_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 ] && echo true)">disable:passthrough_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
             </notebook>
         </frame>
         <variable export="false">INPUTSETTINGS</variable>
@@ -1698,12 +1773,12 @@ export MAIN_DIALOG='
                             <default>"'"${ID}"'"</default>
                             <variable>ID</variable>
                             <action signal="key-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 ] && echo true)">enable:passthrough_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 ] && echo true)">disable:passthrough_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
                         </entry>
                     </vbox>
                     <vbox>
@@ -1857,12 +1932,12 @@ export MAIN_DIALOG='
     <action signal="show" type="refresh">VRECORD_OUTPUT_NAME</action>
     <action signal="show" condition="command_is_true(echo \"$AUDIO_DEV_CHOICE\" | grep -vq Blackmagic && echo true)">enable:AUDIO_MODE_SR_CHOICE</action>
     <action signal="show" condition="command_is_true(echo \"$AUDIO_DEV_CHOICE\" | grep -q Blackmagic && echo true)">disable:AUDIO_MODE_SR_CHOICE</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 ] && echo true)">enable:passthrough_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 ] && echo true)">disable:passthrough_button</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
+    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
 </window>
 '
 }
@@ -1899,6 +1974,10 @@ _edit_mode(){
     GTK_INC="$(_maketemp .vrecord.gtkdialog.inc)"
     cat "${VRECORD_VARS_FILE}" > "${GTK_INC}"
     echo "CONFIG_FILE=${CONFIG_FILE}" >> "${GTK_INC}"
+    echo "VRECORD_PREVIEW_TMP=\"${VRECORD_PREVIEW_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PREVIEW_PID_TMP=\"${VRECORD_PREVIEW_PID_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PREVIEW_STATUS_TMP=\"${VRECORD_PREVIEW_STATUS_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PREVIEW_LOG_TMP=\"${VRECORD_PREVIEW_LOG_TMP}\"" >> "${GTK_INC}"
     cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
 
     if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
@@ -1913,9 +1992,11 @@ _edit_mode(){
 
     # process the results of the edit form
     if   [[ "${EXIT}" = "abort" ]] ; then
+        _stop_video_preview
         _report -d "Exiting Vrecord. Goodbye!"
         exit 0
     elif [[ "${EXIT}" = "Cancel" ]] ; then
+        _stop_video_preview
         _report -d "Editing of preferences was canceled by the user."
         _report -d "Exiting Vrecord. Goodbye!"
         exit 0
@@ -1928,6 +2009,7 @@ _edit_mode(){
     elif [[ "${EXIT}" = "refresh" ]] ; then
         RUNTYPE="edit"
     elif [[ "${EXIT}" = "timecode_scan" ]] ; then
+        _stop_video_preview
         _report -dt "Scanning each supported type of timecode."
         _review_all_options
         _report -dt "Note: some types of timecode are only supported if the video input is set to 'sdi' (currently the video input is set to '${VIDEO_INPUT}')."
@@ -3434,6 +3516,11 @@ fi
 VRECORD_INPUT_TMP="$(_maketemp .vrecord_input.log)"
 FFREPORT_TMP="$(_maketemp .cffreport.txt)"
 CAP_DISPLAY_TMP="$(_maketemp .caption_scroll.txt)"
+VRECORD_PREVIEW_TMP="$(_maketemp .vrecord_preview.jpg)"
+VRECORD_PREVIEW_PID_TMP="$(_maketemp .vrecord_preview.pid)"
+VRECORD_PREVIEW_STATUS_TMP="$(_maketemp .vrecord_preview.status.txt)"
+VRECORD_PREVIEW_LOG_TMP="$(_maketemp .vrecord_preview.log.txt)"
+echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
 
 # manage an include file to pass variables to gtkdialog
 VRECORD_VARS_FILE="/tmp/v_$(echo "${0}" | sed -e "s/[^A-Za-z0-9.]/_/g")_variables.txt"
@@ -3534,6 +3621,11 @@ _split_duration_to_fields
 
 _get_inputs
 
+# default the relay output device to the selected capture device
+if [[ -z "${PREVIEW_RELAY_DEV_CHOICE}" ]] ; then
+    PREVIEW_RELAY_DEV_CHOICE="${DECKLINK_INPUT_CHOICE}"
+fi
+
 if [[ "${OS_TYPE}" = "linux" ]] ; then
     while read audio_device ; do
         AUDIO_DEVICES+=("${audio_device}")
@@ -3615,6 +3707,8 @@ while [[ "${RUNTYPE}" = "edit" ]] ; do
     STARTUP_VIEW="INPUTSETTINGS"
     _edit_mode
 done
+# the capture device can only be opened by one process at a time, so stop the settings window preview before capturing
+_stop_video_preview
 
 _start_mediaconch_policy
 _add_mediaconch_rule_set "${CONTAINER_GENERAL_TEST}"

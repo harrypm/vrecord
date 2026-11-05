@@ -37,6 +37,94 @@ _check_ffmpeg_install(){
     fi
 }
 
+# Video Preview tab: launch a background preview of the decklink input that
+# writes a regularly updated JPEG for the settings window and, when the relay
+# option is on, sends the feed to the selected device's output through the
+# Blackmagic SDK (SDI, HDMI, or analogue, depending on the card's connectors)
+_start_video_preview(){
+    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_PREVIEW_PID_TMP}")" 2>/dev/null ; then
+        echo "preview already running" > "${VRECORD_PREVIEW_STATUS_TMP}"
+        return 0
+    fi
+    if [ -z "${DECKLINK_INPUT_CHOICE}" ] ; then
+        echo "select a video card on the Decklink tab first" > "${VRECORD_PREVIEW_STATUS_TMP}"
+        return 1
+    fi
+    case "${STANDARD_CHOICE}" in
+        "NTSC") PREVIEW_FORMAT="ntsc" ;;
+        "PAL")  PREVIEW_FORMAT="pal" ;;
+        "")     echo "select a standard on the Decklink tab first" > "${VRECORD_PREVIEW_STATUS_TMP}" ; return 1 ;;
+        *)      PREVIEW_FORMAT="$(echo "${STANDARD_CHOICE}" | cut -d ' ' -f1)" ;;
+    esac
+    case "${VIDEO_INPUT_CHOICE}" in
+        "Composite") PREVIEW_VINPUT="composite" ;;
+        "Component") PREVIEW_VINPUT="component" ;;
+        "S-Video")   PREVIEW_VINPUT="s_video" ;;
+        *)           PREVIEW_VINPUT="sdi" ;;
+    esac
+    # build the ffmpeg arguments as positional parameters so device names with spaces stay intact
+    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}"
+    if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
+        case "${AUDIO_INPUT_CHOICE}" in
+            "SDI Embedded Audio")      PREVIEW_AINPUT="embedded" ;;
+            "Digital Audio (AES/EBU)") PREVIEW_AINPUT="aes_ebu" ;;
+            *)                         PREVIEW_AINPUT="analog" ;;
+        esac
+        set -- "$@" -audio_input "${PREVIEW_AINPUT}"
+    fi
+    set -- "$@" -f decklink -i "${DECKLINK_INPUT_CHOICE}"
+    set -- "$@" -map 0:v -vf scale=640:-2 -r 5 -f image2 -update 1 "${VRECORD_PREVIEW_TMP}"
+    if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
+        PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
+        if [ -n "${PREVIEW_RELAY_DEV_CHOICE}" ] ; then
+            PREVIEW_RELAY_DEV="${PREVIEW_RELAY_DEV_CHOICE}"
+        fi
+        set -- "$@" -map 0:v -map 0:a -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${PREVIEW_RELAY_DEV}"
+    fi
+    rm -f "${VRECORD_PREVIEW_TMP}"
+    echo "starting preview..." > "${VRECORD_PREVIEW_STATUS_TMP}"
+    "$@" > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
+    echo $! > "${VRECORD_PREVIEW_PID_TMP}"
+}
+
+# Video Preview tab: stop the background preview and release the capture device
+_stop_video_preview(){
+    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] ; then
+        PREVIEW_PID="$(cat "${VRECORD_PREVIEW_PID_TMP}")"
+        if [ -n "${PREVIEW_PID}" ] && kill -0 "${PREVIEW_PID}" 2>/dev/null ; then
+            kill "${PREVIEW_PID}" 2>/dev/null
+            # wait briefly for a graceful exit before forcing the capture device free
+            PREVIEW_WAIT=0
+            while [ "${PREVIEW_WAIT}" -lt 30 ] && kill -0 "${PREVIEW_PID}" 2>/dev/null ; do
+                sleep 0.1
+                PREVIEW_WAIT=$(( PREVIEW_WAIT + 1 ))
+            done
+            if kill -0 "${PREVIEW_PID}" 2>/dev/null ; then
+                kill -9 "${PREVIEW_PID}" 2>/dev/null
+            fi
+        fi
+        rm -f "${VRECORD_PREVIEW_PID_TMP}"
+    fi
+    echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+}
+
+# Video Preview tab: keep the status display in sync with the background preview process
+_refresh_video_preview_status(){
+    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] ; then
+        PREVIEW_PID="$(cat "${VRECORD_PREVIEW_PID_TMP}")"
+        if [ -n "${PREVIEW_PID}" ] && kill -0 "${PREVIEW_PID}" 2>/dev/null ; then
+            echo "running (pid ${PREVIEW_PID})" > "${VRECORD_PREVIEW_STATUS_TMP}"
+            return 0
+        fi
+    fi
+    PREVIEW_LASTLINE="$(tail -n 1 "${VRECORD_PREVIEW_LOG_TMP}" 2>/dev/null)"
+    if [ -n "${PREVIEW_LASTLINE}" ] ; then
+        echo "stopped: ${PREVIEW_LASTLINE}" > "${VRECORD_PREVIEW_STATUS_TMP}"
+    else
+        echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+    fi
+}
+
 # combine the HH/MM/SS recording time boxes into DURATION (POSIX; all boxes blank means an unlimited recording)
 _combine_duration_fields(){
     if [ -n "${DURATION_HOURS}" ] || [ -n "${DURATION_MINUTES}" ] || [ -n "${DURATION_SECONDS}" ] ; then
@@ -49,6 +137,10 @@ _combine_duration_fields(){
 _update_config_file(){
     # write config file
     _combine_duration_fields
+    # do not persist the Video Preview tab index as an input choice
+    if [ "${DEVICE_INPUT_CHOICE}" = "4" ] ; then
+        DEVICE_INPUT_CHOICE=""
+    fi
     {
         echo "# Set these variables to a valid option or leave as empty quotes (like \"\") to request each run."
         echo "STARTUP_VIEW=\"${STARTUP_VIEW}\""
@@ -104,6 +196,8 @@ _update_config_file(){
         echo "HD_CHOICE=\"${HD_CHOICE}\""
         echo "COLOR_SAFE=\"${COLOR_SAFE}\""
         echo "THEME_CHOICE=\"${THEME_CHOICE}\""
+        echo "PREVIEW_RELAY_CHOICE=\"${PREVIEW_RELAY_CHOICE}\""
+        echo "PREVIEW_RELAY_DEV_CHOICE=\"${PREVIEW_RELAY_DEV_CHOICE}\""
     } > "${CONFIG_FILE}"
     . "${CONFIG_FILE}"
 }
