@@ -292,6 +292,14 @@ _start_file_playback(){
     fi
     FP_DUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     echo "${FP_DUR}" > "${VRECORD_FILEPLAY_DUR_TMP}"
+    # frame rate and total frame count for the frame-based scrub slider
+    FP_FPS="$("${FFMPEG_BIN}" -nostdin -i "${VRECORD_PLAY_FILE}" -hide_banner -loglevel info 2>&1 | grep -oE '[0-9.]+ fps' | head -1 | awk '{print $1}')"
+    echo "${FP_FPS}" > "${VRECORD_FILEPLAY_FPS_TMP}"
+    export FILEPLAY_FRAME_MAX=""
+    if [ -n "${FP_FPS}" ] && [ -n "${FP_DUR}" ] ; then
+        FILEPLAY_FRAME_MAX="$(awk -v d="${FP_DUR}" -v r="${FP_FPS}" 'BEGIN { printf "%d", int(d * r) }')"
+    fi
+    echo 0 > "${VRECORD_FILEPLAY_FRAME_TMP}"
     FP_DIMS="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     FP_FW="${FP_DIMS%%,*}"
     FP_FH="${FP_DIMS##*,}"
@@ -387,26 +395,31 @@ _pause_file_playback(){
     echo "paused at ${FP_PAUSETIME} - toggle Play to resume" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 }
 
-# Video Preview tab: scrub bar handler - seeks the file playback to the scrub
-# bar percentage of the file duration
-_seek_file_playback(){
-    FP_PCT="${FILEPLAY_SEEK}"
-    if ! echo "${FP_PCT}" | grep -qE '^[0-9]+([.][0-9]+)?$' ; then
+# Video Preview tab: scrub bar handler - seeks the file playback to a frame
+# number (the slider ranges 0..total frames once the file has been probed)
+_seek_frame_playback(){
+    FP_FRAME="${FILEPLAY_SEEK}"
+    if ! echo "${FP_FRAME}" | grep -qE '^[0-9]+$' ; then
         return 1
     fi
+    FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
     FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
-    if [ -z "${FP_DUR}" ] ; then
-        echo "duration unknown - cannot seek (play the file once first)" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    if [ -z "${FP_FPS}" ] || [ -z "${FP_DUR}" ] ; then
+        echo "frame range unknown - play the file once first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 1
     fi
-    FP_SEC="$(awk -v d="${FP_DUR}" -v p="${FP_PCT}" 'BEGIN { printf "%.2f", d * p / 100 }')"
+    FP_SEC="$(awk -v f="${FP_FRAME}" -v r="${FP_FPS}" 'BEGIN { printf "%.3f", f / r }')"
+    if awk -v s="${FP_SEC}" -v d="${FP_DUR}" 'BEGIN { exit (s > d) ? 0 : 1 }' ; then
+        FP_SEC="${FP_DUR}"
+    fi
     FP_HMS="$(awk -v s="${FP_SEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
     echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
+    echo "frame ${FP_FRAME}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
         _halt_file_playback
         _start_file_playback
     else
-        echo "cued at ${FP_HMS} - toggle Play to start there" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        echo "cued at frame ${FP_FRAME} (${FP_HMS}) - toggle Play to start there" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     fi
 }
 
