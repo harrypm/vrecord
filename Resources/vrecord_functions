@@ -67,6 +67,16 @@ _ensure_preview_reader(){
     fi
 }
 
+# Video Preview tab: react to the relay checkbox - restart the input preview so
+# the device output matches immediately: relay on feeds the output, relay off
+# blacks it out until the relay is re-enabled or a file is played
+_apply_relay_state(){
+    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_PREVIEW_PID_TMP}")" 2>/dev/null ; then
+        _stop_video_preview
+        _start_video_preview
+    fi
+}
+
 # Video Preview tab: launch a background preview of the decklink input that
 # writes a regularly updated preview for the settings window and, when the relay
 # option is on, sends the feed to the selected device's output through the

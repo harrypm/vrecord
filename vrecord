@@ -1646,10 +1646,11 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         </entry>
                     </vbox>
                     <vbox>
-                        <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording.">
+                        <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording. Toggling restarts the preview so the device output matches immediately: off blacks out the output until the relay is re-enabled or a file is played.">
                             <label>Relay live feed to the device output</label>
                             <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
                             <variable>PREVIEW_RELAY_CHOICE</variable>
+                            <action>_apply_relay_state</action>
                         </checkbox>
                         $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
                         <text>
