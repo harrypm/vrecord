@@ -1692,7 +1692,7 @@ PREVIEW_FORM
 export MAIN_DIALOG='
 <window title="Welcome to Vrecord!">
     <vbox shadow-type="0">
-        <vbox scrollable="true" width="1080" height="520" shadow-type="0">
+        <vbox scrollable="true" shadow-type="0">
             <vbox>
                 <hbox homogenous="true" space-expand="true">
                     <button image-position="Top">
@@ -1751,7 +1751,7 @@ export MAIN_DIALOG='
             <variable export="false">MAIN</variable>
             <action signal="show" type="refresh">VRECORD_SETTINGS_SUMMARY</action>
         </vbox>
-        <vbox scrollable="true" width="1420" height="520" shadow-type="0">
+        <vbox scrollable="true" shadow-type="0">
             <frame Input Options>
             <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview">
                 '"${DECKLINK_INPUT_GUI}"'
