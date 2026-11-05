@@ -146,14 +146,14 @@ _start_file_playback(){
     if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
         FP_RESTIME="$(echo "${FP_POS}" | cut -d'|' -f2)"
         FP_RESSEC="$(echo "${FP_RESTIME}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
-        if [ -n "${FP_DUR}" ] && [ "$(awk -v a="${FP_RESSEC}" -v b="${FP_DUR}" 'BEGIN { print (a+0 >= b-1) ? 1 : 0 }')" = "1" ] ; then
+        if [ -n "${FP_DUR}" ] && [ "$(awk -v a="${FP_RESSEC}" -v b="${FP_DUR}" 'BEGIN { print (a+0 >= b-0.05) ? 1 : 0 }')" = "1" ] ; then
             rm -f "${VRECORD_PLAY_POS_TMP}"
         else
             FP_RESUME="${FP_RESTIME}"
         fi
     fi
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}"
-    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -stats -re
+    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -stats -stats_period 0.033 -re
     if [ -n "${FP_RESUME}" ] ; then
         set -- "$@" -ss "${FP_RESUME}"
     fi
@@ -170,11 +170,19 @@ _start_file_playback(){
 # Video Preview tab: pause file playback, keeping the position for a later resume
 _pause_file_playback(){
     FP_PAUSETIME=""
-    FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
-    if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
-        FP_PAUSETIME="$(echo "${FP_POS}" | cut -d'|' -f2)"
+    FP_RUNNING="false"
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        FP_RUNNING="true"
+        # parse the freshest stats line so the pause lands on the frame being shown
+        FP_PAUSETIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
     fi
-    if [ ! -f "${VRECORD_FILEPLAY_PID_TMP}" ] && [ -z "${FP_PAUSETIME}" ] ; then
+    if [ -z "${FP_PAUSETIME}" ] ; then
+        FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
+        if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
+            FP_PAUSETIME="$(echo "${FP_POS}" | cut -d'|' -f2)"
+        fi
+    fi
+    if [ "${FP_RUNNING}" != "true" ] && [ -z "${FP_PAUSETIME}" ] ; then
         echo "not playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 0
     fi
@@ -266,7 +274,7 @@ _refresh_file_playback_status(){
     if [ -n "${FP_DUR}" ] ; then
         FP_DURHMS="$(awk -v s="${FP_DUR}" 'BEGIN { printf "%02d:%02d:%02d", int(s/3600), int((s%3600)/60), int(s%60) }')"
     fi
-    FP_TIME="$(grep -o 'time=[0-9:.]*' "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | tail -n 1 | cut -d= -f2)"
+    FP_TIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] ; then
         BG_PID="$(cat "${VRECORD_FILEPLAY_PID_TMP}")"
         if [ -n "${BG_PID}" ] && kill -0 "${BG_PID}" 2>/dev/null ; then
@@ -282,7 +290,7 @@ _refresh_file_playback_status(){
     if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
         FP_LAST="$(echo "${FP_POS}" | cut -d'|' -f2)"
         FP_LASTSEC="$(echo "${FP_LAST}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
-        if [ -n "${FP_DUR}" ] && [ "$(awk -v a="${FP_LASTSEC}" -v b="${FP_DUR}" 'BEGIN { print (a+0 >= b-1) ? 1 : 0 }')" = "1" ] ; then
+        if [ -n "${FP_DUR}" ] && [ "$(awk -v a="${FP_LASTSEC}" -v b="${FP_DUR}" 'BEGIN { print (a+0 >= b-0.05) ? 1 : 0 }')" = "1" ] ; then
             echo "finished${FP_DURHMS:+ (${FP_DURHMS})}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
             return 0
         fi
