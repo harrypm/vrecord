@@ -26,7 +26,7 @@ mkdir -p "$PREFIX/bin" "$PREFIX/lib/vrecord/bin" "$PREFIX/lib/vrecord/lib" \
 cp ../vrecord "$PREFIX/bin/"
 cp ../vtest "$PREFIX/bin/" 2>/dev/null || true
 cp ../vplay "$PREFIX/bin/" 2>/dev/null || true
-cp ../Resources/* "$PREFIX/share/vrecord/Resources/"
+cp -r ../Resources/* "$PREFIX/share/vrecord/Resources/"
 cp ../vrecord.1 "$PKGROOT/usr/local/share/man/man1/" 2>/dev/null || \
     mkdir -p "$PREFIX/share/man/man1" && cp ../vrecord.1 "$PREFIX/share/man/man1/"
 cp ../vtest.1 "$PREFIX/share/man/man1/" 2>/dev/null || true
@@ -40,16 +40,26 @@ for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
     [ -n "$BINPATH" ] && cp "$BINPATH" "$PREFIX/lib/vrecord/bin/"
 done
 
-# --- shared libraries needed by the brew binaries ---
-for BIN in "$PREFIX/lib/vrecord/bin/"*; do
-    [ -f "$BIN" ] || continue
-    ldd "$BIN" 2>/dev/null | awk '/=> \// { print $3 }' | while read -r LIB; do
-        case "$LIB" in
-            *linuxbrew*|*opt/homebrew*)
-                DEST="$PREFIX/lib/vrecord/lib/$(basename "$LIB")"
-                [ -f "$DEST" ] || cp "$LIB" "$DEST"
-                ;;
-        esac
+# --- shared libraries needed by the brew binaries (resolved
+#     transitively: ldd the executables AND every collected .so until
+#     no new ones appear, otherwise deps-of-deps like libx264 under
+#     libavcodec go missing) ---
+CHANGED=1
+while [ "$CHANGED" = 1 ]; do
+    CHANGED=0
+    for BIN in "$PREFIX/lib/vrecord/bin/"* "$PREFIX/lib/vrecord/lib/"*; do
+        [ -f "$BIN" ] || continue
+        for LIB in $(ldd "$BIN" 2>/dev/null | awk '/=> \// { print $3 }'); do
+            case "$LIB" in
+                *linuxbrew*|*opt/homebrew*)
+                    DEST="$PREFIX/lib/vrecord/lib/$(basename "$LIB")"
+                    if [ ! -f "$DEST" ]; then
+                        cp "$LIB" "$DEST"
+                        CHANGED=1
+                    fi
+                    ;;
+            esac
+        done
     done
 done
 
@@ -71,13 +81,14 @@ DESKTOP
 # --- postinst: path setup + font cache ---
 cat > "$PKGROOT/DEBIAN/postinst" << 'POSTINST'
 #!/bin/sh
-# add vrecord deps to PATH via profile.d
+# add vrecord deps to PATH + bundled libs to LD_LIBRARY_PATH via profile.d
 if [ ! -f /etc/profile.d/vrecord.sh ]; then
     cat > /etc/profile.d/vrecord.sh << 'EOF'
 export PATH="/usr/local/lib/vrecord/bin:$PATH"
+export LD_LIBRARY_PATH="/usr/local/lib/vrecord/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 EOF
 fi
-echo "vrecord installed. Relogin or run: export PATH=/usr/local/lib/vrecord/bin:$PATH"
+echo "vrecord installed. Relogin or run: source /etc/profile.d/vrecord.sh"
 POSTINST
 chmod 755 "$PKGROOT/DEBIAN/postinst"
 
@@ -90,8 +101,9 @@ Version: ${VERSION}
 Section: video
 Priority: optional
 Architecture: ${ARCH}
-Depends: libc6 (>= 2.39), libgtk2.0-0, libgtk-3-0, mpv, gnuplot, xmlstarlet, mediaconch, mkvtoolnix, cowsay
-Recommends: dvrescue
+# all runtime binaries + their libs are bundled under /usr/local/lib/vrecord,
+# so only the baseline glibc of the build target is required
+Depends: libc6 (>= 2.39)
 Maintainer: harrypm <harry@harrymunday.com>
 Installed-Size: ${INSTALLED_SIZE}
 Description: Open-source video capture tool for archivists

@@ -25,7 +25,7 @@ cp ../vrecord "$APPDIR/usr/bin/"
 cp ../vtest "$APPDIR/usr/bin/" 2>/dev/null || true
 cp ../vplay "$APPDIR/usr/bin/" 2>/dev/null || true
 chmod 755 "$APPDIR/usr/bin/"*
-cp ../Resources/* "$APPDIR/usr/share/vrecord/Resources/"
+cp -r ../Resources/* "$APPDIR/usr/share/vrecord/Resources/"
 
 # --- runtime binaries ---
 for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
@@ -35,21 +35,40 @@ for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
     [ -n "$BINPATH" ] && cp "$BINPATH" "$APPDIR/usr/lib/vrecord/bin/"
 done
 
-# --- linuxbrew shared libraries ---
-for BIN in "$APPDIR/usr/lib/vrecord/bin/"*; do
-    [ -f "$BIN" ] || continue
-    ldd "$BIN" 2>/dev/null | awk '/=> \// { print $3 }' | while read -r LIB; do
-        case "$LIB" in
-            *linuxbrew*)
-                DEST="$APPDIR/usr/lib/vrecord/lib/$(basename "$LIB")"
-                [ -f "$DEST" ] || cp "$LIB" "$DEST"
-                ;;
-        esac
-done
+# --- linuxbrew shared libraries (resolved transitively: ldd the
+#     executables AND every collected .so until no new ones appear,
+#     otherwise deps-of-deps like libx264 under libavcodec go missing) ---
+CHANGED=1
+while [ "$CHANGED" = 1 ]; do
+    CHANGED=0
+    for BIN in "$APPDIR/usr/lib/vrecord/bin/"* "$APPDIR/usr/lib/vrecord/lib/"*; do
+        [ -f "$BIN" ] || continue
+        for LIB in $(ldd "$BIN" 2>/dev/null | awk '/=> \// { print $3 }'); do
+            case "$LIB" in
+                *linuxbrew*)
+                    DEST="$APPDIR/usr/lib/vrecord/lib/$(basename "$LIB")"
+                    if [ ! -f "$DEST" ]; then
+                        cp "$LIB" "$DEST"
+                        CHANGED=1
+                    fi
+                    ;;
+            esac
+        done
+    done
 done
 
 # --- desktop entry and icon ---
 cp ../Resources/vrecord-icon.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/vrecord.svg"
+# linuxdeploy prefers a raster icon; convert the SVG when rsvg-convert is
+# available (installed as a build dep), fall back to the SVG otherwise
+ICON_FILE="$APPDIR/usr/share/icons/hicolor/scalable/apps/vrecord.svg"
+if command -v rsvg-convert >/dev/null 2>&1; then
+    mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+    rsvg-convert -w 256 -h 256 \
+        -o "$APPDIR/usr/share/icons/hicolor/256x256/apps/vrecord.png" \
+        ../Resources/vrecord-icon.svg && \
+        ICON_FILE="$APPDIR/usr/share/icons/hicolor/256x256/apps/vrecord.png"
+fi
 cat > "$APPDIR/usr/share/applications/vrecord.desktop" << 'DESKTOP'
 [Desktop Entry]
 Type=Application
@@ -82,9 +101,12 @@ curl -L "$LINUXDEPLOY_URL" -o /tmp/linuxdeploy
 chmod +x /tmp/linuxdeploy
 export OUTPUT="$ARTIFACTS/vrecord_${VERSION}_x86_64.AppImage"
 export ARCH=x86_64
+# CI runners have no FUSE: run linuxdeploy (and the appimagetool it calls)
+# in extract-and-run mode instead of mounting AppImages
+export APPIMAGE_EXTRACT_AND_RUN=1
 /tmp/linuxdeploy --appdir "$APPDIR" \
     --desktop-file "$APPDIR/usr/share/applications/vrecord.desktop" \
-    --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/vrecord.svg" \
+    --icon-file "$ICON_FILE" \
     --output appimage
 
 echo "Built: $OUTPUT"
