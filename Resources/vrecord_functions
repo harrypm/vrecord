@@ -37,8 +37,18 @@ _check_ffmpeg_install(){
     fi
 }
 
+# combine the HH/MM/SS recording time boxes into DURATION (POSIX; all boxes blank means an unlimited recording)
+_combine_duration_fields(){
+    if [ -n "${DURATION_HOURS}" ] || [ -n "${DURATION_MINUTES}" ] || [ -n "${DURATION_SECONDS}" ] ; then
+        DURATION="${DURATION_HOURS:-0}:${DURATION_MINUTES:-0}:${DURATION_SECONDS:-0}"
+    else
+        DURATION=""
+    fi
+}
+
 _update_config_file(){
     # write config file
+    _combine_duration_fields
     {
         echo "# Set these variables to a valid option or leave as empty quotes (like \"\") to request each run."
         echo "STARTUP_VIEW=\"${STARTUP_VIEW}\""
@@ -131,14 +141,27 @@ _validate_form(){
     if [ ! -d "${LOGDIR}" ] && [ -n "${LOGDIR}" ] ; then
         echo "ERROR: The auxiliary directory (${LOGDIR}) does not exist. Create this folder or leave blank to use the recording directory."
     fi
-    # validate duration (accepts HH:MM:SS or a plain number of minutes)
-    if [ -n "${DURATION}" ] ; then
-        if echo "${DURATION}" | grep -qE '^[0-9]+:[0-9]{1,2}:[0-9]{1,2}$' ; then
-            if [ "$(echo "${DURATION}" | awk -F: '{ if ((($1 * 3600) + ($2 * 60) + $3) > 0) print "1" ; else print "0" }')" != "1" ] ; then
-                echo "ERROR: Illegal value for recording time. HH:MM:SS must describe a positive duration, e.g. 00:33:00."
-            fi
-        elif ! [ "$(echo "${DURATION} > 0" | bc)" = "1" ] ; then
-            echo "ERROR: Illegal value for recording time. Use HH:MM:SS (e.g. 00:33:00) or a positive number of minutes."
+    # validate recording time (three HH/MM/SS boxes; all boxes blank means record indefinitely)
+    if [ -n "${DURATION_HOURS}" ] && ! echo "${DURATION_HOURS}" | grep -qE '^[0-9]+$' ; then
+        echo "ERROR: Illegal value for recording time hours. Enter a whole number or leave blank."
+    fi
+    if [ -n "${DURATION_MINUTES}" ] ; then
+        if ! echo "${DURATION_MINUTES}" | grep -qE '^[0-9]+$' ; then
+            echo "ERROR: Illegal value for recording time minutes. Enter a whole number or leave blank."
+        elif [ "$(echo "${DURATION_MINUTES}" | awk '{ if ($1 <= 59) print "1" ; else print "0" }')" != "1" ] ; then
+            echo "ERROR: Recording time minutes must be between 0 and 59."
+        fi
+    fi
+    if [ -n "${DURATION_SECONDS}" ] ; then
+        if ! echo "${DURATION_SECONDS}" | grep -qE '^[0-9]+$' ; then
+            echo "ERROR: Illegal value for recording time seconds. Enter a whole number or leave blank."
+        elif [ "$(echo "${DURATION_SECONDS}" | awk '{ if ($1 <= 59) print "1" ; else print "0" }')" != "1" ] ; then
+            echo "ERROR: Recording time seconds must be between 0 and 59."
+        fi
+    fi
+    if [ -n "${DURATION_HOURS}${DURATION_MINUTES}${DURATION_SECONDS}" ] ; then
+        if [ "$(echo "0${DURATION_HOURS} 0${DURATION_MINUTES} 0${DURATION_SECONDS}" | awk '{ if (($1 * 3600) + ($2 * 60) + $3 > 0) print "1" ; else print "0" }')" != "1" ] ; then
+            echo "ERROR: A recording time of zero is invalid. Leave all three boxes blank to record indefinitely."
         fi
     fi
     if [ "${VIDEO_CODEC_CHOICE}" = "ProRes" -o "${VIDEO_CODEC_CHOICE}" = "ProRes (HQ)" ] && [ "${VIDEO_BIT_DEPTH_CHOICE}" = "8 bit" ] ; then

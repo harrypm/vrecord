@@ -1719,10 +1719,22 @@ export MAIN_DIALOG='
                         <text>
                             <label>Recording time (HH:MM:SS)</label>
                         </text>
-                        <entry activates_default="true" tooltip-text="Format: HH:MM:SS, suggested:00:23:00 00:33:00 01:03:00 01:33:00. A plain number is read as minutes. Leave blank for indefinite recording time">
-                            <default>"'"${DURATION}"'"</default>
-                            <variable>DURATION</variable>
-                        </entry>
+                        <hbox>
+                            <entry width-chars="3" activates_default="true" tooltip-text="Hours. Leave all three boxes blank for an indefinite recording.">
+                                <default>"'"${DURATION_HOURS}"'"</default>
+                                <variable>DURATION_HOURS</variable>
+                            </entry>
+                            <text><label>:</label></text>
+                            <entry width-chars="3" activates_default="true" tooltip-text="Minutes (0-59). Leave all three boxes blank for an indefinite recording.">
+                                <default>"'"${DURATION_MINUTES}"'"</default>
+                                <variable>DURATION_MINUTES</variable>
+                            </entry>
+                            <text><label>:</label></text>
+                            <entry width-chars="3" activates_default="true" tooltip-text="Seconds (0-59). Leave all three boxes blank for an indefinite recording.">
+                                <default>"'"${DURATION_SECONDS}"'"</default>
+                                <variable>DURATION_SECONDS</variable>
+                            </entry>
+                        </hbox>
                     </vbox>
                 </hbox>
             </frame>
@@ -1895,6 +1907,9 @@ _edit_mode(){
         eval "$("${GTKDIALOGBIN}" --include="${GTK_INC}" --program MAIN_DIALOG --center 2> /dev/null)"
     fi
     MAIN_DIALOG="${MAIN_DIALOG_TMP}"
+
+    # combine the HH/MM/SS recording time boxes into DURATION (all boxes blank means an unlimited recording)
+    _combine_duration_fields
 
     # process the results of the edit form
     if   [[ "${EXIT}" = "abort" ]] ; then
@@ -3493,6 +3508,29 @@ fi
 if [[ -z "${THEME_CHOICE}" ]] ; then
     THEME_CHOICE="System"
 fi
+
+# split the stored recording time into the HH/MM/SS entry box defaults (all boxes blank means record indefinitely)
+_split_duration_to_fields(){
+    DURATION_HOURS=""
+    DURATION_MINUTES=""
+    DURATION_SECONDS=""
+    if [[ -n "${DURATION}" ]] ; then
+        if [[ "${DURATION}" =~ ^[0-9]+:[0-9]{1,2}:[0-9]{1,2}$ ]] ; then
+            local REST="${DURATION#*:}"
+            DURATION_HOURS="$(printf '%02d' $((10#${DURATION%%:*})))"
+            DURATION_MINUTES="$(printf '%02d' $((10#${REST%%:*})))"
+            DURATION_SECONDS="$(printf '%02d' $((10#${REST##*:})))"
+        elif [[ "${DURATION}" =~ ^[0-9]+([.][0-9]+)?$|^[.][0-9]+$ ]] ; then
+            # legacy plain-minutes value: convert to whole seconds and split
+            local SECS
+            SECS="$(bc <<< "scale=0; (${DURATION} * 60)/1" | sed 's/^\./0./')"
+            DURATION_HOURS="$(printf '%02d' $(( SECS / 3600 )))"
+            DURATION_MINUTES="$(printf '%02d' $(( (SECS % 3600) / 60 )))"
+            DURATION_SECONDS="$(printf '%02d' $(( SECS % 60 )))"
+        fi
+    fi
+}
+_split_duration_to_fields
 
 _get_inputs
 
