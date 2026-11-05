@@ -1624,10 +1624,9 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>if false _stop_video_preview</action>
                     <action>if false disable:preview_timer</action>
                 </togglebutton>
-                <timer milliseconds="true" interval="50" visible="false" disabled="true">
+                <timer milliseconds="true" interval="100" visible="false" disabled="true">
                     <variable export="false">preview_timer</variable>
                     <visible>disabled</visible>
-                    <action>_refresh_video_preview_status &</action>
                     <action>refresh:preview_status</action>
                     <action>refresh:vrecord_preview_image</action>
                 </timer>
@@ -1698,13 +1697,15 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         </hscale>
                     </vbox>
                 </hbox>
-                <timer milliseconds="true" interval="50" visible="false">
+                <timer milliseconds="true" interval="100" visible="false">
                     <variable export="false">fileplay_timer</variable>
-                    <action>_refresh_file_playback_status &</action>
-                    <action>_refresh_gui_recording_status &</action>
                     <action>refresh:fileplay_status</action>
                     <action>refresh:fileplay_image</action>
                     <action>refresh:gui_record_status</action>
+                </timer>
+                <timer milliseconds="true" interval="300" visible="false">
+                    <variable export="false">preview_status_timer</variable>
+                    <action>_refresh_preview_page &</action>
                 </timer>
             </vbox>
         </hbox>
@@ -2081,9 +2082,13 @@ _edit_mode(){
     echo "VRECORD_PREVIEW_PID_TMP=\"${VRECORD_PREVIEW_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PREVIEW_STATUS_TMP=\"${VRECORD_PREVIEW_STATUS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PREVIEW_LOG_TMP=\"${VRECORD_PREVIEW_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PREVIEW_FIFO=\"${VRECORD_PREVIEW_FIFO}\"" >> "${GTK_INC}"
+    echo "VRECORD_PREVIEW_RPID_TMP=\"${VRECORD_PREVIEW_RPID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_PID_TMP=\"${VRECORD_FILEPLAY_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_STATUS_TMP=\"${VRECORD_FILEPLAY_STATUS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_LOG_TMP=\"${VRECORD_FILEPLAY_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_FIFO=\"${VRECORD_FILEPLAY_FIFO}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_RPID_TMP=\"${VRECORD_FILEPLAY_RPID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PLAY_POS_TMP=\"${VRECORD_PLAY_POS_TMP}\"" >> "${GTK_INC}"
@@ -3637,10 +3642,14 @@ VRECORD_PREVIEW_TMP="$(_maketemp .vrecord_preview.jpg)"
 VRECORD_PREVIEW_PID_TMP="$(_maketemp .vrecord_preview.pid)"
 VRECORD_PREVIEW_STATUS_TMP="$(_maketemp .vrecord_preview.status.txt)"
 VRECORD_PREVIEW_LOG_TMP="$(_maketemp .vrecord_preview.log.txt)"
+VRECORD_PREVIEW_FIFO="$(_maketemp .vrecord_preview.fifo)"
+VRECORD_PREVIEW_RPID_TMP="$(_maketemp .vrecord_preview.reader.pid)"
 echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
 VRECORD_FILEPLAY_PID_TMP="$(_maketemp .vrecord_fileplay.pid)"
 VRECORD_FILEPLAY_STATUS_TMP="$(_maketemp .vrecord_fileplay.status.txt)"
 VRECORD_FILEPLAY_LOG_TMP="$(_maketemp .vrecord_fileplay.log.txt)"
+VRECORD_FILEPLAY_FIFO="$(_maketemp .vrecord_fileplay.fifo)"
+VRECORD_FILEPLAY_RPID_TMP="$(_maketemp .vrecord_fileplay.reader.pid)"
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"

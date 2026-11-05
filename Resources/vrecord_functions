@@ -55,10 +55,21 @@ _start_video_preview(){
         return 1
     fi
     case "${STANDARD_CHOICE}" in
-        "NTSC") PREVIEW_FORMAT="ntsc" ;;
-        "PAL")  PREVIEW_FORMAT="pal" ;;
+        "NTSC")                PREVIEW_FORMAT="ntsc" ; PREVIEW_SRCW=720  ; PREVIEW_SRCH=486  ;;
+        "PAL")                 PREVIEW_FORMAT="pal"  ; PREVIEW_SRCW=720  ; PREVIEW_SRCH=576  ;;
+        "23ps - 1080p23.98")   PREVIEW_FORMAT="23ps" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "24ps - 1080p24")      PREVIEW_FORMAT="24ps" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hp25 - 1080p25")      PREVIEW_FORMAT="Hp25" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hp29 - 1080p29.97")   PREVIEW_FORMAT="Hp29" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hp30 - 1080p30")      PREVIEW_FORMAT="Hp30" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hi50 - 1080i50")      PREVIEW_FORMAT="Hi50" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hi59 - 1080i59.94")   PREVIEW_FORMAT="Hi59" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hi60 - 1080i60")      PREVIEW_FORMAT="Hi60" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "hp50 - 720p50")       PREVIEW_FORMAT="hp50" ; PREVIEW_SRCW=1280 ; PREVIEW_SRCH=720  ;;
+        "hp59 - 720p59.94")    PREVIEW_FORMAT="hp59" ; PREVIEW_SRCW=1280 ; PREVIEW_SRCH=720  ;;
+        "hp60 - 720p60")       PREVIEW_FORMAT="hp60" ; PREVIEW_SRCW=1280 ; PREVIEW_SRCH=720  ;;
         "")     echo "select a standard on the Decklink tab first" > "${VRECORD_PREVIEW_STATUS_TMP}" ; return 1 ;;
-        *)      PREVIEW_FORMAT="$(echo "${STANDARD_CHOICE}" | cut -d ' ' -f1)" ;;
+        *)      echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_PREVIEW_STATUS_TMP}" ; return 1 ;;
     esac
     case "${VIDEO_INPUT_CHOICE}" in
         "Composite") PREVIEW_VINPUT="composite" ;;
@@ -67,7 +78,7 @@ _start_video_preview(){
         *)           PREVIEW_VINPUT="sdi" ;;
     esac
     # build the ffmpeg arguments as positional parameters so device names with spaces stay intact
-    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}"
+    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}"
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
         case "${AUDIO_INPUT_CHOICE}" in
             "SDI Embedded Audio")      PREVIEW_AINPUT="embedded" ;;
@@ -77,7 +88,7 @@ _start_video_preview(){
         set -- "$@" -audio_input "${PREVIEW_AINPUT}"
     fi
     set -- "$@" -f decklink -i "${DECKLINK_INPUT_CHOICE}"
-    set -- "$@" -map 0:v -vf scale=480:-2 -f image2 -update 1 "${VRECORD_PREVIEW_TMP}"
+    set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
         PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
         if [ -n "${PREVIEW_RELAY_DEV_CHOICE}" ] ; then
@@ -85,7 +96,20 @@ _start_video_preview(){
         fi
         set -- "$@" -map 0:v -map 0:a -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${PREVIEW_RELAY_DEV}"
     fi
-    rm -f "${VRECORD_PREVIEW_TMP}"
+    rm -f "${VRECORD_PREVIEW_TMP}" "${VRECORD_PREVIEW_FIFO}"
+    mkfifo "${VRECORD_PREVIEW_FIFO}"
+    # lossless preview: raw RGB frames through a fifo; a reader wraps each frame in a
+    # PPM header and renames it into place atomically so the pane never shows a torn frame
+    PREVIEW_W=480
+    PREVIEW_H="$(awk -v w="${PREVIEW_SRCW}" -v h="${PREVIEW_SRCH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
+    PREVIEW_PIX=$(( PREVIEW_W * PREVIEW_H * 3 ))
+    PREPIX="${PREVIEW_PIX}" PREW="${PREVIEW_W}" PREH="${PREVIEW_H}" PREDISP="${VRECORD_PREVIEW_TMP}" \
+        sh -c 'while head -c "${PREPIX}" > "${PREDISP}.frame" 2>/dev/null ; do
+                  [ "$(wc -c < "${PREDISP}.frame")" = "${PREPIX}" ] || break
+                  { printf "P6\n%s %s\n255\n" "${PREW}" "${PREH}" ; cat "${PREDISP}.frame" ; } > "${PREDISP}.new"
+                  mv -f "${PREDISP}.new" "${PREDISP}"
+              done' < "${VRECORD_PREVIEW_FIFO}" > /dev/null 2>&1 &
+    echo $! > "${VRECORD_PREVIEW_RPID_TMP}"
     echo "starting preview..." > "${VRECORD_PREVIEW_STATUS_TMP}"
     "$@" > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_PREVIEW_PID_TMP}"
@@ -138,7 +162,7 @@ _start_file_playback(){
     if [ -n "${FP_FIELD}" ] ; then
         FP_VF="${FP_VF},setfield=${FP_FIELD}"
     fi
-    # file duration, used by the scrub bar and the position display
+    # file duration and video dimensions, used by the scrub bar, the position display, and the preview pane
     FP_PROBE="${FFPROBE_BIN}"
     if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
         FP_PROBE="$(dirname "${FFMPEG_BIN}")/ffprobe-ma"
@@ -148,6 +172,13 @@ _start_file_playback(){
     fi
     FP_DUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     echo "${FP_DUR}" > "${VRECORD_FILEPLAY_DUR_TMP}"
+    FP_DIMS="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+    FP_FW="${FP_DIMS%%,*}"
+    FP_FH="${FP_DIMS##*,}"
+    if ! echo "${FP_FW}" | grep -qE '^[0-9]+$' || ! echo "${FP_FH}" | grep -qE '^[0-9]+$' ; then
+        echo "could not read the video dimensions from this file" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
     # resume from a saved position if it belongs to this file and is not the end
     FP_RESUME=""
     FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
@@ -161,15 +192,29 @@ _start_file_playback(){
         fi
     fi
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}"
-    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -stats -stats_period 0.033 -re
+    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -stats -stats_period 0.033 -re
     if [ -n "${FP_RESUME}" ] ; then
         set -- "$@" -ss "${FP_RESUME}"
     fi
     set -- "$@" -i "${VRECORD_PLAY_FILE}"
-    # preview of the outgoing file for the output side of the tab (native frame rate, same stream and timeline as the device output; scaled to the pane because gtkdialog pixmaps render at natural size)
-    set -- "$@" -map 0:v -vf scale=480:-2 -f image2 -update 1 "${VRECORD_FILEPLAY_IMG_TMP}"
+    # lossless preview of the outgoing file for the output side of the tab: raw RGB frames
+    # through a fifo (same stream and timeline as the device output; scaled to the pane
+    # because gtkdialog pixmaps render at natural size), wrapped in PPM atomically
+    set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
     # converted feed to the device output
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
+    rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
+    mkfifo "${VRECORD_FILEPLAY_FIFO}"
+    FP_W=480
+    FP_H="$(awk -v w="${FP_FW}" -v h="${FP_FH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
+    FP_PIX=$(( FP_W * FP_H * 3 ))
+    FPPIX="${FP_PIX}" FPW="${FP_W}" FPH="${FP_H}" FPDISP="${VRECORD_FILEPLAY_IMG_TMP}" \
+        sh -c 'while head -c "${FPPIX}" > "${FPDISP}.frame" 2>/dev/null ; do
+                  [ "$(wc -c < "${FPDISP}.frame")" = "${FPPIX}" ] || break
+                  { printf "P6\n%s %s\n255\n" "${FPW}" "${FPH}" ; cat "${FPDISP}.frame" ; } > "${FPDISP}.new"
+                  mv -f "${FPDISP}.new" "${FPDISP}"
+              done' < "${VRECORD_FILEPLAY_FIFO}" > /dev/null 2>&1 &
+    echo $! > "${VRECORD_FILEPLAY_RPID_TMP}"
     echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "$@" > "${VRECORD_FILEPLAY_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_FILEPLAY_PID_TMP}"
@@ -363,11 +408,28 @@ _stop_bg_process(){
 
 _stop_video_preview(){
     _stop_bg_process "${VRECORD_PREVIEW_PID_TMP}" "${VRECORD_PREVIEW_STATUS_TMP}"
+    if [ -f "${VRECORD_PREVIEW_RPID_TMP}" ] ; then
+        kill "$(cat "${VRECORD_PREVIEW_RPID_TMP}")" 2>/dev/null
+        rm -f "${VRECORD_PREVIEW_RPID_TMP}"
+    fi
+    rm -f "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}.frame" "${VRECORD_PREVIEW_TMP}.new" 2>/dev/null
 }
 
 _stop_file_playback(){
     _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+    if [ -f "${VRECORD_FILEPLAY_RPID_TMP}" ] ; then
+        kill "$(cat "${VRECORD_FILEPLAY_RPID_TMP}")" 2>/dev/null
+        rm -f "${VRECORD_FILEPLAY_RPID_TMP}"
+    fi
+    rm -f "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}.frame" "${VRECORD_FILEPLAY_IMG_TMP}.new" 2>/dev/null
     rm -f "${VRECORD_PLAY_POS_TMP}"
+}
+
+# Video Preview tab: one combined status refresh for the slow status timer
+_refresh_preview_page(){
+    _refresh_video_preview_status
+    _refresh_file_playback_status
+    _refresh_gui_recording_status
 }
 
 # Video Preview tab: keep a status display in sync with a background preview/playback process
