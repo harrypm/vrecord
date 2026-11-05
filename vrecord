@@ -3619,6 +3619,11 @@ VRECORD_PREVIEW_LOG_TMP="$(_maketemp .vrecord_preview.log.txt)"
 VRECORD_PREVIEW_FIFO="$(_maketemp .vrecord_preview.fifo)"
 VRECORD_PREVIEW_RPID_TMP="$(_maketemp .vrecord_preview.reader.pid)"
 echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+# kill any leftover preview/relay processes from a previous GUI run: they
+# still hold the capture device and would block the new session's recordings
+# (a new run gets fresh tmp files, so the old run's PID files are unreachable)
+pkill -9 -f "ffmpeg.*vrecord_preview.fifo" 2>/dev/null
+pkill -9 -f "vrecord-preview-reader" 2>/dev/null
 VRECORD_FILEPLAY_PID_TMP="$(_maketemp .vrecord_fileplay.pid)"
 VRECORD_FILEPLAY_STATUS_TMP="$(_maketemp .vrecord_fileplay.status.txt)"
 VRECORD_FILEPLAY_LOG_TMP="$(_maketemp .vrecord_fileplay.log.txt)"
