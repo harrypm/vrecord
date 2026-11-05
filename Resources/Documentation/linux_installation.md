@@ -10,7 +10,7 @@ There are many possible ways to install the various dependencies of Vrecord on L
 
 __Vrecord dependency install command:__ 
 
-`wget -O - https://raw.githubusercontent.com/amiaopensource/vrecord/refs/heads/linux-doc-updates/Release/linux-dependencies.sh | bash`
+`wget -O - https://raw.githubusercontent.com/amiaopensource/vrecord/refs/heads/main/Release/linux-dependencies.sh | bash`
   
 ### Install Homebrew
 4) Install Homebrew via the command on [its homepage](https://brew.sh/). As of writing, this is: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
@@ -35,8 +35,18 @@ If DV functionality is desired, download and install the [DVRescue](https://medi
 The FFmpeg DV device can also be used for some DV features; this requires ffmpeg-ma to be compiled with the IEC61883 device. This can be done with `brew install ffmpeg-ma --with-iec61883` for a new installation or `brew reinstall ffmpeg-ma --with-iec61883` if ffmpeg-ma is already installed.
 
 # Instructions/Tips for other Linux Distributions
-## Linux Mint
-Installation on Linux Mint (20.1) it was necessary to run `apt install libc6-dev texinfo` for additional dependencies.
+## Linux Mint (tested: 21.3, Cinnamon, X11)
+Install the same way as Ubuntu: run the [dependency script](https://github.com/amiaopensource/vrecord/blob/main/Release/linux-dependencies.sh), install Homebrew, tap `amiaopensource/amiaos` and `mediaarea/mediaarea`, then `brew install vrecord`. On Mint 20.1 it was additionally necessary to run `apt install libc6-dev texinfo`.
+
+On Mint 21.3 specifically the working set was: `build-essential curl libgtk2.0-dev libgtk-3-dev bison flex texinfo git mkvtoolnix gnuplot xmlstarlet mpv mediaconch libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools` (all via apt), Homebrew with `vrecord`, `ffmpeg-ma`, and `gtkdialog` from the taps above, plus a C compiler (`cc`) available so the compiled preview reader can build on first use.
+
+## Running a development copy alongside the brew install
+The `brew install` above gives you the stock vrecord at `/home/linuxbrew/.linuxbrew/bin/vrecord`. To run a modified copy (for example a fork such as `harrypm/vrecord`) against the same Homebrew-provided dependencies:
+
+1) `git clone https://github.com/harrypm/vrecord && cd vrecord`
+2) Run it in place with `./vrecord -e` - it finds `Resources/` next to the script and reuses the Homebrew `ffmpeg-ma`/`gtkdialog` binaries via the environment cache at `/tmp/`.
+3) To make the system-wide `vrecord` command run the modified copy, back up the brew install once (`cp -a /home/linuxbrew/.linuxbrew/Cellar/vrecord/<version> ~/vrecord-deploy-backup`) and copy your modified `vrecord` and `Resources/vrecord_functions` (plus any new resource files such as `vrecord_preview_reader.c` and `vrecord-icon.svg`) into that same Cellar directory. `cmp` the copies afterwards. A `brew upgrade vrecord` will overwrite them, so re-deploy after upgrading.
+4) A menu/taskbar entry with the app icon can be installed for the current user (no root) with `Release/install-desktop-entry.sh` from the checkout.
 ## via RPM (tested on CentOS 7/8 and Fedora 31)
 This method is maintained by [Jonáš Svatoš](mailto:jonas.svatos@nfa.cz) at [Národní filmový archiv](https://github.com/NFAcz)
 and contains patches which modify Vrecord source to bypass some hardcoded Homebrew-specific variables. It also adds a nice menu entry.
