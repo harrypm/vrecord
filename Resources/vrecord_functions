@@ -159,6 +159,18 @@ _start_video_preview(){
     echo $! > "${VRECORD_PREVIEW_PID_TMP}"
 }
 
+# convert a playout stats time to the absolute file position: input seeks
+# (-ss) rebase ffmpeg's time= counter to zero, so the seek offset is added back
+_fp_abs_time(){
+    FP_OFF="$(cat "${VRECORD_PLAY_OFFSET_TMP}" 2>/dev/null)"
+    awk -v t="${1}" -v o="${FP_OFF:-00:00:00.00}" 'BEGIN {
+        n = split(t, a, ":") ; ts = (n == 3) ? a[1]*3600 + a[2]*60 + a[3] : t + 0
+        m = split(o, b, ":") ; os = (m == 3) ? b[1]*3600 + b[2]*60 + b[3] : o + 0
+        v = ts + os
+        printf "%02d:%02d:%06.3f", int(v/3600), int((v%3600)/60), v%60
+    }'
+}
+
 # Video Preview tab: play a media file out to the selected device's output
 # through the Blackmagic SDK, converting on the fly to the output mode of the
 # selected standard (video size, frame rate, and field order)
@@ -253,6 +265,8 @@ _start_file_playback(){
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     _ensure_preview_reader
     _stop_video_preview
+    # remember the seek offset: ffmpeg rebases its time= counter after -ss
+    echo "${FP_RESUME:-00:00:00.00}" > "${VRECORD_PLAY_OFFSET_TMP}"
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
     mkfifo "${VRECORD_FILEPLAY_FIFO}"
     FP_W=480
@@ -280,8 +294,12 @@ _pause_file_playback(){
     FP_RUNNING="false"
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
         FP_RUNNING="true"
-        # parse the freshest stats line so the pause lands on the frame being shown
-        FP_PAUSETIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+        # parse the freshest stats line so the pause lands on the frame being shown,
+        # adding back the seek offset because -ss rebases ffmpeg's time= counter
+        FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+        if [ -n "${FP_STATTIME}" ] ; then
+            FP_PAUSETIME="$(_fp_abs_time "${FP_STATTIME}")"
+        fi
     fi
     if [ -z "${FP_PAUSETIME}" ] ; then
         FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
@@ -498,7 +516,7 @@ _halt_file_playback(){
 
 _stop_file_playback(){
     _halt_file_playback
-    rm -f "${VRECORD_PLAY_POS_TMP}"
+    rm -f "${VRECORD_PLAY_POS_TMP}" "${VRECORD_PLAY_OFFSET_TMP}"
 }
 
 # Video Preview tab: one combined status refresh for the slow status timer
@@ -534,7 +552,12 @@ _refresh_file_playback_status(){
     if [ -n "${FP_DUR}" ] ; then
         FP_DURHMS="$(awk -v s="${FP_DUR}" 'BEGIN { printf "%02d:%02d:%02d", int(s/3600), int((s%3600)/60), int(s%60) }')"
     fi
-    FP_TIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+    FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+    if [ -n "${FP_STATTIME}" ] ; then
+        FP_TIME="$(_fp_abs_time "${FP_STATTIME}")"
+    else
+        FP_TIME=""
+    fi
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] ; then
         BG_PID="$(cat "${VRECORD_FILEPLAY_PID_TMP}")"
         if [ -n "${BG_PID}" ] && kill -0 "${BG_PID}" 2>/dev/null ; then
