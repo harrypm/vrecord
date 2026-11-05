@@ -82,6 +82,38 @@ _write_black_ppm(){
     } > "${1}"
 }
 
+# snap the settings window to a preset position and size (screen halves or a
+# quarter, for split-screen workflows); needs wmctrl, which most X11 desktops ship
+_snap_window(){
+    SNAP_PRESET="${1}"
+    command -v wmctrl >/dev/null 2>&1 || return 1
+    # screen dimensions: the current mode via xrandr, falling back to xdpyinfo
+    SNAP_W=""
+    SNAP_H=""
+    if command -v xrandr >/dev/null 2>&1 ; then
+        SNAP_MODE="$(xrandr --current 2>/dev/null | awk '/\*/{print $1 ; exit}')"
+        if [ -n "${SNAP_MODE}" ] ; then
+            SNAP_W="${SNAP_MODE%x*}"
+            SNAP_H="${SNAP_MODE#*x}"
+        fi
+    fi
+    if [ -z "${SNAP_W}" ] && command -v xdpyinfo >/dev/null 2>&1 ; then
+        SNAP_MODE="$(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2 ; exit}')"
+        SNAP_W="${SNAP_MODE%x*}"
+        SNAP_H="${SNAP_MODE#*x}"
+    fi
+    [ -z "${SNAP_W}" ] && return 1
+    case "${SNAP_PRESET}" in
+        left)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ;;
+        right)   SNAP_X=$(( SNAP_W / 2 )) ; SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ;;
+        quarter) SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH=$(( SNAP_H / 2 )) ;;
+        full)    wmctrl -r :ACTIVE: -b toggle,maximized 2>/dev/null ; return 0 ;;
+        *) return 1 ;;
+    esac
+    wmctrl -r :ACTIVE: -b remove,maximized_vert,maximized_horz 2>/dev/null
+    wmctrl -r :ACTIVE: -e "0,${SNAP_X},${SNAP_Y},${SNAP_GW},${SNAP_GH}" 2>/dev/null
+}
+
 # Video Preview tab: react to the relay checkbox - restart the input preview so
 # the device output matches immediately: relay on feeds the output, relay off
 # blacks it out until the relay is re-enabled or a file is played
@@ -437,7 +469,8 @@ _stop_gui_recording(){
     rm -f "${VRECORD_RECORD_PID_TMP}"
 }
 
-# Video Preview tab: keep the recording status line in sync with the recording process
+# Video Preview tab: keep the recording state in sync; when a recording ends,
+# reset so the next recording (with a new name) can start immediately
 _refresh_gui_recording_status(){
     if [ -f "${VRECORD_RECORD_PID_TMP}" ] ; then
         GUIREC_PID="$(cat "${VRECORD_RECORD_PID_TMP}")"
@@ -446,6 +479,15 @@ _refresh_gui_recording_status(){
             echo "recording ${GUIREC_TIME:-starting...}" > "${VRECORD_RECORD_STATUS_TMP}"
             return 0
         fi
+        # the recording finished: clear the state so a new one can start
+        rm -f "${VRECORD_RECORD_PID_TMP}"
+        GUIREC_LAST="$(tail -n 3 "${VRECORD_RECORD_LOG_TMP}" 2>/dev/null | grep -vE '^frame=' | tail -n 1)"
+        echo "done: ${GUIREC_LAST:-recording finished} - ready for the next recording" > "${VRECORD_RECORD_STATUS_TMP}"
+        # restore the landing state (input preview with relay) unless a file playout owns the output
+        if ! { [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; } ; then
+            _start_video_preview
+        fi
+        return 0
     fi
     GUIREC_LAST="$(tail -n 3 "${VRECORD_RECORD_LOG_TMP}" 2>/dev/null | grep -vE '^frame=' | tail -n 1)"
     if [ -n "${GUIREC_LAST}" ] ; then
@@ -564,6 +606,7 @@ _stop_file_playback(){
 _refresh_preview_page(){
     _refresh_video_preview_status
     _refresh_file_playback_status
+    _refresh_gui_recording_status
 }
 
 # Video Preview tab: keep a status display in sync with a background preview/playback process
