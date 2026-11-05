@@ -232,11 +232,21 @@ _setup_env_variables(){
         DIR_SELECTION_DIALOG="Select an existing folder (or drag/drop one below). File System/Volumes for external media."
     elif [[ "${QUERY_OS_TYPE}" = "Linux" ]] ; then
         OS_TYPE="linux"
-        if [[ "${PATH_CHECK}" = "/usr/local/bin" ]] || [[ "${PATH_CHECK}" = "/home/linuxbrew/.linuxbrew/bin" ]] ; then
+        if [[ -n "${VRECORD_RESOURCES}" ]] && [[ -d "${VRECORD_RESOURCES}" ]] ; then
+            # explicit override for bundled layouts (AppImage AppRun)
+            RESOURCE_PATH="${VRECORD_RESOURCES}"
+        elif [[ "${PATH_CHECK}" = "/usr/local/bin" ]] ; then
+            if [[ -d "/usr/local/share/vrecord" ]] ; then
+                # .deb package layout
+                RESOURCE_PATH="/usr/local/share/vrecord/Resources"
+            else
+                RESOURCE_PATH="$(brew --prefix vrecord 2>/dev/null)"
+            fi
+        elif [[ "${PATH_CHECK}" = "/home/linuxbrew/.linuxbrew/bin" ]] ; then
             if [[ -d "/home/linuxbrew/.linuxbrew/opt/vrecord" ]] ; then
                 RESOURCE_PATH="/home/linuxbrew/.linuxbrew/opt/vrecord"
             else
-                RESOURCE_PATH="$(brew --prefix vrecord)"
+                RESOURCE_PATH="$(brew --prefix vrecord 2>/dev/null)"
             fi
         else
             RESOURCE_PATH="${SCRIPTDIR}/Resources"

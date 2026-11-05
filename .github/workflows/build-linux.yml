@@ -46,8 +46,8 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          cp Release/artifacts/*.deb artifacts/ 2>/dev/null || true
-          cp Release/artifacts/*.AppImage artifacts/ 2>/dev/null || true
+          cp Release/artifacts/*.deb artifacts/
+          cp Release/artifacts/*.AppImage artifacts/
           ls -la artifacts/
 
       - uses: actions/upload-artifact@v4

@@ -4,7 +4,7 @@
 # dependencies (ffmpeg-ma, gtkdialog, mediaconch, etc.) into a .deb
 # that installs to /usr/local/{bin,lib/vrecord,share/vrecord}.
 
-set -x
+set -ex
 cd "$(dirname "$0")"
 RELEASE_DIR="$(pwd)"
 ARTIFACTS="$RELEASE_DIR/artifacts"
@@ -27,17 +27,19 @@ cp ../vrecord "$PREFIX/bin/"
 cp ../vtest "$PREFIX/bin/" 2>/dev/null || true
 cp ../vplay "$PREFIX/bin/" 2>/dev/null || true
 cp -r ../Resources/* "$PREFIX/share/vrecord/Resources/"
-cp ../vrecord.1 "$PKGROOT/usr/local/share/man/man1/" 2>/dev/null || \
-    mkdir -p "$PREFIX/share/man/man1" && cp ../vrecord.1 "$PREFIX/share/man/man1/"
-cp ../vtest.1 "$PREFIX/share/man/man1/" 2>/dev/null || true
+mkdir -p "$PREFIX/share/man/man1"
+cp ../vrecord.1 "$PREFIX/share/man/man1/"
+cp ../vtest.1 "$PREFIX/share/man/man1/"
 
 # --- runtime binaries from brew (linuxbrew builds are portable enough
 #     when glibc matches; we target ubuntu 24.04 glibc 2.39) ---
 for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
            mkvextract mkvinfo mkvmerge mkvpropedit xmlstarlet cowsay gnuplot \
            dvrescue dvpackager; do
-    BINPATH="$(command -v "$BIN" 2>/dev/null)"
-    [ -n "$BINPATH" ] && cp "$BINPATH" "$PREFIX/lib/vrecord/bin/"
+    BINPATH="$(command -v "$BIN" 2>/dev/null || true)"
+    if [ -n "$BINPATH" ]; then
+        cp "$BINPATH" "$PREFIX/lib/vrecord/bin/"
+    fi
 done
 
 # --- shared libraries needed by the brew binaries (resolved
@@ -92,7 +94,7 @@ echo "vrecord installed. Relogin or run: source /etc/profile.d/vrecord.sh"
 POSTINST
 chmod 755 "$PKGROOT/DEBIAN/postinst"
 
-# --- control file ---
+# --- control file (note: no comments allowed inside, dpkg rejects them) ---
 ARCH="$(dpkg --print-architecture)"
 INSTALLED_SIZE="$(du -sk "$PKGROOT" | awk '{print $1}')"
 cat > "$PKGROOT/DEBIAN/control" << EOF
@@ -101,8 +103,6 @@ Version: ${VERSION}
 Section: video
 Priority: optional
 Architecture: ${ARCH}
-# all runtime binaries + their libs are bundled under /usr/local/lib/vrecord,
-# so only the baseline glibc of the build target is required
 Depends: libc6 (>= 2.39)
 Maintainer: harrypm <harry@harrymunday.com>
 Installed-Size: ${INSTALLED_SIZE}
@@ -118,7 +118,7 @@ Homepage: https://github.com/amiaopensource/vrecord
 EOF
 
 # --- build ---
-chmod 755 "$PREFIX/bin/vrecord" "$PREFIX/bin/vtest" "$PREFIX/bin/vplay" 2>/dev/null
+chmod 755 "$PREFIX/bin/"*
 dpkg-deb --build "$PKGROOT" "$ARTIFACTS/vrecord_${VERSION}_${ARCH}.deb"
 rm -rf "$PKGROOT"
 echo "Built: $ARTIFACTS/vrecord_${VERSION}_${ARCH}.deb"

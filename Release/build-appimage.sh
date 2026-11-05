@@ -4,7 +4,7 @@
 # binaries + their linuxbrew shared libraries) into a portable
 # self-contained .AppImage.
 
-set -x
+set -ex
 cd "$(dirname "$0")"
 RELEASE_DIR="$(pwd)"
 ARTIFACTS="$RELEASE_DIR/artifacts"
@@ -31,8 +31,10 @@ cp -r ../Resources/* "$APPDIR/usr/share/vrecord/Resources/"
 for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
            mkvextract mkvinfo mkvmerge mkvpropedit xmlstarlet cowsay gnuplot \
            dvrescue dvpackager; do
-    BINPATH="$(command -v "$BIN" 2>/dev/null)"
-    [ -n "$BINPATH" ] && cp "$BINPATH" "$APPDIR/usr/lib/vrecord/bin/"
+    BINPATH="$(command -v "$BIN" 2>/dev/null || true)"
+    if [ -n "$BINPATH" ]; then
+        cp "$BINPATH" "$APPDIR/usr/lib/vrecord/bin/"
+    fi
 done
 
 # --- linuxbrew shared libraries (resolved transitively: ldd the
@@ -64,10 +66,11 @@ cp ../Resources/vrecord-icon.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/
 ICON_FILE="$APPDIR/usr/share/icons/hicolor/scalable/apps/vrecord.svg"
 if command -v rsvg-convert >/dev/null 2>&1; then
     mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-    rsvg-convert -w 256 -h 256 \
+    if rsvg-convert -w 256 -h 256 \
         -o "$APPDIR/usr/share/icons/hicolor/256x256/apps/vrecord.png" \
-        ../Resources/vrecord-icon.svg && \
+        ../Resources/vrecord-icon.svg; then
         ICON_FILE="$APPDIR/usr/share/icons/hicolor/256x256/apps/vrecord.png"
+    fi
 fi
 cat > "$APPDIR/usr/share/applications/vrecord.desktop" << 'DESKTOP'
 [Desktop Entry]
@@ -89,7 +92,7 @@ cat > "$APPDIR/AppRun" << 'APPRUN'
 HERE="$(dirname "$(readlink -f "$0")")"
 export PATH="$HERE/usr/lib/vrecord/bin:$PATH"
 export LD_LIBRARY_PATH="$HERE/usr/lib/vrecord/lib:${LD_LIBRARY_PATH}"
-# AppDir Resources path (the vrecord script resolves via SCRIPTDIR)
+# bundled Resources location (the vrecord script honors VRECORD_RESOURCES)
 export VRECORD_RESOURCES="$HERE/usr/share/vrecord/Resources"
 exec "$HERE/usr/bin/vrecord" "$@"
 APPRUN
@@ -97,7 +100,7 @@ chmod 755 "$APPDIR/AppRun"
 
 # --- linuxdeploy ---
 LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/linuxdeploy-x86_64.AppImage"
-curl -L "$LINUXDEPLOY_URL" -o /tmp/linuxdeploy
+curl -fL "$LINUXDEPLOY_URL" -o /tmp/linuxdeploy
 chmod +x /tmp/linuxdeploy
 export OUTPUT="$ARTIFACTS/vrecord_${VERSION}_x86_64.AppImage"
 export ARCH=x86_64

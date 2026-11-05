@@ -1,1 +1,8 @@
 logs/
+
+# local build outputs (Release/build-deb.sh, build-appimage.sh)
+Release/artifacts/
+Release/deb-pkg/
+Release/AppDir/
+Release/*.deb
+Release/*.AppImage
