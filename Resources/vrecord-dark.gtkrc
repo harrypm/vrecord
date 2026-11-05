@@ -1,0 +1,41 @@
+# vrecord dark theme for GTK2-based gtkdialog builds.
+# Used when the vrecord Themes tab is set to Dark; applied via the
+# GTK2_RC_FILES environment variable before gtkdialog is launched.
+# GTK3-based gtkdialog builds are themed with GTK_THEME=Adwaita:dark instead.
+
+style "vrecord-dark" {
+    bg[NORMAL]        = "#33393b"
+    bg[PRELIGHT]      = "#454c4f"
+    bg[ACTIVE]        = "#2a2f31"
+    bg[SELECTED]      = "#215d9c"
+    bg[INSENSITIVE]   = "#33393b"
+    fg[NORMAL]        = "#eeeeec"
+    fg[PRELIGHT]      = "#ffffff"
+    fg[ACTIVE]        = "#eeeeec"
+    fg[SELECTED]      = "#ffffff"
+    fg[INSENSITIVE]   = "#939995"
+    text[NORMAL]      = "#eeeeec"
+    text[PRELIGHT]    = "#eeeeec"
+    text[ACTIVE]      = "#eeeeec"
+    text[SELECTED]    = "#ffffff"
+    text[INSENSITIVE] = "#939995"
+    base[NORMAL]      = "#1e2224"
+    base[ACTIVE]      = "#2a2f31"
+    base[PRELIGHT]    = "#1e2224"
+    base[SELECTED]    = "#215d9c"
+    base[INSENSITIVE] = "#33393b"
+}
+
+style "vrecord-dark-menu" {
+    bg[NORMAL]        = "#2a2f31"
+    bg[PRELIGHT]      = "#215d9c"
+    bg[ACTIVE]        = "#1e2224"
+    bg[INSENSITIVE]   = "#33393b"
+    fg[NORMAL]        = "#eeeeec"
+    fg[PRELIGHT]      = "#ffffff"
+    fg[ACTIVE]        = "#eeeeec"
+    fg[INSENSITIVE]   = "#939995"
+}
+
+class "GtkWidget" style "vrecord-dark"
+class "GtkMenu" style "vrecord-dark-menu"

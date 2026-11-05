@@ -67,7 +67,7 @@ To capture DV formats (DV, DVCAM, MiniDV, DVCPRO and Digital8) in vrecord, you w
 
 2. Click the "deck control" button to allow vrecord to control your device.
 
-3. To record, select the recording directory (location where you want to save the file) and enter the recording name, name of the person digitizing this tape, recording time in minutes (if applicable) and any other options you would like applied to your file.
+3. To record, select the recording directory (location where you want to save the file) and enter the recording name, name of the person digitizing this tape, recording time in HH:MM:SS (if applicable) and any other options you would like applied to your file.
 
 4. Click the "Record" button. The settings menu will close and the Terminal window will display the settings you have entered.
 

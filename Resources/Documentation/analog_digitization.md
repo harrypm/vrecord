@@ -74,7 +74,7 @@ Run `vrecord -e` and check the window that pops up to make sure your settings ar
 
 **Standard** — NTSC
 
-**Recording Time** — For a 30 minute tape set the recording time to 33. For a 60 minute tape set the recording time to 63. Usually tapes have the number 30 or 60 on them somewhere so you can figure out which kind of tape you have.
+**Recording Time** — For a 30 minute tape set the recording time to 00:33:00. For a 60 minute tape set the recording time to 01:03:00. Usually tapes have the number 30 or 60 on them somewhere so you can figure out which kind of tape you have.
 
 As the color bars play, monitor your waveform, vectorscope, and audio levels. Make sure that all of the levels are still correct. If any of the levels are not correct, you will have to stop the recording (by closing the vrecord window), rewind the tape back to the beginning of the bars and then set them up again using passthrough mode. When they are properly set up, try recording again.
 
@@ -97,7 +97,7 @@ CUNY-TV uses the following settings for U-matic tapes:
 
 **Standard** — NTSC
 
-**Recording Time** — For a 30 minute tape set the recording time to 33. For a 60 minute tape set the recording time to 63. Usually tapes have the number 30 or 60 on them somewhere so you can figure out which kind of tape you have.
+**Recording Time** — For a 30 minute tape set the recording time to 00:33:00. For a 60 minute tape set the recording time to 01:03:00. Usually tapes have the number 30 or 60 on them somewhere so you can figure out which kind of tape you have.
 
 ## Checking the Files
 

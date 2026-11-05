@@ -93,6 +93,7 @@ _update_config_file(){
         echo "WEBVTT_EXTRA=\"${WEBVTT_EXTRA}\""
         echo "HD_CHOICE=\"${HD_CHOICE}\""
         echo "COLOR_SAFE=\"${COLOR_SAFE}\""
+        echo "THEME_CHOICE=\"${THEME_CHOICE}\""
     } > "${CONFIG_FILE}"
     . "${CONFIG_FILE}"
 }
@@ -130,10 +131,14 @@ _validate_form(){
     if [ ! -d "${LOGDIR}" ] && [ -n "${LOGDIR}" ] ; then
         echo "ERROR: The auxiliary directory (${LOGDIR}) does not exist. Create this folder or leave blank to use the recording directory."
     fi
-    # validate duration
+    # validate duration (accepts HH:MM:SS or a plain number of minutes)
     if [ -n "${DURATION}" ] ; then
-        if ! [ "$(echo "${DURATION} > 0" | bc)" = "1" ] ; then
-            echo "ERROR: Illegal value for recording time. The duration must be a positive number."
+        if echo "${DURATION}" | grep -qE '^[0-9]+:[0-9]{1,2}:[0-9]{1,2}$' ; then
+            if [ "$(echo "${DURATION}" | awk -F: '{ if ((($1 * 3600) + ($2 * 60) + $3) > 0) print "1" ; else print "0" }')" != "1" ] ; then
+                echo "ERROR: Illegal value for recording time. HH:MM:SS must describe a positive duration, e.g. 00:33:00."
+            fi
+        elif ! [ "$(echo "${DURATION} > 0" | bc)" = "1" ] ; then
+            echo "ERROR: Illegal value for recording time. Use HH:MM:SS (e.g. 00:33:00) or a positive number of minutes."
         fi
     fi
     if [ "${VIDEO_CODEC_CHOICE}" = "ProRes" -o "${VIDEO_CODEC_CHOICE}" = "ProRes (HQ)" ] && [ "${VIDEO_BIT_DEPTH_CHOICE}" = "8 bit" ] ; then

@@ -1078,7 +1078,7 @@ PLAYBACK_OPT_GUI="
 OPTIONAL_TOOLS_GUI=$(cat << CONFIG_FORM
 <frame Preferences>
     <hbox>
-        <notebook tab-labels="Player|Aspect Ratio|Closed Captioning|FADGI WebVTT header|Color Options">
+            <notebook tab-labels="Player|Aspect Ratio|Closed Captioning|FADGI WebVTT header|Color Options|Themes">
             <frame Player Settings>
                 <hbox>
                 $(_gtk_vbox_list "WAVEFORM_SCALE_CHOICE" "100" "Select Waveform Scale"            "${WAVEFORM_SCALE_OPTIONS[@]}")
@@ -1157,6 +1157,34 @@ OPTIONAL_TOOLS_GUI=$(cat << CONFIG_FORM
                         <default>"${COLOR_SAFE}"</default>
                         <variable>COLOR_SAFE</variable>
                     </checkbox>
+                </vbox>
+            </frame>
+            <frame Theme Settings>
+                <vbox>
+                    <text width-chars="-1">
+                        <label>Choose the look of vrecord's settings window, then click 'Apply Theme' to save the choice and reload the window with the new look. The theme is kept in the configuration file and reused in future sessions.</label>
+                    </text>
+                    <hbox>
+                        $(_gtk_vbox_list "THEME_CHOICE" "100" "Select Theme" "${THEME_OPTIONS[@]}")
+                        <vbox>
+                            <text>
+                                <label>System: follow the desktop's theme</label>
+                            </text>
+                            <text>
+                                <label>Light: force a light theme</label>
+                            </text>
+                            <text>
+                                <label>Dark: force a dark theme</label>
+                            </text>
+                            <button>
+                                <label>Apply Theme</label>
+                                <input file stock="gtk-apply"></input>
+                                <variable export="false">apply_theme_button</variable>
+                                <action>_update_config_file</action>
+                                <action type="exit">refresh</action>
+                            </button>
+                        </vbox>
+                    </hbox>
                 </vbox>
             </frame>
         </notebook>
@@ -1689,9 +1717,9 @@ export MAIN_DIALOG='
                     </vbox>
                     <vbox>
                         <text>
-                            <label>Recording time in minutes</label>
+                            <label>Recording time (HH:MM:SS)</label>
                         </text>
-                        <entry activates_default="true" tooltip-text="Suggested:23 33 63 93. Leave blank for indefinite recording time">
+                        <entry activates_default="true" tooltip-text="Format: HH:MM:SS, suggested:00:23:00 00:33:00 01:03:00 01:33:00. A plain number is read as minutes. Leave blank for indefinite recording time">
                             <default>"'"${DURATION}"'"</default>
                             <variable>DURATION</variable>
                         </entry>
@@ -1827,9 +1855,31 @@ export MAIN_DIALOG='
 '
 }
 
+# apply the theme chosen in the Themes tab by setting GTK environment variables
+# before gtkdialog is launched (GTK3-based gtkdialog builds read GTK_THEME,
+# GTK2-based builds read GTK2_RC_FILES)
+_apply_theme(){
+    case "${THEME_CHOICE}" in
+        "Dark")
+            export GTK_THEME="Adwaita:dark"
+            if [[ -f "${RESOURCE_PATH}/vrecord-dark.gtkrc" ]] ; then
+                export GTK2_RC_FILES="${RESOURCE_PATH}/vrecord-dark.gtkrc"
+            fi
+            ;;
+        "Light")
+            export GTK_THEME="Adwaita"
+            unset GTK2_RC_FILES
+            ;;
+        "System"|*)
+            unset GTK_THEME GTK2_RC_FILES
+            ;;
+    esac
+}
+
 # edit mode
 _edit_mode(){
     _set_up_edit_form
+    _apply_theme
 
     # run the edit form in gtkdialog
     MAIN_DIALOG_TMP="${MAIN_DIALOG}"
@@ -3439,6 +3489,11 @@ else
     STARTUP_VIEW="INPUTSETTINGS"
 fi
 
+# default to the system theme when using a configuration file from before the Themes tab existed
+if [[ -z "${THEME_CHOICE}" ]] ; then
+    THEME_CHOICE="System"
+fi
+
 _get_inputs
 
 if [[ "${OS_TYPE}" = "linux" ]] ; then
@@ -3482,6 +3537,7 @@ WAVEFORM_SCALE_OPTIONS=("digital" "millivolts" "ire")
 SIGNAL_OPTIONS=("Broadcast Range" "Full Range")
 INT_OPTIONS=("auto" "bff" "tff" "prog")
 MONITOR_AUDIO_OPTIONS=("Yes" "No")
+THEME_OPTIONS=("System" "Light" "Dark")
 
 # CLI reset, edit modes
 if [[ "${RUNTYPE}" = "reset" ]] ; then
@@ -3614,9 +3670,23 @@ if [[ -f "${VRECORD_OUTPUT}" ]] ; then
 fi
 
 if [[ -n "${DURATION}" ]] ; then
-    DUR_SECONDS=$(bc <<< "${DURATION} * 60" | sed "s/^\./0./")
+    if [[ "${DURATION}" =~ ^[0-9]+:[0-9]{1,2}:[0-9]{1,2}$ ]] ; then
+        # recording time entered as HH:MM:SS
+        DUR_SECONDS=$(awk -v t="${DURATION}" 'BEGIN { split(t, a, ":") ; printf "%.3f", (a[1] * 3600) + (a[2] * 60) + a[3] }')
+        DURATION_TEXT="Tape duration set to: ${DURATION} (HH:MM:SS)."
+    elif [[ "${DURATION}" =~ ^[0-9]+([.][0-9]+)?$|^[.][0-9]+$ ]] ; then
+        # legacy recording time entered as minutes (integer or decimal)
+        DUR_SECONDS=$(bc <<< "${DURATION} * 60" | sed "s/^\./0./")
+        DURATION_TEXT="Tape duration set to: ${DURATION} minutes (legacy minutes value; HH:MM:SS is the preferred format)."
+    else
+        _report -w "Error: Unrecognized recording time format ('${DURATION}'). Use HH:MM:SS (e.g. 00:33:00) or a number of minutes. Please restart ${SCRIPTNAME} in edit mode (${SCRIPTNAME} -e) or update the configuration file at ${CONFIG_FILE}."
+        exit 2
+    fi
+    if (( $(bc <<< "${DUR_SECONDS} <= 0") )) ; then
+        _report -w "Error: Illegal value for recording time. The duration must be a positive amount of time. Please restart ${SCRIPTNAME} in edit mode (${SCRIPTNAME} -e) or update the configuration file at ${CONFIG_FILE}."
+        exit 2
+    fi
     TIME_LIMIT=(-t "${DUR_SECONDS}")
-    DURATION_TEXT="Tape duration set to: ${DURATION} minutes."
 fi
 
 if [[ -n ${TECHNICIAN} ]] ; then

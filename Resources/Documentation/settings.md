@@ -64,11 +64,13 @@ NOTE: Setting the video input in Desktop Video Setup to match this option will r
 * To extract attachments with IDs 1 through 4, type: `mkvextract [video filename] attachments 1 2 3 4`
 * The logs will then be extracted into the directory you're in, where they can be opened with a text editor.
 
-**Set recording time** — Set the amount of time (in minutes) that you would like vrecord to capture for, or leave it blank to capture indefinitely. For example, if you are digitizing a tape with a capacity of 30 minutes of video, you might want set vrecord to capture for 33 minutes. After 33 minutes vrecord will automatically stop recording and shut down. You may select a preset length from the dropdown menu, or type a different number. If you enter a number, it should be an integer or decimal in minutes (e.g. `15` will record for 15 minutes, and `15.75` will record for 15 minutes and 45 seconds).
+**Set recording time** — Set the amount of time that you would like vrecord to capture for, or leave it blank to capture indefinitely. Enter the time in `HH:MM:SS` format (e.g. `00:33:00` will record for 33 minutes, and `01:03:00` will record for 1 hour, 3 minutes). When the set time is reached, vrecord will automatically stop recording and shut down. For backwards compatibility a plain integer or decimal is still read as minutes (e.g. `15` will record for 15 minutes, and `15.75` will record for 15 minutes and 45 seconds), but `HH:MM:SS` is the recommended format.
 
 **Enter the name of the person digitizing this tape** — This field is optional. You can enter the name of the technician digitizing the tape. The name will be written to the capture options log produced at the end of the transfer.
 
 **Invert Second Channel of Audio** — This option allows you to invert the phase of the second channel of audio on ingest. This option is only for rare cases. Use only if you are positive that the audio channels are 180 degrees out of phase!
+
+**Themes (Config tab)** — The Themes tab (found under the Config tab) controls the look of vrecord's settings window. "System" follows your desktop's theme, "Light" forces a light theme, and "Dark" forces a dark theme. Select a theme and click "Apply Theme" to save the choice and reload the settings window with the new look. The theme is stored in the configuration file and reused in future sessions.
 
 Click "OK" when you are finished with your selections. Vrecord will save all of your selections to a configuration file. If any selections are "Undeclared" vrecord will prompt you in the terminal window to make a choice. 
 
