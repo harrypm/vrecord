@@ -67,6 +67,21 @@ _ensure_preview_reader(){
     fi
 }
 
+# Video Preview tab: show black in a preview pane when no feed is active, so
+# the pane never renders a missing-file warning icon
+_write_black_ppm(){
+    BK_W=480
+    BK_H=324
+    case "${STANDARD_CHOICE}" in
+        "PAL")                    BK_H=384 ;;
+        23ps*|24ps*|Hp*|Hi*|hp*)  BK_H=270 ;;
+    esac
+    rm -f "${1}"
+    { printf "P6\n%s %s\n255\n" "${BK_W}" "${BK_H}"
+      head -c $(( BK_W * BK_H * 3 )) /dev/zero
+    } > "${1}"
+}
+
 # Video Preview tab: react to the relay checkbox - restart the input preview so
 # the device output matches immediately: relay on feeds the output, relay off
 # blacks it out until the relay is re-enabled or a file is played
@@ -145,7 +160,8 @@ _start_video_preview(){
     fi
     # the preview and the file playout share the output device: playout yields
     _stop_file_playback
-    rm -f "${VRECORD_PREVIEW_TMP}" "${VRECORD_PREVIEW_FIFO}"
+    _write_black_ppm "${VRECORD_PREVIEW_TMP}"
+    rm -f "${VRECORD_PREVIEW_FIFO}"
     mkfifo "${VRECORD_PREVIEW_FIFO}"
     # lossless preview: raw RGB frames through a fifo; a reader wraps each frame in a
     # PPM header and renames it into place atomically so the pane never shows a torn frame
@@ -520,8 +536,9 @@ _stop_video_preview(){
         rm -f "${VRECORD_PREVIEW_RPID_TMP}"
     fi
     rm -f "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}.frame" "${VRECORD_PREVIEW_TMP}.new" "${VRECORD_PREVIEW_TMP}.tmp" 2>/dev/null
+    _write_black_ppm "${VRECORD_PREVIEW_TMP}"
     if [ "$(readlink "${VRECORD_OUTPUT_DISPLAY_TMP}" 2>/dev/null)" = "${VRECORD_PREVIEW_TMP}" ] ; then
-        rm -f "${VRECORD_OUTPUT_DISPLAY_TMP}"
+        _write_black_ppm "${VRECORD_OUTPUT_DISPLAY_TMP}"
     fi
 }
 
@@ -534,7 +551,7 @@ _halt_file_playback(){
     fi
     rm -f "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}.frame" "${VRECORD_FILEPLAY_IMG_TMP}.new" "${VRECORD_FILEPLAY_IMG_TMP}.tmp" 2>/dev/null
     if [ "$(readlink "${VRECORD_OUTPUT_DISPLAY_TMP}" 2>/dev/null)" = "${VRECORD_FILEPLAY_IMG_TMP}" ] ; then
-        rm -f "${VRECORD_OUTPUT_DISPLAY_TMP}"
+        _write_black_ppm "${VRECORD_OUTPUT_DISPLAY_TMP}"
     fi
 }
 
