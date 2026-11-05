@@ -293,7 +293,9 @@ _pause_file_playback(){
         echo "not playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 0
     fi
-    _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+    # instant kill so the playout stops on the exact parsed frame (ffmpeg ignores
+    # SIGTERM for seconds while blocked on the decklink output)
+    _halt_file_playback
     if [ -z "${FP_PAUSETIME}" ] ; then
         FP_PAUSETIME="00:00:00.00"
     fi

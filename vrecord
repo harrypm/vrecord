@@ -1654,26 +1654,15 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         </checkbox>
                         $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
                         <text>
-                            <label>or play a file to the output (converted on the fly to the selected standard)</label>
+                            <label>or play the selected file to the output (converted on the fly to the selected standard)</label>
                         </text>
-                        <hbox>
-                            <entry accept="file" fs-title="Select a file to play to the output device">
-                                <variable>VRECORD_PLAY_FILE</variable>
-                                <default>"${VRECORD_PLAY_FILE}"</default>
-                            </entry>
-                            <button>
-                                <input file stock="gtk-open"></input>
-                                <variable export="false">playfile_browse</variable>
-                                <action type="fileselect">VRECORD_PLAY_FILE</action>
-                            </button>
-                        </hbox>
                         <togglebutton>
-                            <label>Play / Stop</label>
+                            <label>Play / Pause</label>
                             <default>false</default>
                             <variable export="false">fileplay_toggle</variable>
                             <input file stock="gtk-media-play"></input>
                             <action>if true _start_file_playback</action>
-                            <action>if false _stop_file_playback</action>
+                            <action>if false _pause_file_playback</action>
                         </togglebutton>
                         <text>
                             <label>scrub (percent of file):</label>
@@ -1810,6 +1799,19 @@ export MAIN_DIALOG='
                         <input file stock="gtk-open"></input>
                         <variable export="false">LOGDIRBROWSE</variable>
                         <action type="fileselect">LOGDIR</action>
+                    </button>
+                </hbox>
+            </frame>
+            <frame Select a file to play to the output device>
+                <hbox>
+                    <entry accept="file" fs-title="Select a file to play to the output device">
+                        <variable>VRECORD_PLAY_FILE</variable>
+                        <default>'"${VRECORD_PLAY_FILE:-\"\"}"'</default>
+                    </entry>
+                    <button>
+                        <input file stock="gtk-open"></input>
+                        <variable export="false">playfile_browse</variable>
+                        <action type="fileselect">VRECORD_PLAY_FILE</action>
                     </button>
                 </hbox>
             </frame>
