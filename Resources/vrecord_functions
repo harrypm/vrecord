@@ -157,6 +157,10 @@ _start_video_preview(){
     echo "starting preview..." > "${VRECORD_PREVIEW_STATUS_TMP}"
     "$@" > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_PREVIEW_PID_TMP}"
+    if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
+        # the output pane shows the relayed feed while it runs
+        ln -sf "${VRECORD_PREVIEW_TMP}" "${VRECORD_OUTPUT_DISPLAY_TMP}"
+    fi
 }
 
 # convert a playout stats time to the absolute file position: input seeks
@@ -288,6 +292,8 @@ _start_file_playback(){
     echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "$@" > "${VRECORD_FILEPLAY_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_FILEPLAY_PID_TMP}"
+    # the output pane shows the playout feed while it runs
+    ln -sf "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_OUTPUT_DISPLAY_TMP}"
 }
 
 # Video Preview tab: pause file playback, keeping the position for a later resume
@@ -504,6 +510,9 @@ _stop_video_preview(){
         rm -f "${VRECORD_PREVIEW_RPID_TMP}"
     fi
     rm -f "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}.frame" "${VRECORD_PREVIEW_TMP}.new" "${VRECORD_PREVIEW_TMP}.tmp" 2>/dev/null
+    if [ "$(readlink "${VRECORD_OUTPUT_DISPLAY_TMP}" 2>/dev/null)" = "${VRECORD_PREVIEW_TMP}" ] ; then
+        rm -f "${VRECORD_OUTPUT_DISPLAY_TMP}"
+    fi
 }
 
 # stop the file playout without clearing the cued position (used by the scrub bar)
@@ -514,6 +523,9 @@ _halt_file_playback(){
         rm -f "${VRECORD_FILEPLAY_RPID_TMP}"
     fi
     rm -f "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}.frame" "${VRECORD_FILEPLAY_IMG_TMP}.new" "${VRECORD_FILEPLAY_IMG_TMP}.tmp" 2>/dev/null
+    if [ "$(readlink "${VRECORD_OUTPUT_DISPLAY_TMP}" 2>/dev/null)" = "${VRECORD_FILEPLAY_IMG_TMP}" ] ; then
+        rm -f "${VRECORD_OUTPUT_DISPLAY_TMP}"
+    fi
 }
 
 _stop_file_playback(){
@@ -575,6 +587,12 @@ _refresh_file_playback_status(){
             echo "playing ${FP_TIME:-00:00:00.00}${FP_DURHMS:+ / ${FP_DURHMS}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
             return 0
         fi
+    fi
+    # while the relay runs, the output pane carries the input feed
+    if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_PREVIEW_PID_TMP}")" 2>/dev/null \
+            && [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
+        echo "relaying input feed to the output" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
     fi
     # playout never started this session: keep any start-guard message instead
     # of overwriting it with "stopped" (the message explains why nothing ran)

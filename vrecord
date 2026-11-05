@@ -1638,7 +1638,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <vbox>
                         <pixmap>
                             <variable export="false">fileplay_image</variable>
-                            <input file>"${VRECORD_FILEPLAY_IMG_TMP}"</input>
+                            <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
                         </pixmap>
                         <entry editable="false" has-frame="false">
                             <variable export="false">fileplay_status</variable>
@@ -1648,7 +1648,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <vbox>
                         <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording.">
                             <label>Relay live feed to the device output</label>
-                            <default>"${PREVIEW_RELAY_CHOICE}"</default>
+                            <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
                             <variable>PREVIEW_RELAY_CHOICE</variable>
                         </checkbox>
                         $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
@@ -2053,6 +2053,7 @@ _edit_mode(){
     echo "VRECORD_FILEPLAY_FIFO=\"${VRECORD_FILEPLAY_FIFO}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_RPID_TMP=\"${VRECORD_FILEPLAY_RPID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PLAY_OFFSET_TMP=\"${VRECORD_PLAY_OFFSET_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_OUTPUT_DISPLAY_TMP=\"${VRECORD_OUTPUT_DISPLAY_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PLAY_POS_TMP=\"${VRECORD_PLAY_POS_TMP}\"" >> "${GTK_INC}"
@@ -3615,6 +3616,8 @@ VRECORD_FILEPLAY_LOG_TMP="$(_maketemp .vrecord_fileplay.log.txt)"
 VRECORD_FILEPLAY_FIFO="$(_maketemp .vrecord_fileplay.fifo)"
 VRECORD_FILEPLAY_RPID_TMP="$(_maketemp .vrecord_fileplay.reader.pid)"
 VRECORD_PLAY_OFFSET_TMP="$(_maketemp .vrecord_fileplay.offset.txt)"
+VRECORD_OUTPUT_DISPLAY_TMP="$(_maketemp .vrecord_output_display.ppm)"
+rm -f "${VRECORD_OUTPUT_DISPLAY_TMP}"
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"
