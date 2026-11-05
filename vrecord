@@ -1646,7 +1646,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                 </checkbox>
                 $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
                 <text>
-                    <label>or play a file to the output</label>
+                    <label>or play a file to the output (converted on the fly to the selected standard)</label>
                 </text>
                 <hbox>
                     <entry accept="file" fs-title="Select a file to play to the output device">
@@ -1659,26 +1659,44 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         <action type="fileselect">VRECORD_PLAY_FILE</action>
                     </button>
                 </hbox>
-                <togglebutton>
-                    <label>Play File</label>
-                    <default>false</default>
-                    <variable export="false">fileplay_toggle</variable>
-                    <input file stock="gtk-media-play"></input>
-                    <action>if true _stop_video_preview</action>
-                    <action>if true enable:fileplay_timer</action>
-                    <action>if true _start_file_playback</action>
-                    <action>if false _stop_file_playback</action>
-                    <action>if false disable:fileplay_timer</action>
-                </togglebutton>
+                <hbox>
+                    <togglebutton>
+                        <label>Play/Pause</label>
+                        <default>false</default>
+                        <variable export="false">fileplay_toggle</variable>
+                        <input file stock="gtk-media-play"></input>
+                        <action>if true _stop_video_preview</action>
+                        <action>if true enable:fileplay_timer</action>
+                        <action>if true _start_file_playback</action>
+                        <action>if false _pause_file_playback</action>
+                    </togglebutton>
+                    <button>
+                        <label>Stop</label>
+                        <input file stock="gtk-stop"></input>
+                        <variable export="false">fileplay_stop_button</variable>
+                        <action>_stop_file_playback</action>
+                    </button>
+                </hbox>
+                <text>
+                    <label>scrub (percent of file):</label>
+                </text>
+                <hscale>
+                    <variable>FILEPLAY_SEEK</variable>
+                    <action signal="button-release-event">_seek_file_playback</action>
+                </hscale>
                 <entry editable="false" has-frame="false">
                     <variable export="false">fileplay_status</variable>
                     <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
                 </entry>
-                <timer milliseconds="true" interval="400" visible="false" disabled="true">
+                <pixmap>
+                    <variable export="false">fileplay_image</variable>
+                    <input file>"${VRECORD_FILEPLAY_IMG_TMP}"</input>
+                </pixmap>
+                <timer milliseconds="true" interval="400" visible="false">
                     <variable export="false">fileplay_timer</variable>
-                    <visible>disabled</visible>
                     <action>_refresh_file_playback_status &</action>
                     <action>refresh:fileplay_status</action>
+                    <action>refresh:fileplay_image</action>
                 </timer>
                 <text width-chars="-1">
                     <label>The output side feeds the selected device's connectors through the Blackmagic SDK: SDI, HDMI, or analogue, depending on the card. Relay sends the live input to the output while previewing, or play a file to send a recording or test signal to the monitor. Starting one stops the other.</label>
@@ -2025,6 +2043,9 @@ _edit_mode(){
     echo "VRECORD_FILEPLAY_PID_TMP=\"${VRECORD_FILEPLAY_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_STATUS_TMP=\"${VRECORD_FILEPLAY_STATUS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_LOG_TMP=\"${VRECORD_FILEPLAY_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PLAY_POS_TMP=\"${VRECORD_PLAY_POS_TMP}\"" >> "${GTK_INC}"
     cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
 
     if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
@@ -3575,6 +3596,10 @@ VRECORD_FILEPLAY_PID_TMP="$(_maketemp .vrecord_fileplay.pid)"
 VRECORD_FILEPLAY_STATUS_TMP="$(_maketemp .vrecord_fileplay.status.txt)"
 VRECORD_FILEPLAY_LOG_TMP="$(_maketemp .vrecord_fileplay.log.txt)"
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
+VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"
+VRECORD_PLAY_POS_TMP="$(_maketemp .vrecord_fileplay.pos.txt)"
+rm -f "${VRECORD_PLAY_POS_TMP}"
 
 # manage an include file to pass variables to gtkdialog
 VRECORD_VARS_FILE="/tmp/v_$(echo "${0}" | sed -e "s/[^A-Za-z0-9.]/_/g")_variables.txt"

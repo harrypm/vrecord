@@ -88,7 +88,8 @@ _start_video_preview(){
 }
 
 # Video Preview tab: play a media file out to the selected device's output
-# through the Blackmagic SDK (paced with -re for playout)
+# through the Blackmagic SDK, converting on the fly to the output mode of the
+# selected standard (video size, frame rate, and field order)
 _start_file_playback(){
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
         echo "file playback already running" > "${VRECORD_FILEPLAY_STATUS_TMP}"
@@ -107,11 +108,105 @@ _start_file_playback(){
         echo "select an output device first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 1
     fi
-    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re -i "${VRECORD_PLAY_FILE}"
-    set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
-    echo "playing ${VRECORD_PLAY_FILE} to ${FILEPLAY_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    # the file is converted to the output mode of the selected standard (matching the capture settings)
+    case "${STANDARD_CHOICE}" in
+        "NTSC") FP_SIZE="720:486" ; FP_RATE="30000/1001" ; FP_FIELD="bff" ;;
+        "PAL")  FP_SIZE="720:576" ; FP_RATE="25/1" ; FP_FIELD="tff" ;;
+        "23ps - 1080p23.98") FP_SIZE="1920:1080" ; FP_RATE="24000/1001" ; FP_FIELD="" ;;
+        "24ps - 1080p24")    FP_SIZE="1920:1080" ; FP_RATE="24/1" ; FP_FIELD="" ;;
+        "Hp25 - 1080p25")    FP_SIZE="1920:1080" ; FP_RATE="25/1" ; FP_FIELD="" ;;
+        "Hp29 - 1080p29.97") FP_SIZE="1920:1080" ; FP_RATE="30000/1001" ; FP_FIELD="" ;;
+        "Hp30 - 1080p30")    FP_SIZE="1920:1080" ; FP_RATE="30/1" ; FP_FIELD="" ;;
+        "Hi50 - 1080i50")    FP_SIZE="1920:1080" ; FP_RATE="25/1" ; FP_FIELD="tff" ;;
+        "Hi59 - 1080i59.94") FP_SIZE="1920:1080" ; FP_RATE="30000/1001" ; FP_FIELD="tff" ;;
+        "Hi60 - 1080i60")    FP_SIZE="1920:1080" ; FP_RATE="30/1" ; FP_FIELD="tff" ;;
+        "hp50 - 720p50")     FP_SIZE="1280:720" ; FP_RATE="50/1" ; FP_FIELD="" ;;
+        "hp59 - 720p59.94")  FP_SIZE="1280:720" ; FP_RATE="60000/1001" ; FP_FIELD="" ;;
+        "hp60 - 720p60")     FP_SIZE="1280:720" ; FP_RATE="60/1" ; FP_FIELD="" ;;
+        "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
+        *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
+    esac
+    FP_VF="scale=${FP_SIZE},fps=${FP_RATE}"
+    if [ -n "${FP_FIELD}" ] ; then
+        FP_VF="${FP_VF},setfield=${FP_FIELD}"
+    fi
+    # file duration, used by the scrub bar and the position display
+    FP_PROBE="${FFPROBE_BIN}"
+    if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
+        FP_PROBE="$(dirname "${FFMPEG_BIN}")/ffprobe-ma"
+    fi
+    if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
+        FP_PROBE="$(command -v ffprobe 2>/dev/null)"
+    fi
+    FP_DUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+    echo "${FP_DUR}" > "${VRECORD_FILEPLAY_DUR_TMP}"
+    # resume from a saved position if it belongs to this file and is not the end
+    FP_RESUME=""
+    FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
+    if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
+        FP_RESTIME="$(echo "${FP_POS}" | cut -d'|' -f2)"
+        FP_RESSEC="$(echo "${FP_RESTIME}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
+        if [ -n "${FP_DUR}" ] && [ "$(awk -v a="${FP_RESSEC}" -v b="${FP_DUR}" 'BEGIN { print (a+0 >= b-1) ? 1 : 0 }')" = "1" ] ; then
+            rm -f "${VRECORD_PLAY_POS_TMP}"
+        else
+            FP_RESUME="${FP_RESTIME}"
+        fi
+    fi
+    rm -f "${VRECORD_FILEPLAY_IMG_TMP}"
+    set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -stats -re
+    if [ -n "${FP_RESUME}" ] ; then
+        set -- "$@" -ss "${FP_RESUME}"
+    fi
+    set -- "$@" -i "${VRECORD_PLAY_FILE}"
+    # small preview of the outgoing file for the output side of the tab
+    set -- "$@" -map 0:v -vf scale=320:-2 -r 5 -f image2 -update 1 "${VRECORD_FILEPLAY_IMG_TMP}"
+    # converted feed to the device output
+    set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
+    echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "$@" > "${VRECORD_FILEPLAY_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_FILEPLAY_PID_TMP}"
+}
+
+# Video Preview tab: pause file playback, keeping the position for a later resume
+_pause_file_playback(){
+    FP_PAUSETIME=""
+    FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
+    if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
+        FP_PAUSETIME="$(echo "${FP_POS}" | cut -d'|' -f2)"
+    fi
+    if [ ! -f "${VRECORD_FILEPLAY_PID_TMP}" ] && [ -z "${FP_PAUSETIME}" ] ; then
+        echo "not playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
+    fi
+    _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+    if [ -z "${FP_PAUSETIME}" ] ; then
+        FP_PAUSETIME="00:00:00.00"
+    fi
+    echo "${VRECORD_PLAY_FILE}|${FP_PAUSETIME}" > "${VRECORD_PLAY_POS_TMP}"
+    echo "paused at ${FP_PAUSETIME} - toggle Play to resume" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+}
+
+# Video Preview tab: scrub bar handler - seeks the file playback to the scrub
+# bar percentage of the file duration
+_seek_file_playback(){
+    FP_PCT="${FILEPLAY_SEEK}"
+    if ! echo "${FP_PCT}" | grep -qE '^[0-9]+([.][0-9]+)?$' ; then
+        return 1
+    fi
+    FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
+    if [ -z "${FP_DUR}" ] ; then
+        echo "duration unknown - cannot seek (play the file once first)" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    FP_SEC="$(awk -v d="${FP_DUR}" -v p="${FP_PCT}" 'BEGIN { printf "%.2f", d * p / 100 }')"
+    FP_HMS="$(awk -v s="${FP_SEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
+    echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+        _start_file_playback
+    else
+        echo "cued at ${FP_HMS} - toggle Play to start there" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    fi
 }
 
 # Video Preview tab: stop a background preview/playback process
@@ -141,6 +236,7 @@ _stop_video_preview(){
 
 _stop_file_playback(){
     _stop_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+    rm -f "${VRECORD_PLAY_POS_TMP}"
 }
 
 # Video Preview tab: keep a status display in sync with a background preview/playback process
@@ -165,7 +261,40 @@ _refresh_video_preview_status(){
 }
 
 _refresh_file_playback_status(){
-    _refresh_bg_status "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_LOG_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}" "playing"
+    FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
+    FP_DURHMS=""
+    if [ -n "${FP_DUR}" ] ; then
+        FP_DURHMS="$(awk -v s="${FP_DUR}" 'BEGIN { printf "%02d:%02d:%02d", int(s/3600), int((s%3600)/60), int(s%60) }')"
+    fi
+    FP_TIME="$(grep -o 'time=[0-9:.]*' "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | tail -n 1 | cut -d= -f2)"
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] ; then
+        BG_PID="$(cat "${VRECORD_FILEPLAY_PID_TMP}")"
+        if [ -n "${BG_PID}" ] && kill -0 "${BG_PID}" 2>/dev/null ; then
+            # only track the position while the playback process is alive
+            if [ -n "${FP_TIME}" ] ; then
+                echo "${VRECORD_PLAY_FILE}|${FP_TIME}" > "${VRECORD_PLAY_POS_TMP}"
+            fi
+            echo "playing ${FP_TIME:-00:00:00.00}${FP_DURHMS:+ / ${FP_DURHMS}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+            return 0
+        fi
+    fi
+    FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
+    if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
+        FP_LAST="$(echo "${FP_POS}" | cut -d'|' -f2)"
+        FP_LASTSEC="$(echo "${FP_LAST}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
+        if [ -n "${FP_DUR}" ] && [ "$(awk -v a="${FP_LASTSEC}" -v b="${FP_DUR}" 'BEGIN { print (a+0 >= b-1) ? 1 : 0 }')" = "1" ] ; then
+            echo "finished${FP_DURHMS:+ (${FP_DURHMS})}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+            return 0
+        fi
+        echo "paused at ${FP_LAST} - toggle Play to resume" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
+    fi
+    FP_ERR="$(grep -vE '^frame=' "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | tail -n 1)"
+    if [ -n "${FP_ERR}" ] ; then
+        echo "stopped: ${FP_ERR}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    else
+        echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    fi
 }
 
 # combine the HH/MM/SS recording time boxes into DURATION (POSIX; all boxes blank means an unlimited recording)
