@@ -67,15 +67,28 @@ _ensure_preview_reader(){
     fi
 }
 
+# the preview pane width in pixels; the half/quarter snap presets compact the
+# panes (240) so the preview page fits at half/quarter screen, full restores 480
+_pane_width(){
+    PN_W="$(cat "${VRECORD_PANE_W_TMP}" 2>/dev/null)"
+    if echo "${PN_W}" | grep -qE '^[0-9]+$' && [ "${PN_W}" -ge 160 ] && [ "${PN_W}" -le 640 ] ; then
+        echo "${PN_W}"
+    else
+        echo 480
+    fi
+}
+
 # Video Preview tab: show black in a preview pane when no feed is active, so
-# the pane never renders a missing-file warning icon
+# the pane never renders a missing-file warning icon (sized to the pane width)
 _write_black_ppm(){
-    BK_W=480
-    BK_H=324
+    BK_W="$(_pane_width)"
+    BK_N=486
+    BK_D=720
     case "${STANDARD_CHOICE}" in
-        "PAL")                    BK_H=384 ;;
-        23ps*|24ps*|Hp*|Hi*|hp*)  BK_H=270 ;;
+        "PAL")                    BK_N=576 ; BK_D=720 ;;
+        23ps*|24ps*|Hp*|Hi*|hp*)  BK_N=9 ; BK_D=16 ;;
     esac
+    BK_H="$(awk -v w="${BK_W}" -v n="${BK_N}" -v d="${BK_D}" 'BEGIN { printf "%d", int(((w * n / d) + 1) / 2) * 2 }')"
     rm -f "${1}"
     { printf "P6\n%s %s\n255\n" "${BK_W}" "${BK_H}"
       head -c $(( BK_W * BK_H * 3 )) /dev/zero
@@ -104,12 +117,29 @@ _snap_window(){
     fi
     [ -z "${SNAP_W}" ] && return 1
     case "${SNAP_PRESET}" in
-        left)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ;;
-        right)   SNAP_X=$(( SNAP_W / 2 )) ; SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ;;
-        quarter) SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH=$(( SNAP_H / 2 )) ;;
-        full)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW="${SNAP_W}" ; SNAP_GH="${SNAP_H}" ;;
+        left)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ; SNAP_PANE=240 ;;
+        right)   SNAP_X=$(( SNAP_W / 2 )) ; SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH="${SNAP_H}" ; SNAP_PANE=240 ;;
+        quarter) SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW=$(( SNAP_W / 2 )) ; SNAP_GH=$(( SNAP_H / 2 )) ; SNAP_PANE=240 ;;
+        full)    SNAP_X=0 ;           SNAP_Y=0 ; SNAP_GW="${SNAP_W}" ; SNAP_GH="${SNAP_H}" ; SNAP_PANE=480 ;;
+        default) SNAP_GW=$(( SNAP_W - 500 )) ; SNAP_GH=$(( SNAP_H - 200 )) ;
+                 SNAP_X=$(( ( SNAP_W - SNAP_GW ) / 2 )) ; SNAP_Y=$(( ( SNAP_H - SNAP_GH ) / 2 )) ; SNAP_PANE="" ;;
         *) return 1 ;;
     esac
+    # compact or restore the preview panes FIRST: the pane pixmaps set the
+    # window's minimum size, so the panes must shrink before the window can
+    # (the black frame lands at the new width immediately)
+    if [ -n "${VRECORD_PANE_W_TMP}" ] && [ -n "${SNAP_PANE}" ] ; then
+        echo "${SNAP_PANE}" > "${VRECORD_PANE_W_TMP}"
+        if [ -f "${VRECORD_PREVIEW_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_PREVIEW_PID_TMP}")" 2>/dev/null ; then
+            _stop_video_preview
+            _start_video_preview
+        fi
+        if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+            _halt_file_playback
+            _start_file_playback
+        fi
+        sleep 2
+    fi
     wmctrl -r :ACTIVE: -b remove,maximized_vert,maximized_horz 2>/dev/null
     wmctrl -r :ACTIVE: -e "0,${SNAP_X},${SNAP_Y},${SNAP_GW},${SNAP_GH}" 2>/dev/null
 }
@@ -166,6 +196,9 @@ _start_video_preview(){
     esac
     # build the compiled frame reader (falls back to a shell reader without a C compiler)
     _ensure_preview_reader
+    # pane geometry (the snap presets compact the panes)
+    PREVIEW_W="$(_pane_width)"
+    PREVIEW_H="$(awk -v w="${PREVIEW_SRCW}" -v h="${PREVIEW_SRCH}" -v pw="${PREVIEW_W}" 'BEGIN { printf "%d", int(((pw * h / w) + 1) / 2) * 2 }')"
     # build the ffmpeg arguments as positional parameters so device names with spaces stay intact
     set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}"
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
@@ -179,9 +212,9 @@ _start_video_preview(){
     set -- "$@" -f decklink -i "${DECKLINK_INPUT_CHOICE}"
     if [ -n "${PREVIEW_READER}" ] ; then
         # native frame rate: the compiled reader re-clocks the output on a wall-clock schedule
-        set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
+        set -- "$@" -map 0:v -vf "scale=${PREVIEW_W}:-2" -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
     else
-        set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
+        set -- "$@" -map 0:v -vf "scale=${PREVIEW_W}:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_PREVIEW_FIFO}"
     fi
     if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
         PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
@@ -197,8 +230,6 @@ _start_video_preview(){
     mkfifo "${VRECORD_PREVIEW_FIFO}"
     # lossless preview: raw RGB frames through a fifo; a reader wraps each frame in a
     # PPM header and renames it into place atomically so the pane never shows a torn frame
-    PREVIEW_W=480
-    PREVIEW_H="$(awk -v w="${PREVIEW_SRCW}" -v h="${PREVIEW_SRCH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
     if [ -n "${PREVIEW_READER}" ] ; then
         # one second software playout delay: the reader buffers the frames and re-clocks them
         "${PREVIEW_READER}" "${VRECORD_PREVIEW_FIFO}" "${VRECORD_PREVIEW_TMP}" "${PREVIEW_W}" "${PREVIEW_H}" 1 > /dev/null 2>&1 &
@@ -316,14 +347,17 @@ _start_file_playback(){
     if [ -n "${FP_RESUME}" ] ; then
         set -- "$@" -ss "${FP_RESUME}"
     fi
+    # pane geometry (the snap presets compact the panes)
+    FP_W="$(_pane_width)"
+    FP_H="$(awk -v w="${FP_FW}" -v h="${FP_FH}" -v pw="${FP_W}" 'BEGIN { printf "%d", int(((pw * h / w) + 1) / 2) * 2 }')"
     set -- "$@" -i "${VRECORD_PLAY_FILE}"
     # lossless preview of the outgoing file for the output side of the tab: raw RGB frames
     # through a fifo (same stream and timeline as the device output; scaled to the pane
     # because gtkdialog pixmaps render at natural size), wrapped in PPM atomically
     if [ -n "${PREVIEW_READER}" ] ; then
-        set -- "$@" -map 0:v -vf scale=480:-2 -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
+        set -- "$@" -map 0:v -vf "scale=${FP_W}:-2" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
     else
-        set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
+        set -- "$@" -map 0:v -vf "scale=${FP_W}:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
     fi
     # converted feed to the device output
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
@@ -333,8 +367,6 @@ _start_file_playback(){
     echo "${FP_RESUME:-00:00:00.00}" > "${VRECORD_PLAY_OFFSET_TMP}"
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
     mkfifo "${VRECORD_FILEPLAY_FIFO}"
-    FP_W=480
-    FP_H="$(awk -v w="${FP_FW}" -v h="${FP_FH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
     if [ -n "${PREVIEW_READER}" ] ; then
         "${PREVIEW_READER}" "${VRECORD_FILEPLAY_FIFO}" "${VRECORD_FILEPLAY_IMG_TMP}" "${FP_W}" "${FP_H}" 1 > /dev/null 2>&1 &
     else
