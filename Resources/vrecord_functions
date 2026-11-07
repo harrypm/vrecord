@@ -1016,11 +1016,18 @@ _get_output_filename(){
 _list_decklink_sources(){
     # ffmpeg 9+ prints the source list to stderr at info level, so running
     # with '-v 0' suppresses the device names entirely; collect merged output
-    # and parse both the new (indented lines after the header) and the legacy
-    # (bracketed) source-list formats
+    # and parse both the new (indented plain names after the header) and the
+    # legacy (bracketed) source-list formats. ffmpeg 8 also prints the header
+    # but with bracketed entries, so extract the [name] field when brackets
+    # are present (verified against ffmpeg-ma 8.0: 'Auto-detected sources for
+    # decklink:' followed by '  71:... [DeckLink SDI 4K] (none)').
     DECKLINK_SOURCES="$(${FFMPEG_BIN} -nostdin -sources decklink 2>&1)"
     DECKLINK_LIST="$(printf '%s\n' "${DECKLINK_SOURCES}" | sed -n '/sources for decklink:/,$p' | sed '1d;s/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true)"
-    if [ -z "${DECKLINK_LIST}" ] ; then
+    if printf '%s\n' "${DECKLINK_LIST}" | grep -q '[][]' ; then
+        # bracketed entries (ffmpeg 8): keep only the [device name] field
+        DECKLINK_LIST="$(printf '%s\n' "${DECKLINK_LIST}" | awk -F'[][]' '{print $2}' | grep -v '^$' || true)"
+    elif [ -z "${DECKLINK_LIST}" ] ; then
+        # no header found (older ffmpeg): bracketed lines anywhere in the output
         DECKLINK_LIST="$(printf '%s\n' "${DECKLINK_SOURCES}" | awk -F'[][]' '{print $2}' | grep -v '^$' || true)"
     fi
     printf '%s\n' "${DECKLINK_LIST}"
