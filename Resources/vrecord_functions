@@ -526,27 +526,36 @@ _start_test_signal(){
         "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
         *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
     esac
+    TS_SIZE_SRC="${TS_SIZE%%:*}x${TS_SIZE##*:}"
+    # full-field 100% color bars: the EBU Tech 3243 pattern and the
+    # full-amplitude SMPTE variant are the same seven-stripe layout, drawn
+    # at the target size so no scaling stage is needed
+    TS_FULLFIELD="drawbox=x=0:w=iw*1/7:h=ih:color=white:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih:color=yellow:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih:color=cyan:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih:color=green:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih:color=magenta:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih:color=red:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih:color=blue:thickness=fill"
     TS_VF="scale=${TS_SIZE}"
+    case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)}" in
+        "SMPTE Bars (100%)"|"EBU Bars (100%)")
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_FULLFIELD}" ;;
+        "Test Pattern") TS_VSRC="testsrc2=rate=${TS_RATE}" ;;
+        "RGB Bars")     TS_VSRC="rgbtestsrc=rate=${TS_RATE}" ;;
+        "YUV Bars")     TS_VSRC="yuvtestsrc=rate=${TS_RATE}" ;;
+        *)              TS_VSRC="testsrc=rate=${TS_RATE}" ;;
+    esac
     if [ -n "${TS_FIELD}" ] ; then
         TS_VF="${TS_VF},setfield=${TS_FIELD}"
     fi
     # the output device is shared: file playout and the relay preview yield
     _stop_file_playback
     _stop_video_preview
-    case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars}" in
-        "Test Pattern") TS_VSRC="testsrc2" ;;
-        "RGB Bars")     TS_VSRC="rgbtestsrc" ;;
-        "YUV Bars")     TS_VSRC="yuvtestsrc" ;;
-        *)              TS_VSRC="testsrc" ;;
-    esac
+    # native stereo tone (no mono upmix on the way to the card)
     case "${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}" in
         "Stereo 1k/440") TS_ASRC="aevalsrc=sin(1000*2*PI*t)|cos(440*2*PI*t):channel_layout=stereo:sample_rate=48000" ;;
-        "Silence")       TS_ASRC="anullsrc=r=48000" ;;
-        *)               TS_ASRC="sine=frequency=1000:sample_rate=48000" ;;
+        "Silence")       TS_ASRC="anullsrc=r=48000:cl=stereo" ;;
+        *)               TS_ASRC="aevalsrc=sin(1000*2*PI*t)|sin(1000*2*PI*t):channel_layout=stereo:sample_rate=48000" ;;
     esac
-    echo "test signal (${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars} + ${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    echo "test signal (${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)} + ${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
-        -f lavfi -i "${TS_VSRC}=rate=${TS_RATE}" \
+        -f lavfi -i "${TS_VSRC}" \
         -f lavfi -i "${TS_ASRC}" \
         -map 0:v -map 1:a \
         -vf "${TS_VF}" \
@@ -579,6 +588,17 @@ _apply_test_signal_state(){
         if [ -f "${VRECORD_TEST_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_TEST_PID_TMP}")" 2>/dev/null ; then
             _stop_test_signal
             echo "test signal stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        fi
+    fi
+}
+
+# Video Preview tab: react to a test pattern or audio selection change -
+# restart the running test signal so the new choice takes effect immediately
+_change_test_signal_source(){
+    if [ -f "${VRECORD_TEST_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_TEST_PID_TMP}")" 2>/dev/null ; then
+        _stop_test_signal
+        if [ "${TEST_SIGNAL_OUTPUT_CHOICE}" = "true" ] ; then
+            _start_test_signal
         fi
     fi
 }

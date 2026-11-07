@@ -560,6 +560,10 @@ _gtk_vbox_list() {
         elif [[ "${VARIABLE_NAME}" == "DV_CONTAINER_CHOICE" ]] && $DVPACKAGER_INSTALLED ; then
             echo '<action condition="command_is_true( [ \"$DV_CONTAINER_CHOICE\" = \"DV\" ] && echo true)">disable:DV_RESCUE_OPTION_TC</action>
                 <action condition="command_is_true( [ \"$DV_CONTAINER_CHOICE\" != \"DV\" ] && echo true)">enable:DV_RESCUE_OPTION_TC</action>'
+        elif [[ "${VARIABLE_NAME}" == "TEST_SIGNAL_PATTERN_CHOICE" ]] ; then
+            echo '<action>_change_test_signal_source</action>'
+        elif [[ "${VARIABLE_NAME}" == "TEST_SIGNAL_AUDIO_CHOICE" ]] ; then
+            echo '<action>_change_test_signal_source</action>'
         fi
     }
 
@@ -3811,7 +3815,7 @@ fi
 
 # list of selections for each vrecord option
 VIDEO_INPUT_OPTIONS=("SDI" "HDMI" "Composite" "Component" "S-Video")
-TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE Bars" "Test Pattern" "RGB Bars" "YUV Bars")
+TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE Bars (75%)" "SMPTE Bars (100%)" "EBU Bars (100%)" "Test Pattern" "RGB Bars" "YUV Bars")
 TEST_SIGNAL_AUDIO_OPTIONS=("1 kHz Tone" "Stereo 1k/440" "Silence")
 AUDIO_INPUT_OPTIONS=("Analog" "SDI Embedded Audio" "Digital Audio (AES/EBU)")
 CONTAINER_OPTIONS=("QuickTime" "Matroska" "AVI" "MXF" "MP4")
