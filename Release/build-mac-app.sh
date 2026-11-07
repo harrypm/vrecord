@@ -126,7 +126,7 @@ cat > "$CONTENTS/Info.plist" << EOF
     <key>CFBundleDisplayName</key>
     <string>vrecord</string>
     <key>CFBundleIdentifier</key>
-    <string>com.github.amiaopensource.vrecord</string>
+    <string>com.harrypm.vrecord</string>
     <key>CFBundleVersion</key>
     <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>
@@ -152,22 +152,26 @@ if [ -f "$RESOURCES/share/vrecord/Resources/vrecord-logo.icns" ]; then
     cp "$RESOURCES/share/vrecord/Resources/vrecord-logo.icns" "$RESOURCES/AppIcon.icns"
 elif [ -f "$RESOURCES/share/vrecord/Resources/vrecord-icon.svg" ]; then
     ICONSET="$ARTIFACTS/AppIcon.iconset"
-    SVG_PREVIEW_DIR="$ARTIFACTS/svg-preview"
-    SVG_PREVIEW_PNG="$SVG_PREVIEW_DIR/vrecord-icon.svg.png"
-    rm -rf "$ICONSET" "$SVG_PREVIEW_DIR"
-    mkdir -p "$ICONSET" "$SVG_PREVIEW_DIR"
-    qlmanage -t -s 1024 -o "$SVG_PREVIEW_DIR" "$RESOURCES/share/vrecord/Resources/vrecord-icon.svg" >/dev/null 2>&1 || true
-    if [ -f "$SVG_PREVIEW_PNG" ]; then
-        sips -z 16 16     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_16x16.png" >/dev/null
-        sips -z 32 32     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
-        sips -z 32 32     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_32x32.png" >/dev/null
-        sips -z 64 64     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
-        sips -z 128 128   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_128x128.png" >/dev/null
-        sips -z 256 256   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
-        sips -z 256 256   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_256x256.png" >/dev/null
-        sips -z 512 512   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
-        sips -z 512 512   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_512x512.png" >/dev/null
-        cp "$SVG_PREVIEW_PNG" "$ICONSET/icon_512x512@2x.png"
+    SVG_SOURCE="$RESOURCES/share/vrecord/Resources/vrecord-icon.svg"
+    SVG_MASTER_DIR="$ARTIFACTS/svg-master"
+    SVG_MASTER="$SVG_MASTER_DIR/vrecord-icon-1024.svg"
+    SVG_MASTER_PNG="$SVG_MASTER_DIR/vrecord-icon-1024.png"
+    rm -rf "$ICONSET" "$SVG_MASTER_DIR"
+    mkdir -p "$ICONSET" "$SVG_MASTER_DIR"
+    # sips rasterizes SVGs at their intrinsic size, so render a copy scaled to
+    # 1024px for a crisp master, keeping the SVG's transparent background
+    sed 's/<svg /<svg width="1024" height="1024" /' "$SVG_SOURCE" > "$SVG_MASTER"
+    if sips -s format png "$SVG_MASTER" --out "$SVG_MASTER_PNG" >/dev/null 2>&1 && [ -f "$SVG_MASTER_PNG" ]; then
+        sips -z 16 16     "$SVG_MASTER_PNG" --out "$ICONSET/icon_16x16.png" >/dev/null
+        sips -z 32 32     "$SVG_MASTER_PNG" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+        sips -z 32 32     "$SVG_MASTER_PNG" --out "$ICONSET/icon_32x32.png" >/dev/null
+        sips -z 64 64     "$SVG_MASTER_PNG" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+        sips -z 128 128   "$SVG_MASTER_PNG" --out "$ICONSET/icon_128x128.png" >/dev/null
+        sips -z 256 256   "$SVG_MASTER_PNG" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+        sips -z 256 256   "$SVG_MASTER_PNG" --out "$ICONSET/icon_256x256.png" >/dev/null
+        sips -z 512 512   "$SVG_MASTER_PNG" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+        sips -z 512 512   "$SVG_MASTER_PNG" --out "$ICONSET/icon_512x512.png" >/dev/null
+        cp "$SVG_MASTER_PNG" "$ICONSET/icon_512x512@2x.png"
         iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
     fi
 elif [ -f "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" ]; then
