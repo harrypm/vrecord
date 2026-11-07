@@ -1676,6 +1676,11 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                             <action>if true _start_file_playback</action>
                             <action>if false _pause_file_playback</action>
                         </togglebutton>
+                        <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
+                            <label>Auto-detect file format (play natively)</label>
+                            <default>"${FILEPLAY_AUTO_CHOICE:-true}"</default>
+                            <variable>FILEPLAY_AUTO_CHOICE</variable>
+                        </checkbox>
                         <text>
                             <label>scrub (frame):</label>
                         </text>
