@@ -510,6 +510,106 @@ _refresh_gui_recording_status(){
     fi
 }
 
+# Video Preview tab / main page: run passthrough (or the audio check) as a
+# separate vrecord process so the settings window stays open; the monitoring
+# window opens separately and closing it (or pressing q) ends the passthrough;
+# clicking the button again also stops it
+_toggle_gui_passthrough(){ _gui_passthrough_toggle video ; }
+_toggle_gui_audio_passthrough(){ _gui_passthrough_toggle audio ; }
+
+_gui_passthrough_toggle(){
+    if [ -f "${VRECORD_PASS_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_PASS_PID_TMP}")" 2>/dev/null ; then
+        _gui_passthrough_stop
+        return 0
+    fi
+    _gui_passthrough_start "${1}"
+}
+
+_gui_passthrough_start(){
+    # one capture device: a background recording owns it right now
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_RECORD_PID_TMP}")" 2>/dev/null ; then
+        echo "a recording is in progress - stop it before passthrough" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        echo "a recording is in progress - stop it before passthrough" > "${VRECORD_PASS_LOG_TMP}"
+        return 1
+    fi
+    GP_INPUT="${DEVICE_INPUT_CHOICE}"
+    if [ "${GP_INPUT}" = "4" ] ; then
+        GP_INPUT="${INPUT_CHOICE_MEM}"
+    fi
+    if [ -z "${GP_INPUT}" ] || [ "${GP_INPUT}" = "3" ] ; then
+        echo "select an input on the Decklink, DV, or Audio tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        echo "select an input on the Decklink, DV, or Audio tab first" > "${VRECORD_PASS_LOG_TMP}"
+        return 1
+    fi
+    # the capture device and its output can only be opened by one process
+    _stop_video_preview
+    _stop_file_playback
+    _update_config_file
+    rm -f "${VRECORD_PASS_LOG_TMP}"
+    if [ "${1}" = "audio" ] ; then
+        GP_FLAG="-a"
+        GP_LABEL="audio passthrough"
+    else
+        GP_FLAG="-p"
+        GP_LABEL="passthrough"
+    fi
+    echo "starting ${GP_LABEL}..." > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    "${VRECORD_BIN}" "${GP_FLAG}" < /dev/null > "${VRECORD_PASS_LOG_TMP}" 2>&1 &
+    echo $! > "${VRECORD_PASS_PID_TMP}"
+}
+
+# stop a passthrough started from the settings window by ending its monitoring
+# window first (like closing it), so the capture pipeline unwinds cleanly and
+# the landing state (input preview with relay) comes back
+_gui_passthrough_stop(){
+    if [ ! -f "${VRECORD_PASS_PID_TMP}" ] ; then
+        return 0
+    fi
+    GP_PID="$(cat "${VRECORD_PASS_PID_TMP}")"
+    if [ -n "${GP_PID}" ] && kill -0 "${GP_PID}" 2>/dev/null ; then
+        # end the monitoring window first, like closing it in the classic flow
+        GP_PLAYER="$(pgrep -P "${GP_PID}" ffplay-ma 2>/dev/null | head -n 1)"
+        [ -z "${GP_PLAYER}" ] && GP_PLAYER="$(pgrep -P "${GP_PID}" ffplay 2>/dev/null | head -n 1)"
+        [ -z "${GP_PLAYER}" ] && GP_PLAYER="$(pgrep -P "${GP_PID}" mpv 2>/dev/null | head -n 1)"
+        if [ -n "${GP_PLAYER}" ] ; then
+            kill "${GP_PLAYER}" 2>/dev/null
+        fi
+        # if the capture is still running shortly after, end it too
+        GP_WAIT=0
+        while [ "${GP_WAIT}" -lt 30 ] && kill -0 "${GP_PID}" 2>/dev/null ; do
+            sleep 0.1
+            GP_WAIT=$(( GP_WAIT + 1 ))
+        done
+        if kill -0 "${GP_PID}" 2>/dev/null ; then
+            GP_FFMPEG="$(pgrep -P "${GP_PID}" ffmpeg-ma 2>/dev/null | head -n 1)"
+            [ -z "${GP_FFMPEG}" ] && GP_FFMPEG="$(pgrep -P "${GP_PID}" ffmpeg 2>/dev/null | head -n 1)"
+            [ -n "${GP_FFMPEG}" ] && kill "${GP_FFMPEG}" 2>/dev/null
+        fi
+    fi
+    rm -f "${VRECORD_PASS_PID_TMP}"
+    # restore the landing state unless a file playout owns the output
+    if ! { [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; } ; then
+        _start_video_preview
+    fi
+}
+
+# Video Preview tab: keep the passthrough state in sync; when a passthrough
+# ends (monitoring window closed or q pressed), reset like a recording ends
+_refresh_gui_passthrough_status(){
+    if [ ! -f "${VRECORD_PASS_PID_TMP}" ] ; then
+        return 0
+    fi
+    GP_PID="$(cat "${VRECORD_PASS_PID_TMP}")"
+    if [ -n "${GP_PID}" ] && kill -0 "${GP_PID}" 2>/dev/null ; then
+        return 0
+    fi
+    # the passthrough finished: clear the state so a new one can start
+    rm -f "${VRECORD_PASS_PID_TMP}"
+    if ! { [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; } ; then
+        _start_video_preview
+    fi
+}
+
 # Video Preview tab: start the recording in a terminal window (classic vrecord
 # style) while the settings window stays open with its controls
 _popout_recording(){
@@ -618,6 +718,9 @@ _stop_file_playback(){
 # Video Preview tab: one combined status refresh for the slow status timer
 _refresh_preview_page(){
     _refresh_video_preview_status
+    # passthrough refresh first: a just-ended passthrough resets within the
+    # same tick so the output pane never shows a stale "passthrough running"
+    _refresh_gui_passthrough_status
     _refresh_file_playback_status
     _refresh_gui_recording_status
 }
@@ -668,6 +771,14 @@ _refresh_file_playback_status(){
                 echo "${VRECORD_PLAY_FILE}|${FP_TIME}" > "${VRECORD_PLAY_POS_TMP}"
             fi
             echo "playing ${FP_TIME:-00:00:00.00}${FP_DURHMS:+ / ${FP_DURHMS}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+            return 0
+        fi
+    fi
+    # while a GUI passthrough runs, the output pane carries its state
+    if [ -f "${VRECORD_PASS_PID_TMP}" ] ; then
+        GP_PID="$(cat "${VRECORD_PASS_PID_TMP}")"
+        if [ -n "${GP_PID}" ] && kill -0 "${GP_PID}" 2>/dev/null ; then
+            echo "passthrough running - press q or click Passthrough to stop" > "${VRECORD_FILEPLAY_STATUS_TMP}"
             return 0
         fi
     fi

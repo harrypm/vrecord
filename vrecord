@@ -1726,13 +1726,13 @@ export MAIN_DIALOG='
                         <label>Passthrough</label>
                         <width>100</width>
                         <input file>"'"${RESOURCE_PATH}/vrecord_logo_playback.png"'"</input>
-                        <action type="exit">passthrough</action>
+                        <action>_toggle_gui_passthrough</action>
                     </button>
                     <button image-position="Top">
                         <label>Audio Check</label>
                         <width>100</width>
                         <input file>"'"${RESOURCE_PATH}/vrecord_logo_audio.png"'"</input>
-                        <action type="exit">audiopassthrough</action>
+                        <action>_toggle_gui_audio_passthrough</action>
                     </button>
                     <button image-position="Top">
                         <label>Edit Settings</label>
@@ -1988,7 +1988,7 @@ export MAIN_DIALOG='
                 <input file stock="gtk-media-play"></input>
                 <variable export="false">passthrough_button</variable>
                 <action>_update_config_file</action>
-                <action type="exit">passthrough</action>
+                <action>_toggle_gui_passthrough</action>
             </button>
             <button>
                 <label>Save Settings</label>
@@ -2081,6 +2081,8 @@ _edit_mode(){
     echo "VRECORD_RECORD_PID_TMP=\"${VRECORD_RECORD_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_RECORD_STATUS_TMP=\"${VRECORD_RECORD_STATUS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_RECORD_LOG_TMP=\"${VRECORD_RECORD_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PASS_PID_TMP=\"${VRECORD_PASS_PID_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_PASS_LOG_TMP=\"${VRECORD_PASS_LOG_TMP}\"" >> "${GTK_INC}"
     echo "INPUT_MEM_TMP=\"${INPUT_MEM_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_BIN=\"${VRECORD_BIN}\"" >> "${GTK_INC}"
     cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
@@ -3655,6 +3657,8 @@ VRECORD_RECORD_PID_TMP="$(_maketemp .vrecord_recording.pid)"
 VRECORD_RECORD_STATUS_TMP="$(_maketemp .vrecord_recording.status.txt)"
 VRECORD_RECORD_LOG_TMP="$(_maketemp .vrecord_recording.log.txt)"
 echo "idle" > "${VRECORD_RECORD_STATUS_TMP}"
+VRECORD_PASS_PID_TMP="$(_maketemp .vrecord_passthrough.pid)"
+VRECORD_PASS_LOG_TMP="$(_maketemp .vrecord_passthrough.log.txt)"
 INPUT_MEM_TMP="$(_maketemp .vrecord_input_mem.txt)"
 # only remember real input tabs (a config saved from the Config or Video Preview
 # tab can carry a tab index that is not an input choice)
