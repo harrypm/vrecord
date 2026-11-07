@@ -262,6 +262,22 @@ _fp_abs_time(){
     }'
 }
 
+# convert a file position (bare seconds or HH:MM:SS.mmm, as the playout status
+# and seek paths use) to a non-dropframe HH:MM:SS:FF timecode at the probed
+# frame rate; the rate is rounded to the nearest integer for the frames field
+# so 29.97 counts 0-29 and 23.98 counts 0-23, matching NDF timecode counters
+_fp_tc(){
+    FP_TCFPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
+    awk -v t="${1:-0}" -v r="${FP_TCFPS:-0}" 'BEGIN {
+        n = split(t, a, ":") ; s = (n >= 3) ? a[1]*3600 + a[2]*60 + a[3] : (n == 2) ? a[1]*60 + a[2] : t + 0
+        if (r <= 0) { print "00:00:00:00" ; exit }
+        ri = int(r + 0.5)
+        fr = int(s * r + 0.5)
+        ts = int(fr / ri)
+        printf "%02d:%02d:%02d:%02d", int(ts/3600), int((ts%3600)/60), ts%60, fr % ri
+    }'
+}
+
 # Video Preview tab: play a media file out to the selected device's output
 # through the Blackmagic SDK, converting on the fly to the output mode of the
 # selected standard (video size, frame rate, and field order)
@@ -425,14 +441,14 @@ _start_file_playback(){
     fi
     FP_DUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     echo "${FP_DUR}" > "${VRECORD_FILEPLAY_DUR_TMP}"
-    # frame rate and total frame count for the frame-based scrub slider
+    # frame rate and total frame count for the scrub slider and the timecode readout
     FP_FPS="$("${FFMPEG_BIN}" -nostdin -i "${VRECORD_PLAY_FILE}" -hide_banner -loglevel info 2>&1 | grep -oE '[0-9.]+ fps' | head -1 | awk '{print $1}')"
     echo "${FP_FPS}" > "${VRECORD_FILEPLAY_FPS_TMP}"
     export FILEPLAY_FRAME_MAX=""
     if [ -n "${FP_FPS}" ] && [ -n "${FP_DUR}" ] ; then
         FILEPLAY_FRAME_MAX="$(awk -v d="${FP_DUR}" -v r="${FP_FPS}" 'BEGIN { printf "%d", int(d * r) }')"
     fi
-    echo 0 > "${VRECORD_FILEPLAY_FRAME_TMP}"
+    echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     FP_DIMS="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     FP_FW="${FP_DIMS%%,*}"
     FP_FH="${FP_DIMS##*,}"
@@ -452,6 +468,8 @@ _start_file_playback(){
             FP_RESUME="${FP_RESTIME}"
         fi
     fi
+    # seed the timecode readout with the start position until live stats arrive
+    echo "$(_fp_tc "${FP_RESUME:-0}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}"
     # resolve the preview reader BEFORE building the ffmpeg arguments: the
     # fifo output branch tests PREVIEW_READER, and building the args first
@@ -542,11 +560,13 @@ _pause_file_playback(){
         FP_PAUSETIME="00:00:00.00"
     fi
     echo "${VRECORD_PLAY_FILE}|${FP_PAUSETIME}" > "${VRECORD_PLAY_POS_TMP}"
+    echo "$(_fp_tc "${FP_PAUSETIME}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     echo "paused at ${FP_PAUSETIME} - toggle Play to resume" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 }
 
 # Video Preview tab: scrub bar handler - seeks the file playback to a frame
-# number (the slider ranges 0..total frames once the file has been probed)
+# number (the slider ranges 0..total frames once the file has been probed;
+# the readout shows the matching non-dropframe HH:MM:SS:FF timecode)
 _seek_frame_playback(){
     FP_FRAME="${FILEPLAY_SEEK}"
     if ! echo "${FP_FRAME}" | grep -qE '^[0-9]+$' ; then
@@ -563,13 +583,14 @@ _seek_frame_playback(){
         FP_SEC="${FP_DUR}"
     fi
     FP_HMS="$(awk -v s="${FP_SEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
+    FP_TC="$(_fp_tc "${FP_SEC}")"
     echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
-    echo "frame ${FP_FRAME}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+    echo "${FP_TC}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
         _halt_file_playback
         _start_file_playback
     else
-        echo "cued at frame ${FP_FRAME} (${FP_HMS}) - toggle Play to start there" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        echo "cued at ${FP_TC} (${FP_HMS}) - toggle Play to start there" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     fi
 }
 
@@ -1182,6 +1203,7 @@ _refresh_file_playback_status(){
             # only track the position while the playback process is alive
             if [ -n "${FP_TIME}" ] ; then
                 echo "${VRECORD_PLAY_FILE}|${FP_TIME}" > "${VRECORD_PLAY_POS_TMP}"
+                echo "$(_fp_tc "${FP_TIME}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
             fi
             echo "playing ${FP_TIME:-00:00:00.00}${FP_DURHMS:+ / ${FP_DURHMS}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
             return 0
