@@ -1697,16 +1697,6 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                             <variable export="false">fileplay_frame</variable>
                             <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
                         </entry>
-                        <text>
-                            <label>or check the device chain with a test signal</label>
-                        </text>
-                        <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
-                            <label>Test signal output</label>
-                            <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
-                            <action>_apply_test_signal_state</action>
-                        </checkbox>
-                        $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "150" "Test pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
-                        $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "150" "Test audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
                     </vbox>
                 </hbox>
                 <timer milliseconds="true" interval="33" visible="false">
@@ -1724,6 +1714,36 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
     </vbox>
 </frame>
 PREVIEW_FORM
+)
+
+TEST_OUTPUT_GUI=$(cat << TEST_OUTPUT_FORM
+<frame Output options>
+    <vbox space-expand="true">
+        <text width-chars="-1">
+            <label>Check the device chain with a test signal: the selected pattern and audio are sent to the relay output device, converted on the fly to the selected standard. The test signal yields to file playout and the live relay.</label>
+        </text>
+        <hbox space-expand="true" space-fill="true">
+            <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
+                <label>Test signal output</label>
+                <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
+                <action>_apply_test_signal_state</action>
+            </checkbox>
+        </hbox>
+        <hbox space-expand="true" space-fill="true">
+            $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "170" "Test pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
+            $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "150" "Test audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
+        </hbox>
+        <entry editable="false" has-frame="false">
+            <variable export="false">test_signal_status</variable>
+            <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
+        </entry>
+        <timer milliseconds="true" interval="300" visible="false">
+            <variable export="false">test_signal_status_timer</variable>
+            <action>refresh:test_signal_status</action>
+        </timer>
+    </vbox>
+</frame>
+TEST_OUTPUT_FORM
 )
 
 export MAIN_DIALOG='
@@ -1790,12 +1810,13 @@ export MAIN_DIALOG='
         </vbox>
         <vbox scrollable="true" width="1420" height="520" shadow-type="0">
             <frame Input Options>
-            <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview">
+            <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview|Output">
                 '"${DECKLINK_INPUT_GUI}"'
                 '"${DVRESCUE_INPUT_GUI}"'
                 '"${AUDIO_INPUT_GUI}"'
                 '"${OPTIONAL_TOOLS_GUI}"'
                 '"${PREVIEW_INPUT_GUI}"'
+                '"${TEST_OUTPUT_GUI}"'
                 <variable>DEVICE_INPUT_CHOICE</variable>
                 <action signal="button-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
                 <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" -le 2 ] && echo true)">echo \"$DEVICE_INPUT_CHOICE\" > \"'\"$INPUT_MEM_TMP\"'\"</action>
