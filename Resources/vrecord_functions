@@ -475,8 +475,9 @@ _start_file_playback(){
     fi
     # seed the timecode readout with the start position until live stats arrive
     echo "$(_fp_tc "${FP_RESUME:-0}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
-    # put the scrub handle at the start position and re-arm the drag guard
+    # put the scrub handle at the start position and re-arm the guards
     echo 0 > "${VRECORD_FILEPLAY_DRAG_TMP}"
+    echo 0 > "${VRECORD_FILEPLAY_JOG_TMP}"
     if [ -n "${FP_DUR}" ] ; then
         awk -v t="${FP_RESUME:-0}" -v d="${FP_DUR}" 'BEGIN { n = split(t, a, ":") ; s = (n >= 3) ? a[1]*3600 + a[2]*60 + a[3] : t + 0 ; v = int(s * 10000 / d + 0.5) ; if (v > 10000) v = 10000 ; printf "%d", v }' > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
     fi
@@ -567,9 +568,13 @@ _pause_file_playback(){
     fi
     FP_TC="$(_fp_tc "${FP_PAUSETIME}")"
     kill -STOP "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null
-    echo 1 > "${VRECORD_FILEPLAY_FROZEN_TMP}"
+    # cue first, frozen flag last: the toggle never sees frozen=1 with a
+    # stale cue from the 300ms status refresh (which also writes PLAY_POS
+    # and could race this window, flip-flopping the resume into a restart)
     echo "${VRECORD_PLAY_FILE}|${FP_PAUSETIME}" > "${VRECORD_PLAY_POS_TMP}"
     echo "${FP_TC}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+    echo 0 > "${VRECORD_FILEPLAY_JOG_TMP}"
+    echo 1 > "${VRECORD_FILEPLAY_FROZEN_TMP}"
     echo "frozen at ${FP_TC} - toggle Play to continue" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     # show the exact frozen frame in the output pane (the pane lags the
     # device by the reader's one-second buffer)
@@ -594,11 +599,12 @@ _toggle_transport_play(){
         _pause_file_playback
         return 0
     fi
-    # frozen: resume here unless the cue was jogged to another position
-    FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
-    FP_FROZENTIME="$(_fp_abs_time "${FP_STATTIME:-00:00:00.00}")"
-    FP_CUETIME="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null | cut -d'|' -f2)"
-    if [ -n "${FP_CUETIME}" ] && [ "${FP_CUETIME}" != "${FP_FROZENTIME}" ] ; then
+    # frozen: resume here unless the cue was jogged while frozen (tracked
+    # with an explicit flag - comparing re-parsed times against the cue
+    # raced the status refresh's own PLAY_POS writes and sometimes turned
+    # a plain resume into a restart)
+    if [ "$(cat "${VRECORD_FILEPLAY_JOG_TMP}" 2>/dev/null)" = "1" ] ; then
+        echo 0 > "${VRECORD_FILEPLAY_JOG_TMP}"
         _halt_file_playback
         _start_file_playback
         return 0
@@ -691,6 +697,10 @@ _step_playback(){
         _start_file_playback
     else
         echo "paused at ${FP_TC} - toggle Play or keep stepping" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        # a jog on a frozen playout must resume by restart at the new cue
+        if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+            echo 1 > "${VRECORD_FILEPLAY_JOG_TMP}"
+        fi
         # hold the render half a frame before the end so the last frame still shows
         FP_SHOWSEC="$(awk -v s="${FP_NEWSEC}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { e = d - 0.5 / r ; if (s > e) s = e ; printf "%.3f", s }')"
         _show_play_frame "${FP_SHOWSEC}"
@@ -1252,6 +1262,7 @@ _halt_file_playback(){
     fi
     _kill_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
     echo 0 > "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null
+    echo 0 > "${VRECORD_FILEPLAY_JOG_TMP}" 2>/dev/null
     if [ -f "${VRECORD_FILEPLAY_RPID_TMP}" ] ; then
         kill "$(cat "${VRECORD_FILEPLAY_RPID_TMP}")" 2>/dev/null
         rm -f "${VRECORD_FILEPLAY_RPID_TMP}"
