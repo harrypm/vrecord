@@ -160,6 +160,7 @@ _start_video_preview(){
     esac
     case "${VIDEO_INPUT_CHOICE}" in
         "Composite") PREVIEW_VINPUT="composite" ;;
+        "HDMI")      PREVIEW_VINPUT="hdmi" ;;
         "Component") PREVIEW_VINPUT="component" ;;
         "S-Video")   PREVIEW_VINPUT="s_video" ;;
         *)           PREVIEW_VINPUT="sdi" ;;

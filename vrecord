@@ -2444,6 +2444,7 @@ _lookup_choice(){
         # video inputs
         "Composite") VIDEO_INPUT="composite" ;;
         "SDI")       VIDEO_INPUT="sdi" ;;
+        "HDMI")      VIDEO_INPUT="hdmi" ;;
         "Component") VIDEO_INPUT="component" ;;
         "S-Video")   VIDEO_INPUT="s_video" ;;
 
@@ -3807,7 +3808,7 @@ elif [[ "${OS_TYPE}" = "macOS" ]] ; then
 fi
 
 # list of selections for each vrecord option
-VIDEO_INPUT_OPTIONS=("Composite" "SDI" "Component" "S-Video")
+VIDEO_INPUT_OPTIONS=("SDI" "HDMI" "Composite" "Component" "S-Video")
 AUDIO_INPUT_OPTIONS=("Analog" "SDI Embedded Audio" "Digital Audio (AES/EBU)")
 CONTAINER_OPTIONS=("QuickTime" "Matroska" "AVI" "MXF" "MP4")
 DV_CONTAINER_OPTIONS=("DV" "Matroska" "QuickTime")
