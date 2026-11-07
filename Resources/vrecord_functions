@@ -783,6 +783,31 @@ _start_test_signal(){
         "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
         *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
     esac
+    # the HD/UHD pattern rasters are locked to their specifications: the
+    # RP 219 and BT.2111 HD patterns output at 1080p, the UHD patterns at
+    # 2160p, always progressive, with the frame rate taken from the
+    # selected standard's family (25 when no standard is selected)
+    TS_LOCKED=""
+    case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE SD Bars (75%)}" in
+        "SMPTE RP 219 \"HDTV\" Bars (75%)"|"SMPTE HD Bars (75%)"|"BT.2111 HDR Bars (HLG 1080p)"|"BT.2111 HDR Bars (PQ 1080p)")
+            TS_LOCKED="1920:1080" ;;
+        "SMPTE RP 219 \"UHDTV\" Bars (75%, BT.2020)"|"SMPTE UHD Bars (BT.2020)"|"SMPTE UHD Bars (75%)"|"BT.2111 HDR Bars (HLG 2160p)"|"BT.2111 HDR Bars (PQ 2160p)")
+            TS_LOCKED="3840:2160" ;;
+    esac
+    if [ -n "${TS_LOCKED}" ] ; then
+        case "${STANDARD_CHOICE}" in
+            "23ps - 1080p23.98"|"2d23 - 2048p23.98"|"4k23 - UHD 23.98"|"4d23 - 4K DCI 23.98") TS_RATE="24000/1001" ;;
+            "24ps - 1080p24"|"2d24 - 2048p24"|"4k24 - UHD 24"|"4d24 - 4K DCI 24") TS_RATE="24/1" ;;
+            "PAL"|"Hp25 - 1080p25"|"Hi50 - 1080i50"|"2d25 - 2048p25"|"4k25 - UHD 25"|"4d25 - 4K DCI 25") TS_RATE="25/1" ;;
+            "NTSC"|"Hp29 - 1080p29.97"|"Hi59 - 1080i59.94"|"2d29 - 2048p29.97"|"4k29 - UHD 29.97"|"4d29 - 4K DCI 29.97") TS_RATE="30000/1001" ;;
+            "Hp30 - 1080p30"|"Hi60 - 1080i60"|"2d30 - 2048p30"|"4k30 - UHD 30"|"4d30 - 4K DCI 30") TS_RATE="30/1" ;;
+            "Hp50 - 1080p50"|"hp50 - 720p50"|"2d50 - 2048p50"|"4k50 - UHD 50"|"4d50 - 4K DCI 50") TS_RATE="50/1" ;;
+            "Hp59 - 1080p59.94"|"hp59 - 720p59.94"|"2d59 - 2048p59.94"|"4k59 - UHD 59.94"|"4d59 - 4K DCI 59.94") TS_RATE="60000/1001" ;;
+            "Hp60 - 1080p60"|"hp60 - 720p60"|"2d60 - 2048p60"|"4k60 - UHD 60"|"4d60 - 4K DCI 60") TS_RATE="60/1" ;;
+            *) TS_RATE="25/1" ;;
+        esac
+        TS_SIZE="${TS_LOCKED}" ; TS_FIELD=""
+    fi
     TS_SIZE_SRC="${TS_SIZE%%:*}x${TS_SIZE##*:}"
     # EBU Tech 3243 full-field bars at 100% and 75% amplitude: seven equal
     # stripes drawn at the target size so no scaling stage is needed
@@ -883,6 +908,109 @@ _start_test_signal(){
     _hd_c 35 0x000000 "ih*9/12" "ih*3/12"
     _hd_c 34 0x0A0A0A "ih*9/12" "ih*3/12"
     _hd_c 103 0x000000 "ih*9/12" "ih*3/12"
+    # ITU-R BT.2111 HDR bars (HLG narrow / PQ narrow range, BT.2020): five
+    # rows per the recommendation - the 100% bars (b/12), the 75% (HLG) or
+    # 58% (PQ) primary bars (b/2), a 13-step grey staircase (b/12), a linear
+    # ramp (b/12, drawn by the gradients filter overlay), and the bottom b/4
+    # with the ITU-published BT.709-equivalent bars, the BT.814 PLUGE, and
+    # the 75%/58% white chip. Table 1 pixel geometry at the locked raster;
+    # the 10-bit narrow code values from Tables 2/3 are converted to
+    # full-range 8-bit RGB (code8 = (code10-64)*255/876); sub-black and
+    # super-white (-7%, 109%, -2%) render at their clipped RGB levels.
+    TS_BT2111=""
+    TS_RAMPW=""
+    _bt_add(){
+        if [ -n "${TS_BT2111}" ] ; then TS_BT2111="${TS_BT2111}," ; fi
+        TS_BT2111="${TS_BT2111}${1}"
+    }
+    _bt_build(){
+        # $1 = HLG or PQ
+        if [ "${TS_LOCKED}" = "3840:2160" ] ; then
+            BT_C=480 ; BT_D=412 ; BT_E=408 ; BT_F=272 ; BT_G=140 ; BT_H=136 ; BT_I=476 ; BT_J=876 ; BT_K=564
+            BT_R1=180 ; BT_R2=1080 ; BT_R3=180 ; BT_R4=180 ; BT_R5=540
+        else
+            BT_C=240 ; BT_D=206 ; BT_E=204 ; BT_F=136 ; BT_G=70 ; BT_H=68 ; BT_I=238 ; BT_J=438 ; BT_K=282
+            BT_R1=90 ; BT_R2=540 ; BT_R3=90 ; BT_R4=90 ; BT_R5=270
+        fi
+        # note: the colour variables are deliberately separate from the
+        # Table 1 geometry variables above (BT_C/BT_G are widths, the
+        # colours are BT_CL*)
+        if [ "${1}" = "PQ" ] ; then
+            BT_CLW=0x949494 ; BT_CLY=0x949400 ; BT_CLC=0x009494 ; BT_CLG=0x009400 ; BT_CLM=0x940094 ; BT_CLR=0x940000 ; BT_CLB=0x000094
+            BT_709Y=0x93945C ; BT_709C=0x7A9294 ; BT_709G=0x779259 ; BT_709M=0x8A5791 ; BT_709R=0x885438 ; BT_709B=0x4A3291
+        else
+            BT_CLW=0xBFBFBF ; BT_CLY=0xBFBF00 ; BT_CLC=0x00BFBF ; BT_CLG=0x00BF00 ; BT_CLM=0xBF00BF ; BT_CLR=0xBF0000 ; BT_CLB=0x0000BF
+            BT_709Y=0xBDBF49 ; BT_709C=0x8ABCBE ; BT_709G=0x82BB44 ; BT_709M=0xAB41BB ; BT_709R=0xA73C1D ; BT_709B=0x2F18BA
+        fi
+        BT_X1=${BT_C} ; BT_X2=$((BT_C+BT_D)) ; BT_X3=$((BT_C+2*BT_D)) ; BT_X4=$((BT_C+3*BT_D))
+        BT_X5=$((BT_C+3*BT_D+BT_E)) ; BT_X6=$((BT_C+4*BT_D+BT_E)) ; BT_X7=$((BT_C+5*BT_D+BT_E)) ; BT_XR=$((BT_C+6*BT_D+BT_E))
+        BT_Y2=${BT_R1} ; BT_Y3=$((BT_R1+BT_R2)) ; BT_Y4=$((BT_R1+BT_R2+BT_R3)) ; BT_Y5=$((BT_R1+BT_R2+BT_R3+BT_R4))
+        BT_W709=$((BT_C/3)) ; BT_P0=$((3*BT_W709)) ; BT_P1=$((BT_P0+BT_F)) ; BT_P2=$((BT_P1+BT_G)) ; BT_P3=$((BT_P2+BT_H)) ; BT_P4=$((BT_P3+BT_G)) ; BT_P5=$((BT_P4+BT_H)) ; BT_P6=$((BT_P5+BT_G))
+        BT_J0=$((BT_P6+BT_I)) ; BT_K0=$((BT_J0+BT_J)) ; BT_XM=$((BT_K0+BT_K))
+        # row 1: 100% bars on the grey format-identification pads
+        _bt_add "drawbox=x=0:y=0:w=${BT_C}:h=${BT_R1}:color=0x666666:thickness=fill"
+        _bt_add "drawbox=x=${BT_X1}:y=0:w=${BT_D}:h=${BT_R1}:color=0xFFFFFF:thickness=fill"
+        _bt_add "drawbox=x=${BT_X2}:y=0:w=${BT_D}:h=${BT_R1}:color=0xFFFF00:thickness=fill"
+        _bt_add "drawbox=x=${BT_X3}:y=0:w=${BT_D}:h=${BT_R1}:color=0x00FFFF:thickness=fill"
+        _bt_add "drawbox=x=${BT_X4}:y=0:w=${BT_E}:h=${BT_R1}:color=0x00FF00:thickness=fill"
+        _bt_add "drawbox=x=${BT_X5}:y=0:w=${BT_D}:h=${BT_R1}:color=0xFF00FF:thickness=fill"
+        _bt_add "drawbox=x=${BT_X6}:y=0:w=${BT_D}:h=${BT_R1}:color=0xFF0000:thickness=fill"
+        _bt_add "drawbox=x=${BT_X7}:y=0:w=${BT_D}:h=${BT_R1}:color=0x0000FF:thickness=fill"
+        _bt_add "drawbox=x=${BT_XR}:y=0:w=${BT_C}:h=${BT_R1}:color=0x666666:thickness=fill"
+        # row 2: the 75% (HLG) or 58% (PQ) primary bars
+        _bt_add "drawbox=x=0:y=${BT_Y2}:w=${BT_C}:h=${BT_R2}:color=0x666666:thickness=fill"
+        _bt_add "drawbox=x=${BT_X1}:y=${BT_Y2}:w=${BT_D}:h=${BT_R2}:color=${BT_CLW}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X2}:y=${BT_Y2}:w=${BT_D}:h=${BT_R2}:color=${BT_CLY}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X3}:y=${BT_Y2}:w=${BT_D}:h=${BT_R2}:color=${BT_CLC}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X4}:y=${BT_Y2}:w=${BT_E}:h=${BT_R2}:color=${BT_CLG}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X5}:y=${BT_Y2}:w=${BT_D}:h=${BT_R2}:color=${BT_CLM}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X6}:y=${BT_Y2}:w=${BT_D}:h=${BT_R2}:color=${BT_CLR}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X7}:y=${BT_Y2}:w=${BT_D}:h=${BT_R2}:color=${BT_CLB}:thickness=fill"
+        _bt_add "drawbox=x=${BT_XR}:y=${BT_Y2}:w=${BT_C}:h=${BT_R2}:color=0x666666:thickness=fill"
+        # row 3: the 13-step grey staircase (-7% over the white bar, then
+        # 0..109% in half-bar steps), primary-white pads
+        _bt_add "drawbox=x=0:y=${BT_Y3}:w=${BT_C}:h=${BT_R3}:color=${BT_CLW}:thickness=fill"
+        _bt_add "drawbox=x=${BT_X1}:y=${BT_Y3}:w=${BT_D}:h=${BT_R3}:color=0x000000:thickness=fill"
+        BT_STEP=2
+        for BT_BARX in ${BT_X2} ${BT_X3} ${BT_X4} ${BT_X5} ${BT_X6} ${BT_X7} ; do
+            if [ "${BT_BARX}" = "${BT_X4}" ] ; then BT_HW=$((BT_E/2)) ; else BT_HW=$((BT_D/2)) ; fi
+            case ${BT_STEP} in
+                2)  BT_S1=0x000000 ; BT_S2=0x1A1A1A ;;
+                4)  BT_S1=0x333333 ; BT_S2=0x4D4D4D ;;
+                6)  BT_S1=0x666666 ; BT_S2=0x808080 ;;
+                8)  BT_S1=0x999999 ; BT_S2=0xB2B2B2 ;;
+                10) BT_S1=0xCCCCCC ; BT_S2=0xE5E5E5 ;;
+                12) BT_S1=0xFFFFFF ; BT_S2=0xFFFFFF ;;
+            esac
+            _bt_add "drawbox=x=${BT_BARX}:y=${BT_Y3}:w=${BT_HW}:h=${BT_R3}:color=${BT_S1}:thickness=fill"
+            _bt_add "drawbox=x=$((BT_BARX+BT_HW)):y=${BT_Y3}:w=${BT_HW}:h=${BT_R3}:color=${BT_S2}:thickness=fill"
+            BT_STEP=$((BT_STEP+2))
+        done
+        _bt_add "drawbox=x=${BT_XR}:y=${BT_Y3}:w=${BT_C}:h=${BT_R3}:color=${BT_CLW}:thickness=fill"
+        # row 4: the ramp - a black underlay; the pre-rendered ramp band
+        # (B plateau at -7%, linear C, D plateau at +109%, clipped to the
+        # RGB range) is overlaid across the measure section
+        _bt_add "drawbox=x=0:y=${BT_Y4}:w=iw:h=${BT_R4}:color=0x000000:thickness=fill"
+        TS_RAMPX=${BT_C} ; TS_RAMPY=${BT_Y4} ; TS_RAMPW=$(( ${TS_LOCKED%%:*} - BT_C )) ; TS_RAMPH=${BT_R4}
+        TS_RAMPIMG="bt2111-ramp-${TS_LOCKED##*:}.png"
+        # row 5: the ITU BT.709-equivalent bars, the BT.814 PLUGE, and the
+        # primary-white chip between black guards
+        _bt_add "drawbox=x=0:y=${BT_Y5}:w=${BT_W709}:h=${BT_R5}:color=${BT_709Y}:thickness=fill"
+        _bt_add "drawbox=x=${BT_W709}:y=${BT_Y5}:w=${BT_W709}:h=${BT_R5}:color=${BT_709C}:thickness=fill"
+        _bt_add "drawbox=x=$((2*BT_W709)):y=${BT_Y5}:w=${BT_W709}:h=${BT_R5}:color=${BT_709G}:thickness=fill"
+        _bt_add "drawbox=x=${BT_P0}:y=${BT_Y5}:w=${BT_F}:h=${BT_R5}:color=0x000000:thickness=fill"
+        _bt_add "drawbox=x=${BT_P1}:y=${BT_Y5}:w=${BT_G}:h=${BT_R5}:color=0x000000:thickness=fill"
+        _bt_add "drawbox=x=${BT_P2}:y=${BT_Y5}:w=${BT_H}:h=${BT_R5}:color=0x000000:thickness=fill"
+        _bt_add "drawbox=x=${BT_P3}:y=${BT_Y5}:w=${BT_G}:h=${BT_R5}:color=0x050505:thickness=fill"
+        _bt_add "drawbox=x=${BT_P4}:y=${BT_Y5}:w=${BT_H}:h=${BT_R5}:color=0x000000:thickness=fill"
+        _bt_add "drawbox=x=${BT_P5}:y=${BT_Y5}:w=${BT_G}:h=${BT_R5}:color=0x0A0A0A:thickness=fill"
+        _bt_add "drawbox=x=${BT_P6}:y=${BT_Y5}:w=${BT_I}:h=${BT_R5}:color=0x000000:thickness=fill"
+        _bt_add "drawbox=x=${BT_J0}:y=${BT_Y5}:w=${BT_J}:h=${BT_R5}:color=${BT_CLW}:thickness=fill"
+        _bt_add "drawbox=x=${BT_K0}:y=${BT_Y5}:w=${BT_K}:h=${BT_R5}:color=0x000000:thickness=fill"
+        _bt_add "drawbox=x=${BT_XM}:y=${BT_Y5}:w=${BT_W709}:h=${BT_R5}:color=${BT_709M}:thickness=fill"
+        _bt_add "drawbox=x=$((BT_XM+BT_W709)):y=${BT_Y5}:w=${BT_W709}:h=${BT_R5}:color=${BT_709R}:thickness=fill"
+        _bt_add "drawbox=x=$((BT_XM+2*BT_W709)):y=${BT_Y5}:w=${BT_W709}:h=${BT_R5}:color=${BT_709B}:thickness=fill"
+    }
     TS_VF="scale=${TS_SIZE}"
     case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE SD Bars (75%)}" in
         "SMPTE SD Bars (75%)"|"SMPTE Bars (75%)")
@@ -897,20 +1025,32 @@ _start_test_signal(){
         "EBU Bars (100%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_EBU100}" ;;
-        "SMPTE HD Bars (75%)")
+        "SMPTE RP 219 \"HDTV\" Bars (75%)"|"SMPTE HD Bars (75%)")
             # force the Rec.709 matrix for HD: the default RGB to YUV
             # conversion uses the 601 family, which lands HD bar luma on
             # the wrong levels (75% blue Y=140 instead of the 709 spec's
             # 111; verified)
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_SMPTEHD},scale=out_color_matrix=bt709" ;;
-        "SMPTE UHD Bars (BT.2020)"|"SMPTE UHD Bars (75%)")
+        "SMPTE RP 219 \"UHDTV\" Bars (75%, BT.2020)"|"SMPTE UHD Bars (BT.2020)"|"SMPTE UHD Bars (75%)")
             # RP 219-2 UHDTV colorimetry: the same nominal bar levels
             # converted through the BT.2020 matrix land exactly on the
             # practice's 2020 Y'Cb'Cr values (verified: 75% blue Y=103,
             # white Y=721, 40% gray Y=414 in 10-bit limited)
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_SMPTEHD},scale=out_color_matrix=bt2020nc" ;;
+        "BT.2111 HDR Bars (HLG 1080p)"|"BT.2111 HDR Bars (HLG 2160p)")
+            # BT.2100 HLG narrow range over BT.2020: the table code values
+            # are the HLG-domain signal levels and pass through unchanged
+            _bt_build HLG
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_BT2111},scale=out_color_matrix=bt2020nc" ;;
+        "BT.2111 HDR Bars (PQ 1080p)"|"BT.2111 HDR Bars (PQ 2160p)")
+            # BT.2100 PQ narrow range over BT.2020: the table code values
+            # are the PQ-domain signal levels and pass through unchanged
+            _bt_build PQ
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_BT2111},scale=out_color_matrix=bt2020nc" ;;
         "FFmpeg Bars")  TS_VSRC="testsrc=rate=${TS_RATE}" ;;
         "Test Pattern") TS_VSRC="testsrc2=rate=${TS_RATE}" ;;
         "RGB Bars")     TS_VSRC="rgbtestsrc=rate=${TS_RATE}" ;;
@@ -930,14 +1070,28 @@ _start_test_signal(){
         *)               TS_ASRC="aevalsrc=sin(1000*2*PI*t)|sin(1000*2*PI*t):channel_layout=stereo:sample_rate=48000" ;;
     esac
     echo "test signal (${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE SD Bars (75%)} + ${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
-    "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
-        -f lavfi -i "${TS_VSRC}" \
-        -f lavfi -i "${TS_ASRC}" \
-        -map 0:v -map 1:a \
-        -vf "${TS_VF}" \
-        -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 \
-        -metadata comment="vrecord-test-signal" \
-        -f decklink "${TEST_DEV}" > "${VRECORD_TEST_LOG_TMP}" 2>&1 &
+    if [ -n "${TS_RAMPW}" ] ; then
+        # the BT.2111 ramp row comes from a pre-rendered band PNG as a
+        # second video input, overlaid on the drawn base
+        "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
+            -f lavfi -i "${TS_VSRC}" \
+            -loop 1 -i "${RESOURCE_PATH}/${TS_RAMPIMG}" \
+            -f lavfi -i "${TS_ASRC}" \
+            -filter_complex "[0:v]${TS_VF}[vb];[vb][1:v]overlay=x=${TS_RAMPX}:y=${TS_RAMPY}[vo]" \
+            -map "[vo]" -map 2:a \
+            -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 \
+            -metadata comment="vrecord-test-signal" \
+            -f decklink "${TEST_DEV}" > "${VRECORD_TEST_LOG_TMP}" 2>&1 &
+    else
+        "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
+            -f lavfi -i "${TS_VSRC}" \
+            -f lavfi -i "${TS_ASRC}" \
+            -map 0:v -map 1:a \
+            -vf "${TS_VF}" \
+            -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 \
+            -metadata comment="vrecord-test-signal" \
+            -f decklink "${TEST_DEV}" > "${VRECORD_TEST_LOG_TMP}" 2>&1 &
+    fi
     echo $! > "${VRECORD_TEST_PID_TMP}"
 }
 

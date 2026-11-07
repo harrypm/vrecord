@@ -4120,7 +4120,7 @@ fi
 
 # list of selections for each vrecord option
 VIDEO_INPUT_OPTIONS=("SDI" "HDMI" "Composite" "Component" "S-Video")
-TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE SD Bars (75%)" "SMPTE SD Bars (100%)" "EBU Bars (75%)" "EBU Bars (100%)" "SMPTE HD Bars (75%)" "SMPTE UHD Bars (BT.2020)" "FFmpeg Bars" "Test Pattern" "RGB Bars" "YUV Bars")
+TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE SD Bars (75%)" "SMPTE SD Bars (100%)" "EBU Bars (75%)" "EBU Bars (100%)" "SMPTE RP 219 \"HDTV\" Bars (75%)" "SMPTE RP 219 \"UHDTV\" Bars (75%, BT.2020)" "BT.2111 HDR Bars (HLG 1080p)" "BT.2111 HDR Bars (PQ 1080p)" "BT.2111 HDR Bars (HLG 2160p)" "BT.2111 HDR Bars (PQ 2160p)" "FFmpeg Bars" "Test Pattern" "RGB Bars" "YUV Bars")
 TEST_SIGNAL_AUDIO_OPTIONS=("1 kHz Tone" "Stereo 1k/440" "Silence")
 AUDIO_INPUT_OPTIONS=("Analog" "SDI Embedded Audio" "Digital Audio (AES/EBU)")
 CONTAINER_OPTIONS=("QuickTime" "Matroska" "AVI" "MXF" "MP4")
