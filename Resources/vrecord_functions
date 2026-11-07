@@ -192,6 +192,7 @@ _start_video_preview(){
     fi
     # the preview and the file playout share the output device: playout yields
     _stop_file_playback
+    _stop_test_signal
     _write_black_ppm "${VRECORD_PREVIEW_TMP}"
     rm -f "${VRECORD_PREVIEW_FIFO}"
     mkfifo "${VRECORD_PREVIEW_FIFO}"
@@ -337,6 +338,7 @@ _start_file_playback(){
     set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     _ensure_preview_reader
     _stop_video_preview
+    _stop_test_signal
     # remember the seek offset: ffmpeg rebases its time= counter after -ss
     echo "${FP_RESUME:-00:00:00.00}" > "${VRECORD_PLAY_OFFSET_TMP}"
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_FILEPLAY_FIFO}"
@@ -423,6 +425,86 @@ _seek_frame_playback(){
     fi
 }
 
+# Video Preview tab: output color bars with a 1 kHz tone to the selected
+# device's output, converted on the fly to the selected standard, so the
+# device chain can be checked without a source or a file
+_start_test_signal(){
+    if [ -f "${VRECORD_TEST_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_TEST_PID_TMP}")" 2>/dev/null ; then
+        echo "test signal already playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
+    fi
+    if [ -f "${VRECORD_RECORD_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_RECORD_PID_TMP}")" 2>/dev/null ; then
+        echo "recording in progress - stop it first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    TEST_DEV="${PREVIEW_RELAY_DEV_CHOICE:-${DECKLINK_INPUT_CHOICE}}"
+    if [ -z "${TEST_DEV}" ] ; then
+        echo "select an output device first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    case "${STANDARD_CHOICE}" in
+        "NTSC") TS_SIZE="720:486" ; TS_RATE="30000/1001" ; TS_FIELD="bff" ;;
+        "PAL")  TS_SIZE="720:576" ; TS_RATE="25/1" ; TS_FIELD="tff" ;;
+        "23ps - 1080p23.98") TS_SIZE="1920:1080" ; TS_RATE="24000/1001" ; TS_FIELD="" ;;
+        "24ps - 1080p24")    TS_SIZE="1920:1080" ; TS_RATE="24/1" ; TS_FIELD="" ;;
+        "Hp25 - 1080p25")    TS_SIZE="1920:1080" ; TS_RATE="25/1" ; TS_FIELD="" ;;
+        "Hp29 - 1080p29.97") TS_SIZE="1920:1080" ; TS_RATE="30000/1001" ; TS_FIELD="" ;;
+        "Hp30 - 1080p30")    TS_SIZE="1920:1080" ; TS_RATE="30/1" ; TS_FIELD="" ;;
+        "Hi50 - 1080i50")    TS_SIZE="1920:1080" ; TS_RATE="25/1" ; TS_FIELD="tff" ;;
+        "Hi59 - 1080i59.94") TS_SIZE="1920:1080" ; TS_RATE="30000/1001" ; TS_FIELD="tff" ;;
+        "Hi60 - 1080i60")    TS_SIZE="1920:1080" ; TS_RATE="30/1" ; TS_FIELD="tff" ;;
+        "hp50 - 720p50")     TS_SIZE="1280:720" ; TS_RATE="50/1" ; TS_FIELD="" ;;
+        "hp59 - 720p59.94")  TS_SIZE="1280:720" ; TS_RATE="60000/1001" ; TS_FIELD="" ;;
+        "hp60 - 720p60")     TS_SIZE="1280:720" ; TS_RATE="60/1" ; TS_FIELD="" ;;
+        "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
+        *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
+    esac
+    TS_VF="scale=${TS_SIZE}"
+    if [ -n "${TS_FIELD}" ] ; then
+        TS_VF="${TS_VF},setfield=${TS_FIELD}"
+    fi
+    # the output device is shared: file playout and the relay preview yield
+    _stop_file_playback
+    _stop_video_preview
+    echo "test signal (bars + tone) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
+        -f lavfi -i "testsrc2=rate=${TS_RATE}" \
+        -f lavfi -i "sine=frequency=1000:sample_rate=48000" \
+        -map 0:v -map 1:a \
+        -vf "${TS_VF}" \
+        -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 \
+        -metadata comment="vrecord-test-signal" \
+        -f decklink "${TEST_DEV}" > "${VRECORD_TEST_LOG_TMP}" 2>&1 &
+    echo $! > "${VRECORD_TEST_PID_TMP}"
+}
+
+# Video Preview tab: stop the test signal output (kill -9: like file playout,
+# ffmpeg ignores SIGTERM for seconds while blocked on the decklink output)
+_stop_test_signal(){
+    if [ -f "${VRECORD_TEST_PID_TMP}" ] ; then
+        TEST_PID="$(cat "${VRECORD_TEST_PID_TMP}" 2>/dev/null)"
+        if [ -n "${TEST_PID}" ] && kill -0 "${TEST_PID}" 2>/dev/null ; then
+            kill -9 "${TEST_PID}" 2>/dev/null
+        fi
+        rm -f "${VRECORD_TEST_PID_TMP}"
+    fi
+    # belt and braces: catch an orphaned test signal from this or a dead session
+    pkill -9 -f "vrecord-test-signal" 2>/dev/null
+}
+
+# Video Preview tab: react to the test signal checkbox - start or stop the
+# bars-and-tone output so the device output matches the toggle immediately
+_apply_test_signal_state(){
+    if [ "${TEST_SIGNAL_OUTPUT_CHOICE}" = "true" ] ; then
+        _start_test_signal
+    else
+        if [ -f "${VRECORD_TEST_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_TEST_PID_TMP}")" 2>/dev/null ; then
+            _stop_test_signal
+            echo "test signal stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        fi
+    fi
+}
+
 # Video Preview tab: start a recording in a separate vrecord process so the
 # settings window stays open with its controls while capturing
 _start_gui_recording(){
@@ -444,6 +526,7 @@ _start_gui_recording(){
     fi
     _stop_video_preview
     _stop_file_playback
+    _stop_test_signal
     _update_config_file
     rm -f "${VRECORD_RECORD_LOG_TMP}"
     echo "starting recording..." > "${VRECORD_RECORD_STATUS_TMP}"
@@ -752,6 +835,11 @@ _refresh_video_preview_status(){
 }
 
 _refresh_file_playback_status(){
+    # the test signal owns the output status line while it runs
+    if [ -f "${VRECORD_TEST_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_TEST_PID_TMP}")" 2>/dev/null ; then
+        echo "test signal (bars + tone) playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
+    fi
     FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
     FP_DURHMS=""
     if [ -n "${FP_DUR}" ] ; then

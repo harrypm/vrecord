@@ -1688,6 +1688,14 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                             <variable export="false">fileplay_frame</variable>
                             <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
                         </entry>
+                        <text>
+                            <label>or check the device chain with a test signal</label>
+                        </text>
+                        <checkbox tooltip-text="Sends color bars with a 1 kHz tone to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the bars immediately.">
+                            <label>Test signal (bars + tone)</label>
+                            <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
+                            <action>_apply_test_signal_state</action>
+                        </checkbox>
                     </vbox>
                 </hbox>
                 <timer milliseconds="true" interval="33" visible="false">
@@ -2080,7 +2088,9 @@ _edit_mode(){
     echo "VRECORD_PLAY_POS_TMP=\"${VRECORD_PLAY_POS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_RECORD_PID_TMP=\"${VRECORD_RECORD_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_RECORD_STATUS_TMP=\"${VRECORD_RECORD_STATUS_TMP}\"" >> "${GTK_INC}"
-    echo "VRECORD_RECORD_LOG_TMP=\"${VRECORD_RECORD_LOG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_RECORD_LOG_TMP="${VRECORD_RECORD_LOG_TMP}"" >> "${GTK_INC}"
+    echo "VRECORD_TEST_PID_TMP=\"${VRECORD_TEST_PID_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_TEST_LOG_TMP=\"${VRECORD_TEST_LOG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PASS_PID_TMP=\"${VRECORD_PASS_PID_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_PASS_LOG_TMP=\"${VRECORD_PASS_LOG_TMP}\"" >> "${GTK_INC}"
     echo "INPUT_MEM_TMP=\"${INPUT_MEM_TMP}\"" >> "${GTK_INC}"
@@ -3638,6 +3648,7 @@ echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
 # (a new run gets fresh tmp files, so the old run's PID files are unreachable)
 pkill -9 -f "ffmpeg.*vrecord_preview.fifo" 2>/dev/null
 pkill -9 -f "vrecord-preview-reader" 2>/dev/null
+pkill -9 -f "vrecord-test-signal" 2>/dev/null
 VRECORD_FILEPLAY_PID_TMP="$(_maketemp .vrecord_fileplay.pid)"
 VRECORD_FILEPLAY_STATUS_TMP="$(_maketemp .vrecord_fileplay.status.txt)"
 VRECORD_FILEPLAY_LOG_TMP="$(_maketemp .vrecord_fileplay.log.txt)"
@@ -3651,6 +3662,8 @@ echo "0" > "${VRECORD_FILEPLAY_FRAME_TMP}"
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"
+VRECORD_TEST_PID_TMP="$(_maketemp .vrecord_test.pid)"
+VRECORD_TEST_LOG_TMP="$(_maketemp .vrecord_test.log.txt)"
 VRECORD_PLAY_POS_TMP="$(_maketemp .vrecord_fileplay.pos.txt)"
 rm -f "${VRECORD_PLAY_POS_TMP}"
 VRECORD_RECORD_PID_TMP="$(_maketemp .vrecord_recording.pid)"
@@ -3861,9 +3874,10 @@ while [[ "${RUNTYPE}" = "edit" ]] ; do
     STARTUP_VIEW="INPUTSETTINGS"
     _edit_mode
 done
-# the capture device can only be opened by one process at a time, so stop the settings window preview and file playback before capturing
+# the capture device can only be opened by one process at a time, so stop the settings window preview, file playback, and test signal before capturing
 _stop_video_preview
 _stop_file_playback
+_stop_test_signal
 
 _start_mediaconch_policy
 _add_mediaconch_rule_set "${CONTAINER_GENERAL_TEST}"
