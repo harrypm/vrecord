@@ -372,6 +372,11 @@ _start_file_playback(){
         fi
     fi
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}"
+    # resolve the preview reader BEFORE building the ffmpeg arguments: the
+    # fifo output branch tests PREVIEW_READER, and building the args first
+    # left it unset, capping the preview (and by backpressure the whole
+    # playout, the decklink output included) at the 15 fps fallback rate
+    _ensure_preview_reader
     set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -stats -stats_period 0.033 -re
     if [ -n "${FP_RESUME}" ] ; then
         set -- "$@" -ss "${FP_RESUME}"
@@ -396,7 +401,6 @@ _start_file_playback(){
     else
         set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     fi
-    _ensure_preview_reader
     _stop_video_preview
     _stop_test_signal
     # remember the seek offset: ffmpeg rebases its time= counter after -ss
