@@ -2742,6 +2742,249 @@ _lookup_choice(){
             SET_COLOR_PRIMARIES="bt709"
             SET_COLOR_TRC="bt709"
             SET_COLORSPACE="bt709" ;;
+        "Hp50 - 1080p50")
+            STANDARD="Hp50"
+            DECKLINK_FPS="50000/1000"
+            SIG_GEN_SIZE="1920x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "Hp59 - 1080p59.94")
+            STANDARD="Hp59"
+            DECKLINK_FPS="60000/1001"
+            SIG_GEN_SIZE="1920x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "Hp60 - 1080p60")
+            STANDARD="Hp60"
+            DECKLINK_FPS="60000/1000"
+            SIG_GEN_SIZE="1920x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d23 - 2048p23.98")
+            STANDARD="2d23"
+            DECKLINK_FPS="24000/1001"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d24 - 2048p24")
+            STANDARD="2d24"
+            DECKLINK_FPS="24000/1000"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d25 - 2048p25")
+            STANDARD="2d25"
+            DECKLINK_FPS="25000/1000"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d29 - 2048p29.97")
+            STANDARD="2d29"
+            DECKLINK_FPS="30000/1001"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d30 - 2048p30")
+            STANDARD="2d30"
+            DECKLINK_FPS="30000/1000"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d50 - 2048p50")
+            STANDARD="2d50"
+            DECKLINK_FPS="50000/1000"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d59 - 2048p59.94")
+            STANDARD="2d59"
+            DECKLINK_FPS="60000/1001"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "2d60 - 2048p60")
+            STANDARD="2d60"
+            DECKLINK_FPS="60000/1000"
+            SIG_GEN_SIZE="2048x1080"
+            FFV1_SLICES=128
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k23 - UHD 23.98")
+            STANDARD="4k23"
+            DECKLINK_FPS="24000/1001"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k24 - UHD 24")
+            STANDARD="4k24"
+            DECKLINK_FPS="24000/1000"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k25 - UHD 25")
+            STANDARD="4k25"
+            DECKLINK_FPS="25000/1000"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k29 - UHD 29.97")
+            STANDARD="4k29"
+            DECKLINK_FPS="30000/1001"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k30 - UHD 30")
+            STANDARD="4k30"
+            DECKLINK_FPS="30000/1000"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k50 - UHD 50")
+            STANDARD="4k50"
+            DECKLINK_FPS="50000/1000"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k59 - UHD 59.94")
+            STANDARD="4k59"
+            DECKLINK_FPS="60000/1001"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4k60 - UHD 60")
+            STANDARD="4k60"
+            DECKLINK_FPS="60000/1000"
+            SIG_GEN_SIZE="3840x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d23 - 4K DCI 23.98")
+            STANDARD="4d23"
+            DECKLINK_FPS="24000/1001"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d24 - 4K DCI 24")
+            STANDARD="4d24"
+            DECKLINK_FPS="24000/1000"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d25 - 4K DCI 25")
+            STANDARD="4d25"
+            DECKLINK_FPS="25000/1000"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d29 - 4K DCI 29.97")
+            STANDARD="4d29"
+            DECKLINK_FPS="30000/1001"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d30 - 4K DCI 30")
+            STANDARD="4d30"
+            DECKLINK_FPS="30000/1000"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d50 - 4K DCI 50")
+            STANDARD="4d50"
+            DECKLINK_FPS="50000/1000"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d59 - 4K DCI 59.94")
+            STANDARD="4d59"
+            DECKLINK_FPS="60000/1001"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
+        "4d60 - 4K DCI 60")
+            STANDARD="4d60"
+            DECKLINK_FPS="60000/1000"
+            SIG_GEN_SIZE="4096x2160"
+            FFV1_SLICES=512
+            SIG_INTERLACEMENT="prog"
+            SET_COLOR_PRIMARIES="bt709"
+            SET_COLOR_TRC="bt709"
+            SET_COLORSPACE="bt709" ;;
         # aspect ratio options
         "4/3")
             if [[ "${STANDARD}" = "ntsc" ]] ; then
@@ -3815,7 +4058,7 @@ fi
 
 # list of selections for each vrecord option
 VIDEO_INPUT_OPTIONS=("SDI" "HDMI" "Composite" "Component" "S-Video")
-TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE Bars (75%)" "SMPTE Bars (100%)" "EBU Bars (100%)" "Test Pattern" "RGB Bars" "YUV Bars")
+TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE Bars (75%)" "SMPTE Bars (100%)" "EBU Bars (100%)" "FFmpeg Bars" "Test Pattern" "RGB Bars" "YUV Bars")
 TEST_SIGNAL_AUDIO_OPTIONS=("1 kHz Tone" "Stereo 1k/440" "Silence")
 AUDIO_INPUT_OPTIONS=("Analog" "SDI Embedded Audio" "Digital Audio (AES/EBU)")
 CONTAINER_OPTIONS=("QuickTime" "Matroska" "AVI" "MXF" "MP4")
@@ -3834,7 +4077,7 @@ CHANNEL_MAPPING_OPTIONS=("2 Stereo Tracks (Channels 1 & 2 -> 1st Track Stereo, C
 if [[ ${HD_CHOICE} != "true" ]] ; then
   STANDARD_OPTIONS=("NTSC" "PAL")
 else
-  STANDARD_OPTIONS=("NTSC" "PAL" "23ps - 1080p23.98" "24ps - 1080p24" "Hp25 - 1080p25" "Hp29 - 1080p29.97" "Hp30 - 1080p30" "Hi50 - 1080i50" "Hi59 - 1080i59.94" "Hi60 - 1080i60" "hp50 - 720p50" "hp59 - 720p59.94" "hp60 - 720p60")
+  STANDARD_OPTIONS=("NTSC" "PAL" "23ps - 1080p23.98" "24ps - 1080p24" "Hp25 - 1080p25" "Hp29 - 1080p29.97" "Hp30 - 1080p30" "Hi50 - 1080i50" "Hi59 - 1080i59.94" "Hi60 - 1080i60" "Hp50 - 1080p50" "Hp59 - 1080p59.94" "Hp60 - 1080p60" "hp50 - 720p50" "hp59 - 720p59.94" "hp60 - 720p60" "2d23 - 2048p23.98" "2d24 - 2048p24" "2d25 - 2048p25" "2d29 - 2048p29.97" "2d30 - 2048p30" "2d50 - 2048p50" "2d59 - 2048p59.94" "2d60 - 2048p60" "4k23 - UHD 23.98" "4k24 - UHD 24" "4k25 - UHD 25" "4k29 - UHD 29.97" "4k30 - UHD 30" "4k50 - UHD 50" "4k59 - UHD 59.94" "4k60 - UHD 60" "4d23 - 4K DCI 23.98" "4d24 - 4K DCI 24" "4d25 - 4K DCI 25" "4d29 - 4K DCI 29.97" "4d30 - 4K DCI 30" "4d50 - 4K DCI 50" "4d59 - 4K DCI 59.94" "4d60 - 4K DCI 60")
 fi
 # STANDARD_OPTIONS list must be synced with Resources/vrecord_functions in _get_format_list
 EMBED_LOGS_OPTIONS=("Yes" "No")

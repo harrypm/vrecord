@@ -74,7 +74,7 @@ _write_black_ppm(){
     BK_H=324
     case "${STANDARD_CHOICE}" in
         "PAL")                    BK_H=384 ;;
-        23ps*|24ps*|Hp*|Hi*|hp*)  BK_H=270 ;;
+        23ps*|24ps*|Hp*|Hi*|hp*|2d*|4k*|4d*)  BK_H=270 ;;
     esac
     rm -f "${1}"
     { printf "P6\n%s %s\n255\n" "${BK_W}" "${BK_H}"
@@ -155,6 +155,33 @@ _start_video_preview(){
         "hp50 - 720p50")       PREVIEW_FORMAT="hp50" ; PREVIEW_SRCW=1280 ; PREVIEW_SRCH=720  ;;
         "hp59 - 720p59.94")    PREVIEW_FORMAT="hp59" ; PREVIEW_SRCW=1280 ; PREVIEW_SRCH=720  ;;
         "hp60 - 720p60")       PREVIEW_FORMAT="hp60" ; PREVIEW_SRCW=1280 ; PREVIEW_SRCH=720  ;;
+        "Hp50 - 1080p50")      PREVIEW_FORMAT="Hp50" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hp59 - 1080p59.94")   PREVIEW_FORMAT="Hp59" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "Hp60 - 1080p60")      PREVIEW_FORMAT="Hp60" ; PREVIEW_SRCW=1920 ; PREVIEW_SRCH=1080 ;;
+        "2d23 - 2048p23.98")   PREVIEW_FORMAT="2d23" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d24 - 2048p24")      PREVIEW_FORMAT="2d24" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d25 - 2048p25")      PREVIEW_FORMAT="2d25" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d29 - 2048p29.97")   PREVIEW_FORMAT="2d29" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d30 - 2048p30")      PREVIEW_FORMAT="2d30" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d50 - 2048p50")      PREVIEW_FORMAT="2d50" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d59 - 2048p59.94")   PREVIEW_FORMAT="2d59" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "2d60 - 2048p60")      PREVIEW_FORMAT="2d60" ; PREVIEW_SRCW=2048 ; PREVIEW_SRCH=1080 ;;
+        "4k23 - UHD 23.98")    PREVIEW_FORMAT="4k23" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k24 - UHD 24")       PREVIEW_FORMAT="4k24" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k25 - UHD 25")       PREVIEW_FORMAT="4k25" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k29 - UHD 29.97")    PREVIEW_FORMAT="4k29" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k30 - UHD 30")       PREVIEW_FORMAT="4k30" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k50 - UHD 50")       PREVIEW_FORMAT="4k50" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k59 - UHD 59.94")    PREVIEW_FORMAT="4k59" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4k60 - UHD 60")       PREVIEW_FORMAT="4k60" ; PREVIEW_SRCW=3840 ; PREVIEW_SRCH=2160 ;;
+        "4d23 - 4K DCI 23.98") PREVIEW_FORMAT="4d23" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d24 - 4K DCI 24")    PREVIEW_FORMAT="4d24" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d25 - 4K DCI 25")    PREVIEW_FORMAT="4d25" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d29 - 4K DCI 29.97") PREVIEW_FORMAT="4d29" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d30 - 4K DCI 30")    PREVIEW_FORMAT="4d30" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d50 - 4K DCI 50")    PREVIEW_FORMAT="4d50" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d59 - 4K DCI 59.94") PREVIEW_FORMAT="4d59" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
+        "4d60 - 4K DCI 60")    PREVIEW_FORMAT="4d60" ; PREVIEW_SRCW=4096 ; PREVIEW_SRCH=2160 ;;
         "")     echo "select a standard on the Decklink tab first" > "${VRECORD_PREVIEW_STATUS_TMP}" ; return 1 ;;
         *)      echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_PREVIEW_STATUS_TMP}" ; return 1 ;;
     esac
@@ -306,6 +333,33 @@ _start_file_playback(){
                 1280x720@50/1)       FP_FORMAT_CODE="hp50" ;;
                 1280x720@60000/1001) FP_FORMAT_CODE="hp59" ;;
                 1280x720@60/1)       FP_FORMAT_CODE="hp60" ;;
+                1920x1080@50/1)      FP_FORMAT_CODE="Hp50" ;;
+                1920x1080@60000/1001) FP_FORMAT_CODE="Hp59" ;;
+                1920x1080@60/1)      FP_FORMAT_CODE="Hp60" ;;
+                2048x1080@24000/1001) FP_FORMAT_CODE="2d23" ;;
+                2048x1080@24/1)      FP_FORMAT_CODE="2d24" ;;
+                2048x1080@25/1)      FP_FORMAT_CODE="2d25" ;;
+                2048x1080@30000/1001) FP_FORMAT_CODE="2d29" ;;
+                2048x1080@30/1)      FP_FORMAT_CODE="2d30" ;;
+                2048x1080@50/1)      FP_FORMAT_CODE="2d50" ;;
+                2048x1080@60000/1001) FP_FORMAT_CODE="2d59" ;;
+                2048x1080@60/1)      FP_FORMAT_CODE="2d60" ;;
+                3840x2160@24000/1001) FP_FORMAT_CODE="4k23" ;;
+                3840x2160@24/1)      FP_FORMAT_CODE="4k24" ;;
+                3840x2160@25/1)      FP_FORMAT_CODE="4k25" ;;
+                3840x2160@30000/1001) FP_FORMAT_CODE="4k29" ;;
+                3840x2160@30/1)      FP_FORMAT_CODE="4k30" ;;
+                3840x2160@50/1)      FP_FORMAT_CODE="4k50" ;;
+                3840x2160@60000/1001) FP_FORMAT_CODE="4k59" ;;
+                3840x2160@60/1)      FP_FORMAT_CODE="4k60" ;;
+                4096x2160@24000/1001) FP_FORMAT_CODE="4d23" ;;
+                4096x2160@24/1)      FP_FORMAT_CODE="4d24" ;;
+                4096x2160@25/1)      FP_FORMAT_CODE="4d25" ;;
+                4096x2160@30000/1001) FP_FORMAT_CODE="4d29" ;;
+                4096x2160@30/1)      FP_FORMAT_CODE="4d30" ;;
+                4096x2160@50/1)      FP_FORMAT_CODE="4d50" ;;
+                4096x2160@60000/1001) FP_FORMAT_CODE="4d59" ;;
+                4096x2160@60/1)      FP_FORMAT_CODE="4d60" ;;
                 *)                   FP_FORMAT_CODE="" ;;
             esac
         fi
@@ -326,6 +380,33 @@ _start_file_playback(){
         "hp50 - 720p50")     FP_SIZE="1280:720" ; FP_RATE="50/1" ; FP_FIELD="" ; FP_FORMAT_CODE="hp50" ;;
         "hp59 - 720p59.94")  FP_SIZE="1280:720" ; FP_RATE="60000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="hp59" ;;
         "hp60 - 720p60")     FP_SIZE="1280:720" ; FP_RATE="60/1" ; FP_FIELD="" ; FP_FORMAT_CODE="hp60" ;;
+        "Hp50 - 1080p50")    FP_SIZE="1920:1080" ; FP_RATE="50/1" ; FP_FIELD="" ; FP_FORMAT_CODE="Hp50" ;;
+        "Hp59 - 1080p59.94") FP_SIZE="1920:1080" ; FP_RATE="60000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="Hp59" ;;
+        "Hp60 - 1080p60")    FP_SIZE="1920:1080" ; FP_RATE="60/1" ; FP_FIELD="" ; FP_FORMAT_CODE="Hp60" ;;
+        "2d23 - 2048p23.98")  FP_SIZE="2048:1080" ; FP_RATE="24000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="2d23" ;;
+        "2d24 - 2048p24")    FP_SIZE="2048:1080" ; FP_RATE="24/1" ; FP_FIELD="" ; FP_FORMAT_CODE="2d24" ;;
+        "2d25 - 2048p25")    FP_SIZE="2048:1080" ; FP_RATE="25/1" ; FP_FIELD="" ; FP_FORMAT_CODE="2d25" ;;
+        "2d29 - 2048p29.97") FP_SIZE="2048:1080" ; FP_RATE="30000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="2d29" ;;
+        "2d30 - 2048p30")    FP_SIZE="2048:1080" ; FP_RATE="30/1" ; FP_FIELD="" ; FP_FORMAT_CODE="2d30" ;;
+        "2d50 - 2048p50")    FP_SIZE="2048:1080" ; FP_RATE="50/1" ; FP_FIELD="" ; FP_FORMAT_CODE="2d50" ;;
+        "2d59 - 2048p59.94") FP_SIZE="2048:1080" ; FP_RATE="60000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="2d59" ;;
+        "2d60 - 2048p60")    FP_SIZE="2048:1080" ; FP_RATE="60/1" ; FP_FIELD="" ; FP_FORMAT_CODE="2d60" ;;
+        "4k23 - UHD 23.98")  FP_SIZE="3840:2160" ; FP_RATE="24000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="4k23" ;;
+        "4k24 - UHD 24")     FP_SIZE="3840:2160" ; FP_RATE="24/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4k24" ;;
+        "4k25 - UHD 25")     FP_SIZE="3840:2160" ; FP_RATE="25/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4k25" ;;
+        "4k29 - UHD 29.97")  FP_SIZE="3840:2160" ; FP_RATE="30000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="4k29" ;;
+        "4k30 - UHD 30")     FP_SIZE="3840:2160" ; FP_RATE="30/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4k30" ;;
+        "4k50 - UHD 50")     FP_SIZE="3840:2160" ; FP_RATE="50/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4k50" ;;
+        "4k59 - UHD 59.94")  FP_SIZE="3840:2160" ; FP_RATE="60000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="4k59" ;;
+        "4k60 - UHD 60")     FP_SIZE="3840:2160" ; FP_RATE="60/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4k60" ;;
+        "4d23 - 4K DCI 23.98") FP_SIZE="4096:2160" ; FP_RATE="24000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="4d23" ;;
+        "4d24 - 4K DCI 24")  FP_SIZE="4096:2160" ; FP_RATE="24/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4d24" ;;
+        "4d25 - 4K DCI 25")  FP_SIZE="4096:2160" ; FP_RATE="25/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4d25" ;;
+        "4d29 - 4K DCI 29.97") FP_SIZE="4096:2160" ; FP_RATE="30000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="4d29" ;;
+        "4d30 - 4K DCI 30")  FP_SIZE="4096:2160" ; FP_RATE="30/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4d30" ;;
+        "4d50 - 4K DCI 50")  FP_SIZE="4096:2160" ; FP_RATE="50/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4d50" ;;
+        "4d59 - 4K DCI 59.94") FP_SIZE="4096:2160" ; FP_RATE="60000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="4d59" ;;
+        "4d60 - 4K DCI 60")  FP_SIZE="4096:2160" ; FP_RATE="60/1" ; FP_FIELD="" ; FP_FORMAT_CODE="4d60" ;;
         "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
         *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
     esac
@@ -523,6 +604,33 @@ _start_test_signal(){
         "hp50 - 720p50")     TS_SIZE="1280:720" ; TS_RATE="50/1" ; TS_FIELD="" ;;
         "hp59 - 720p59.94")  TS_SIZE="1280:720" ; TS_RATE="60000/1001" ; TS_FIELD="" ;;
         "hp60 - 720p60")     TS_SIZE="1280:720" ; TS_RATE="60/1" ; TS_FIELD="" ;;
+        "Hp50 - 1080p50")    TS_SIZE="1920:1080" ; TS_RATE="50/1" ; TS_FIELD="" ;;
+        "Hp59 - 1080p59.94") TS_SIZE="1920:1080" ; TS_RATE="60000/1001" ; TS_FIELD="" ;;
+        "Hp60 - 1080p60")    TS_SIZE="1920:1080" ; TS_RATE="60/1" ; TS_FIELD="" ;;
+        "2d23 - 2048p23.98")  TS_SIZE="2048:1080" ; TS_RATE="24000/1001" ; TS_FIELD="" ;;
+        "2d24 - 2048p24")    TS_SIZE="2048:1080" ; TS_RATE="24/1" ; TS_FIELD="" ;;
+        "2d25 - 2048p25")    TS_SIZE="2048:1080" ; TS_RATE="25/1" ; TS_FIELD="" ;;
+        "2d29 - 2048p29.97") TS_SIZE="2048:1080" ; TS_RATE="30000/1001" ; TS_FIELD="" ;;
+        "2d30 - 2048p30")    TS_SIZE="2048:1080" ; TS_RATE="30/1" ; TS_FIELD="" ;;
+        "2d50 - 2048p50")    TS_SIZE="2048:1080" ; TS_RATE="50/1" ; TS_FIELD="" ;;
+        "2d59 - 2048p59.94") TS_SIZE="2048:1080" ; TS_RATE="60000/1001" ; TS_FIELD="" ;;
+        "2d60 - 2048p60")    TS_SIZE="2048:1080" ; TS_RATE="60/1" ; TS_FIELD="" ;;
+        "4k23 - UHD 23.98")  TS_SIZE="3840:2160" ; TS_RATE="24000/1001" ; TS_FIELD="" ;;
+        "4k24 - UHD 24")     TS_SIZE="3840:2160" ; TS_RATE="24/1" ; TS_FIELD="" ;;
+        "4k25 - UHD 25")     TS_SIZE="3840:2160" ; TS_RATE="25/1" ; TS_FIELD="" ;;
+        "4k29 - UHD 29.97")  TS_SIZE="3840:2160" ; TS_RATE="30000/1001" ; TS_FIELD="" ;;
+        "4k30 - UHD 30")     TS_SIZE="3840:2160" ; TS_RATE="30/1" ; TS_FIELD="" ;;
+        "4k50 - UHD 50")     TS_SIZE="3840:2160" ; TS_RATE="50/1" ; TS_FIELD="" ;;
+        "4k59 - UHD 59.94")  TS_SIZE="3840:2160" ; TS_RATE="60000/1001" ; TS_FIELD="" ;;
+        "4k60 - UHD 60")     TS_SIZE="3840:2160" ; TS_RATE="60/1" ; TS_FIELD="" ;;
+        "4d23 - 4K DCI 23.98") TS_SIZE="4096:2160" ; TS_RATE="24000/1001" ; TS_FIELD="" ;;
+        "4d24 - 4K DCI 24")  TS_SIZE="4096:2160" ; TS_RATE="24/1" ; TS_FIELD="" ;;
+        "4d25 - 4K DCI 25")  TS_SIZE="4096:2160" ; TS_RATE="25/1" ; TS_FIELD="" ;;
+        "4d29 - 4K DCI 29.97") TS_SIZE="4096:2160" ; TS_RATE="30000/1001" ; TS_FIELD="" ;;
+        "4d30 - 4K DCI 30")  TS_SIZE="4096:2160" ; TS_RATE="30/1" ; TS_FIELD="" ;;
+        "4d50 - 4K DCI 50")  TS_SIZE="4096:2160" ; TS_RATE="50/1" ; TS_FIELD="" ;;
+        "4d59 - 4K DCI 59.94") TS_SIZE="4096:2160" ; TS_RATE="60000/1001" ; TS_FIELD="" ;;
+        "4d60 - 4K DCI 60")  TS_SIZE="4096:2160" ; TS_RATE="60/1" ; TS_FIELD="" ;;
         "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
         *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
     esac
@@ -531,11 +639,21 @@ _start_test_signal(){
     # full-amplitude SMPTE variant are the same seven-stripe layout, drawn
     # at the target size so no scaling stage is needed
     TS_FULLFIELD="drawbox=x=0:w=iw*1/7:h=ih:color=white:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih:color=yellow:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih:color=cyan:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih:color=green:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih:color=magenta:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih:color=red:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih:color=blue:thickness=fill"
+    # SMPTE EG 1 / RP 219-style 75% bars: 75% gray/yellow/cyan/green/magenta/
+    # red/blue on the top 2/3, the reverse castellation row (blue, magenta,
+    # cyan, 75% gray on black) on the next 1/12, and -I / 75% white / +Q /
+    # black with the 3.5-7.5-11.5 IRE PLUGE trio under the magenta column
+    # on the bottom 1/4
+    TS_SMPTE75="drawbox=x=0:w=iw*1/7:h=ih*2/3:color=0xBFBFBF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih*2/3:color=0xBFBF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih*2/3:color=0x00BFBF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih*2/3:color=0x00BF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih*2/3:color=0xBF00BF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih*2/3:color=0xBF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih*2/3:color=0x0000BF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x0000BF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xBF00BF:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x00BFBF:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xBFBFBF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x00214D:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x32006A:thickness=fill,drawbox=x=iw*12/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x090909:thickness=fill,drawbox=x=iw*13/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x131313:thickness=fill,drawbox=x=iw*14/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x1D1D1D:thickness=fill"
     TS_VF="scale=${TS_SIZE}"
     case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)}" in
+        "SMPTE Bars (75%)")
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_SMPTE75}" ;;
         "SMPTE Bars (100%)"|"EBU Bars (100%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_FULLFIELD}" ;;
+        "FFmpeg Bars")  TS_VSRC="testsrc=rate=${TS_RATE}" ;;
         "Test Pattern") TS_VSRC="testsrc2=rate=${TS_RATE}" ;;
         "RGB Bars")     TS_VSRC="rgbtestsrc=rate=${TS_RATE}" ;;
         "YUV Bars")     TS_VSRC="yuvtestsrc=rate=${TS_RATE}" ;;
@@ -1236,7 +1354,7 @@ _get_format_list(){
       echo "NTSC
 PAL"
     else
-        echo "NTSC
+      echo "NTSC
 PAL
 23ps - 1080p23.98
 24ps - 1080p24
@@ -1246,9 +1364,36 @@ Hp30 - 1080p30
 Hi50 - 1080i50
 Hi59 - 1080i59.94
 Hi60 - 1080i60
+Hp50 - 1080p50
+Hp59 - 1080p59.94
+Hp60 - 1080p60
 hp50 - 720p50
 hp59 - 720p59.94
-hp60 - 720p60"
+hp60 - 720p60
+2d23 - 2048p23.98
+2d24 - 2048p24
+2d25 - 2048p25
+2d29 - 2048p29.97
+2d30 - 2048p30
+2d50 - 2048p50
+2d59 - 2048p59.94
+2d60 - 2048p60
+4k23 - UHD 23.98
+4k24 - UHD 24
+4k25 - UHD 25
+4k29 - UHD 29.97
+4k30 - UHD 30
+4k50 - UHD 50
+4k59 - UHD 59.94
+4k60 - UHD 60
+4d23 - 4K DCI 23.98
+4d24 - 4K DCI 24
+4d25 - 4K DCI 25
+4d29 - 4K DCI 29.97
+4d30 - 4K DCI 30
+4d50 - 4K DCI 50
+4d59 - 4K DCI 59.94
+4d60 - 4K DCI 60"
     fi
 }
 
