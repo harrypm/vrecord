@@ -390,13 +390,12 @@ _start_file_playback(){
     else
         set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
     fi
-    # feed to the device output: an explicit format code selects the card mode
-    # deterministically; -vf is only passed when a filter chain was composed
-    if [ -n "${FP_VF}" ] && [ -n "${FP_FORMAT_CODE}" ] ; then
-        set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -format_code "${FP_FORMAT_CODE}" -f decklink "${FILEPLAY_DEV}"
-    elif [ -n "${FP_FORMAT_CODE}" ] ; then
-        set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -format_code "${FP_FORMAT_CODE}" -f decklink "${FILEPLAY_DEV}"
-    elif [ -n "${FP_VF}" ] ; then
+    # feed to the device output: frame-level field marking (setfield) plus the
+    # card's own mode autodetection. Passing an explicit format_code makes the
+    # muxer validate the stream's container-level field order, which rawvideo
+    # pipelines leave unset even when the frames are marked, and the whole
+    # output is rejected with 'Unsupported video size, framerate or field order'
+    if [ -n "${FP_VF}" ] ; then
         set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     else
         set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
