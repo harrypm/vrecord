@@ -182,11 +182,15 @@ pushd "${release_directory}/"
     popd
 
     pushd xmlstarlet
-        # Apply Gentoo patch to fix build with libxml2 >= 2.14
-        curl -L "https://raw.githubusercontent.com/gentoo/gentoo/refs/heads/master/app-text/xmlstarlet/files/xmlstarlet-1.6.1-libxml2-2.14.0-compile.patch" | patch -p1
-        curl -L "https://raw.githubusercontent.com/gentoo/gentoo/refs/heads/master/app-text/xmlstarlet/files/xmlstarlet-1.6.1-libxml2-2.13-stdin.patch" | patch -p1
-        curl -L "https://raw.githubusercontent.com/gentoo/gentoo/refs/heads/master/app-text/xmlstarlet/files/xmlstarlet-1.6.1-clang16.patch" | patch -p1
-        curl -L "https://raw.githubusercontent.com/gentoo/gentoo/refs/heads/master/app-text/xmlstarlet/files/xmlstarlet-1.6.1-clang17.patch" | patch -p1
+        # Apply Gentoo patches (vendored in Release/patches/xmlstarlet, SHA512
+        # verified against the Gentoo Manifest) to fix compilation with
+        # clang 16/17 and libxml2 >= 2.13. Gentoo removed app-text/xmlstarlet
+        # from its repo, so the former live URLs now 404.
+        # See https://bugs.gentoo.org/927838, 944765, 955674
+        patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-clang16.patch"
+        patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-clang17.patch"
+        patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-libxml2-2.14.0-compile.patch"
+        patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-libxml2-2.13-stdin.patch"
         ./configure --enable-static-libs --disable-build-docs --with-libxml-src="${release_directory}/libxml2" --with-libxslt-src="${release_directory}/libxslt"
         make || true # Build fails on docs despite --disable-build-docs, force the build to be marked as successful
     popd
@@ -304,6 +308,10 @@ pushd "${release_directory}/"
 
     sleep 1
 
+    # Finder styling is best-effort: Apple Events to Finder are blocked in
+    # headless/CI/background contexts (AppleEvent timed out, -1712) and can
+    # prompt for Automation permission interactively. Fall back to an
+    # unstyled dmg rather than failing the whole release.
     echo '
         tell application "Finder"
             tell disk "vrecord"
@@ -318,9 +326,13 @@ pushd "${release_directory}/"
                 close
             end tell
         end tell
-    ' | osascript
+    ' | osascript || echo "warning: could not style dmg via Finder (AppleEvent blocked/unavailable); creating unstyled dmg"
 
-    hdiutil detach "/Volumes/vrecord"
+    # Finder may still hold the volume busy after styling; retry then force.
+    hdiutil detach "/Volumes/vrecord" || {
+        sleep 2
+        hdiutil detach "/Volumes/vrecord" || hdiutil detach -force "/Volumes/vrecord"
+    }
     hdiutil convert "${tmp_path}/${tmp_dmg}" -format UDBZ -o "vrecord_${version}_Mac.dmg"
 popd
 

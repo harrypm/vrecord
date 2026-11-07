@@ -28,9 +28,16 @@ if [ -x "$ROOT/bin/vrecord" ] || ./Release_Mac.sh 2>&1; then
     # copy the built files from vrecord_ROOT
     cp -a "$ROOT/bin/"* "$MACOS/" 2>/dev/null || true
     cp -a "$ROOT/share/vrecord/Resources/"* "$RESOURCES/share/vrecord/Resources/" 2>/dev/null || true
-    # bundled libs
-    cp -a "$ROOT/lib/vrecord/lib/"* "$FRAMEWORKS/" 2>/dev/null || true
+    # Mirror the pkg layout (bin/, lib/, app/, share/) under Resources so
+    # relative references resolve: gtkdialog links its GTK dylibs via
+    # @loader_path/../lib, bin/mpv is a symlink to ../app/mpv.app, and
+    # cowsay looks for ../share/cowsay. (A previous copy into Frameworks/
+    # left gtkdialog unable to load its libraries.)
+    mkdir -p "$RESOURCES/lib" "$RESOURCES/app" "$RESOURCES/share"
     cp -a "$ROOT/lib/vrecord/bin/"* "$RESOURCES/bin/" 2>/dev/null || true
+    cp -a "$ROOT/lib/vrecord/lib/"* "$RESOURCES/lib/" 2>/dev/null || true
+    cp -a "$ROOT/lib/vrecord/app/"* "$RESOURCES/app/" 2>/dev/null || true
+    cp -a "$ROOT/lib/vrecord/share/"* "$RESOURCES/share/" 2>/dev/null || true
 else
     echo "::warning::Release_Mac.sh failed - building minimal .app from brew deps"
     # fallback: local repo scripts/resources + brew-installed runtime deps
@@ -50,7 +57,13 @@ else
         BINPATH="$(command -v "$BIN" 2>/dev/null || true)"
         [ -n "$BINPATH" ] && cp "$BINPATH" "$RESOURCES/bin/"
     done
-    cat > "$LAUNCHER_SRC" << 'LAUNCHER'
+fi
+
+# Always build the launcher (Info.plist sets CFBundleExecutable to it):
+# it prepends the bundled Resources/bin to PATH and execs the vrecord script.
+# This previously ran only in the brew-fallback branch, leaving the .app
+# unlaunchable after a successful full release build.
+cat > "$LAUNCHER_SRC" << 'LAUNCHER'
 #include <libgen.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
@@ -107,8 +120,8 @@ int main(int argc, char *argv[]) {
     return 1;
 }
 LAUNCHER
-    clang -Os -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
-fi
+clang -Os -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
+
 ln -snf ../Resources/share/vrecord/Resources "$MACOS/Resources"
 chmod +x "$MACOS/vrecord" "$MACOS/vplay" "$MACOS/vtest"
 if [ -f "$MACOS/vrecord-launcher" ]; then

@@ -6,3 +6,25 @@ Release/deb-pkg/
 Release/AppDir/
 Release/*.deb
 Release/*.AppImage
+
+# local build outputs (Release/Release_Mac.sh, build-mac-app.sh)
+Release/vrecord_ROOT/
+Release/mediainfo_ROOT/
+Release/mediaconch_ROOT/
+Release/dvrescue_ROOT/
+Release/gnuplot_ROOT/
+Release/libxml2/
+Release/libxslt/
+Release/xmlstarlet/
+Release/deckcontrol/
+Release/decklink-sdk-headers/
+Release/timecodexml/
+Release/gtkdialog/
+Release/mpv.app/
+Release/documentation/
+Release/*.dmg
+Release/*.pkg
+Release/*.zip
+Release/*.tar.xz
+Release/*.tar.gz
+Release/vrecord.entitlements
