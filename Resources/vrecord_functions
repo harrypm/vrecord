@@ -604,6 +604,67 @@ _seek_scale_playback(){
     fi
 }
 
+# Video Preview tab: transport step - jog or shuttle the playout position
+# by a frame count (the transport buttons step 1 or 100 frames): while
+# playing it seeks by the offset and keeps playing; while paused it jogs
+# the held position and renders that frame into the output pane
+_step_playback(){
+    FP_STEP="${1:-0}"
+    FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
+    FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
+    if [ -z "${FP_DUR}" ] || [ -z "${FP_FPS}" ] ; then
+        echo "frame range unknown - play the file once first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 1
+    fi
+    # base position: the live frame while playing, otherwise the held cue
+    FP_BASE=""
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+        if [ -n "${FP_STATTIME}" ] ; then
+            FP_BASE="$(_fp_abs_time "${FP_STATTIME}")"
+        fi
+    fi
+    if [ -z "${FP_BASE}" ] ; then
+        FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
+        if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
+            FP_BASE="$(echo "${FP_POS}" | cut -d'|' -f2)"
+        else
+            FP_BASE="00:00:00.00"
+        fi
+    fi
+    FP_BASESEC="$(echo "${FP_BASE}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
+    FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEP}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { v = s + n / r ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
+    FP_HMS="$(awk -v s="${FP_NEWSEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
+    FP_TC="$(_fp_tc "${FP_NEWSEC}")"
+    echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
+    echo "${FP_TC}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+    awk -v t="${FP_HMS}" -v d="${FP_DUR}" 'BEGIN { n = split(t, a, ":") ; s = (n >= 3) ? a[1]*3600 + a[2]*60 + a[3] : t + 0 ; v = int(s * 10000 / d + 0.5) ; if (v > 10000) v = 10000 ; printf "%d", v }' > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        _halt_file_playback
+        _start_file_playback
+    else
+        echo "paused at ${FP_TC} - toggle Play or keep stepping" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        # hold the render half a frame before the end so the last frame still shows
+        FP_SHOWSEC="$(awk -v s="${FP_NEWSEC}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { e = d - 0.5 / r ; if (s > e) s = e ; printf "%.3f", s }')"
+        _show_play_frame "${FP_SHOWSEC}"
+    fi
+}
+
+# render the frame at a file position into the output pane (a jog step
+# shows its frame there; the pane keeps the last played frame otherwise)
+_show_play_frame(){
+    if [ -z "${VRECORD_PLAY_FILE}" ] || [ ! -f "${VRECORD_PLAY_FILE}" ] ; then
+        return 0
+    fi
+    "${FFMPEG_BIN}" -nostdin -loglevel error -y -ss "${1}" -i "${VRECORD_PLAY_FILE}" \
+        -map 0:v -frames:v 1 -vf scale=480:-2 -f image2 "${VRECORD_OUTPUT_DISPLAY_TMP}.frame.ppm" >/dev/null 2>&1
+    if [ -s "${VRECORD_OUTPUT_DISPLAY_TMP}.frame.ppm" ] ; then
+        mv -f "${VRECORD_OUTPUT_DISPLAY_TMP}.frame.ppm" "${VRECORD_OUTPUT_DISPLAY_TMP}"
+    else
+        rm -f "${VRECORD_OUTPUT_DISPLAY_TMP}.frame.ppm"
+    fi
+}
+
 # Video Preview tab: output color bars with a 1 kHz tone to the selected
 # device's output, converted on the fly to the selected standard, so the
 # device chain can be checked without a source or a file
