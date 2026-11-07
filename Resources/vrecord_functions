@@ -649,17 +649,11 @@ _seek_scale_playback(){
 }
 
 # Video Preview tab: transport step - jog or shuttle the playout position
-# by a frame count (1 or 100) or a second count (1s or 3s): while playing
-# it seeks by the offset and keeps playing; while paused or frozen it jogs
-# the held position and renders that frame into the output pane
+# by a frame count (the transport buttons step 1 or 100 frames): while
+# playing it seeks by the offset and keeps playing; while paused or frozen
+# it jogs the held position and renders that frame into the output pane
 _step_playback(){
-    FP_STEPARG="${1:-0}"
-    FP_STEPSEC=""
-    FP_STEP=""
-    case "${FP_STEPARG}" in
-        *s) FP_STEPSEC="${FP_STEPARG%s}" ;;
-        *)  FP_STEP="${FP_STEPARG}" ;;
-    esac
+    FP_STEP="${1:-0}"
     FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
     FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
     if [ -z "${FP_DUR}" ] || [ -z "${FP_FPS}" ] ; then
@@ -685,11 +679,7 @@ _step_playback(){
         fi
     fi
     FP_BASESEC="$(echo "${FP_BASE}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
-    if [ -n "${FP_STEPSEC}" ] ; then
-        FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEPSEC}" -v d="${FP_DUR}" 'BEGIN { v = s + n ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
-    else
-        FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEP}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { v = s + n / r ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
-    fi
+    FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEP}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { v = s + n / r ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
     FP_HMS="$(awk -v s="${FP_NEWSEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
     FP_TC="$(_fp_tc "${FP_NEWSEC}")"
     echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
