@@ -3,7 +3,7 @@
 # Runs the existing Release_Mac.sh to fetch/compile dependencies, then
 # packages the result as a proper .app. On failure of the full release
 # script, falls back to a minimal bundle using brew-installed deps.
-
+set -ex
 set -x
 cd "$(dirname "$0")"
 RELEASE_DIR="$(pwd)"
@@ -15,46 +15,104 @@ APP="$ARTIFACTS/vrecord.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
-mkdir -p "$MACOS" "$RESOURCES/bin" "$RESOURCES/share/vrecord/Resources"
+FRAMEWORKS="$CONTENTS/Frameworks"
+LAUNCHER_SRC="$ARTIFACTS/vrecord-launcher.c"
+mkdir -p "$MACOS" "$RESOURCES/bin" "$RESOURCES/share/vrecord/Resources" "$FRAMEWORKS"
 
 VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' ../vrecord)"
+ROOT="$RELEASE_DIR/vrecord_ROOT/usr/local"
 
 # --- Attempt the full release build (fetches/compiles all deps) ---
-if ./Release_Mac.sh 2>&1; then
+if [ -x "$ROOT/bin/vrecord" ] || ./Release_Mac.sh 2>&1; then
     echo "full release build OK"
     # copy the built files from vrecord_ROOT
-    ROOT="$RELEASE_DIR/vrecord_ROOT/usr/local"
     cp -a "$ROOT/bin/"* "$MACOS/" 2>/dev/null || true
     cp -a "$ROOT/share/vrecord/Resources/"* "$RESOURCES/share/vrecord/Resources/" 2>/dev/null || true
     # bundled libs
-    cp -a "$ROOT/lib/vrecord/lib/"* "$CONTENTS/Frameworks/" 2>/dev/null || mkdir -p "$CONTENTS/Frameworks" && cp -a "$ROOT/lib/vrecord/lib/"* "$CONTENTS/Frameworks/" 2>/dev/null || true
+    cp -a "$ROOT/lib/vrecord/lib/"* "$FRAMEWORKS/" 2>/dev/null || true
+    cp -a "$ROOT/lib/vrecord/bin/"* "$RESOURCES/bin/" 2>/dev/null || true
 else
     echo "::warning::Release_Mac.sh failed - building minimal .app from brew deps"
-    # fallback: brew-installed vrecord + deps
-    if ! command -v vrecord >/dev/null 2>&1; then
-        brew tap amiaopensource/amiaos
+    # fallback: local repo scripts/resources + brew-installed runtime deps
+    if ! command -v ffmpeg-ma >/dev/null 2>&1; then
         brew tap mediaarea/mediaarea
-        brew install vrecord ffmpeg-ma gtkdialog mpv mediaconch mkvtoolnix gnuplot xmlstarlet
+        brew tap amiaopensource/amiaos
+        brew trust mediaarea/mediaarea
+        brew trust amiaopensource/amiaos
+        brew install ffmpeg-ma gtkdialog mpv mediaconch mkvtoolnix gnuplot xmlstarlet mediainfo dvrescue decklinksdk cowsay
     fi
-    BREW_PREFIX="$(brew --prefix)"
-    cp "$(command -v vrecord)" "$MACOS/"
-    cp "$(command -v vtest)" "$MACOS/" 2>/dev/null || true
-    cp "$(command -v vplay)" "$MACOS/" 2>/dev/null || true
-    cp -a "$BREW_PREFIX/share/vrecord/Resources/"* "$RESOURCES/share/vrecord/Resources/" 2>/dev/null || true
+    cp ../vrecord "$MACOS/vrecord"
+    cp ../vtest "$MACOS/vtest"
+    cp ../vplay "$MACOS/vplay"
+    cp -a ../Resources/* "$RESOURCES/share/vrecord/Resources/"
     # runtime binaries from brew
     for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo mkvextract mkvinfo mkvmerge mkvpropedit xmlstarlet cowsay gnuplot dvrescue; do
-        BINPATH="$(command -v "$BIN" 2>/dev/null)"
+        BINPATH="$(command -v "$BIN" 2>/dev/null || true)"
         [ -n "$BINPATH" ] && cp "$BINPATH" "$RESOURCES/bin/"
     done
-    cat > "$MACOS/vrecord" << 'LAUNCHER'
-#!/bin/sh
-# vrecord launcher: runs the bundled script with the bundled deps
-HERE="$(cd "$(dirname "$0")" && pwd)"
-export PATH="$HERE/../Resources/bin:$PATH"
-exec /bin/sh "$HERE/vrecord-real" "$@"
+    cat > "$LAUNCHER_SRC" << 'LAUNCHER'
+#include <libgen.h>
+#include <limits.h>
+#include <mach-o/dyld.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char *argv[]) {
+    char exe_path[PATH_MAX];
+    uint32_t size = sizeof(exe_path);
+    if (_NSGetExecutablePath(exe_path, &size) != 0) {
+        fprintf(stderr, "Failed to resolve executable path\n");
+        return 1;
+    }
+
+    char resolved_path[PATH_MAX];
+    if (realpath(exe_path, resolved_path) == NULL) {
+        perror("realpath");
+        return 1;
+    }
+
+    char macos_dir[PATH_MAX];
+    strncpy(macos_dir, resolved_path, sizeof(macos_dir) - 1);
+    macos_dir[sizeof(macos_dir) - 1] = '\0';
+    char *dir = dirname(macos_dir);
+
+    char script_path[PATH_MAX];
+    char bin_path[PATH_MAX];
+    snprintf(script_path, sizeof(script_path), "%s/vrecord", dir);
+    snprintf(bin_path, sizeof(bin_path), "%s/../Resources/bin", dir);
+
+    const char *old_path = getenv("PATH");
+    char new_path[PATH_MAX * 2];
+    snprintf(new_path, sizeof(new_path), "%s:%s", bin_path, old_path ? old_path : "");
+    setenv("PATH", new_path, 1);
+
+    char **child_argv = calloc((size_t)argc + 2, sizeof(char *));
+    if (!child_argv) {
+        perror("calloc");
+        return 1;
+    }
+
+    child_argv[0] = "bash";
+    child_argv[1] = script_path;
+    for (int i = 1; i < argc; ++i) {
+        child_argv[i + 1] = argv[i];
+    }
+    child_argv[argc + 1] = NULL;
+
+    execv("/bin/bash", child_argv);
+    perror("execv");
+    free(child_argv);
+    return 1;
+}
 LAUNCHER
-    mv "$MACOS/vrecord" "$MACOS/vrecord-real" 2>/dev/null || true
-    chmod +x "$MACOS/vrecord" "$MACOS/vrecord-real"
+    clang -Os -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
+fi
+ln -snf ../Resources/share/vrecord/Resources "$MACOS/Resources"
+chmod +x "$MACOS/vrecord" "$MACOS/vplay" "$MACOS/vtest"
+if [ -f "$MACOS/vrecord-launcher" ]; then
+    chmod +x "$MACOS/vrecord-launcher"
 fi
 
 # --- Info.plist ---
@@ -74,9 +132,11 @@ cat > "$CONTENTS/Info.plist" << EOF
     <key>CFBundleShortVersionString</key>
     <string>${VERSION}</string>
     <key>CFBundleExecutable</key>
-    <string>vrecord</string>
+    <string>vrecord-launcher</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>
@@ -90,9 +150,45 @@ EOF
 # --- icon (if available) ---
 if [ -f "$RESOURCES/share/vrecord/Resources/vrecord-logo.icns" ]; then
     cp "$RESOURCES/share/vrecord/Resources/vrecord-logo.icns" "$RESOURCES/AppIcon.icns"
+elif [ -f "$RESOURCES/share/vrecord/Resources/vrecord-icon.svg" ]; then
+    ICONSET="$ARTIFACTS/AppIcon.iconset"
+    SVG_PREVIEW_DIR="$ARTIFACTS/svg-preview"
+    SVG_PREVIEW_PNG="$SVG_PREVIEW_DIR/vrecord-icon.svg.png"
+    rm -rf "$ICONSET" "$SVG_PREVIEW_DIR"
+    mkdir -p "$ICONSET" "$SVG_PREVIEW_DIR"
+    qlmanage -t -s 1024 -o "$SVG_PREVIEW_DIR" "$RESOURCES/share/vrecord/Resources/vrecord-icon.svg" >/dev/null 2>&1 || true
+    if [ -f "$SVG_PREVIEW_PNG" ]; then
+        sips -z 16 16     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_16x16.png" >/dev/null
+        sips -z 32 32     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+        sips -z 32 32     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_32x32.png" >/dev/null
+        sips -z 64 64     "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+        sips -z 128 128   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_128x128.png" >/dev/null
+        sips -z 256 256   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+        sips -z 256 256   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_256x256.png" >/dev/null
+        sips -z 512 512   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+        sips -z 512 512   "$SVG_PREVIEW_PNG" --out "$ICONSET/icon_512x512.png" >/dev/null
+        cp "$SVG_PREVIEW_PNG" "$ICONSET/icon_512x512@2x.png"
+        iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
+    fi
+elif [ -f "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" ]; then
+    ICONSET="$ARTIFACTS/AppIcon.iconset"
+    mkdir -p "$ICONSET"
+    sips -z 16 16     "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_16x16.png" >/dev/null
+    sips -z 32 32     "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+    sips -z 32 32     "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_32x32.png" >/dev/null
+    sips -z 64 64     "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+    sips -z 128 128   "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_128x128.png" >/dev/null
+    sips -z 256 256   "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+    sips -z 256 256   "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_256x256.png" >/dev/null
+    sips -z 512 512   "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+    sips -z 512 512   "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" --out "$ICONSET/icon_512x512.png" >/dev/null
+    cp "$RESOURCES/share/vrecord/Resources/vrecord_logo.png" "$ICONSET/icon_512x512@2x.png"
+    iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
 fi
 
 echo "APPL????" > "$CONTENTS/PkgInfo"
+
+codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
 
 # --- zip for upload ---
 cd "$ARTIFACTS"

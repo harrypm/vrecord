@@ -1793,7 +1793,7 @@ export MAIN_DIALOG='
         <hbox>
             <frame Select a recording directory>
                 <hbox>
-                    <entry accept="directory" fs-title="'"${DIR_SELECTION_DIALOG}"'">
+                    <entry accept="directory" fs-title="${DIR_SELECTION_DIALOG}">
                         <variable>DIR</variable>
                         <default>'"${DIR:-\"\"}"'</default>
                         <action signal="key-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
@@ -1807,7 +1807,7 @@ export MAIN_DIALOG='
             </frame>
             <frame Select a directory for auxiliary files (leave blank to match the recording directory).>
                 <hbox>
-                    <entry accept="directory" tooltip-text="select the directory for automatically generated logs and checksums"  \fs-title="'"${DIR_SELECTION_DIALOG}"'">
+                    <entry accept="directory" tooltip-text="select the directory for automatically generated logs and checksums" fs-title="${DIR_SELECTION_DIALOG}">
                         <variable>LOGDIR</variable>
                         <default>'"${LOGDIR:-\"\"}"'</default>
                     </entry>
@@ -1839,7 +1839,7 @@ export MAIN_DIALOG='
             </entry>
             <entry visible="false">
                 <variable>INPUT_CHOICE_MEM</variable>
-                <default>'"${DEVICE_INPUT_CHOICE}"'</default>
+                <default>'"${DEVICE_INPUT_CHOICE:-0}"'</default>
                 <input file>'"${INPUT_MEM_TMP}"'</input>
                 <action type="refresh">INPUT_CHOICE_MEM</action>
             </entry>
