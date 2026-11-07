@@ -735,11 +735,11 @@ _start_test_signal(){
     _hd_c 34 0x0A0A0A "ih*9/12" "ih*3/12"
     _hd_c 103 0x000000 "ih*9/12" "ih*3/12"
     TS_VF="scale=${TS_SIZE}"
-    case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)}" in
-        "SMPTE Bars (75%)")
+    case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE SD Bars (75%)}" in
+        "SMPTE SD Bars (75%)"|"SMPTE Bars (75%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_SMPTE75}" ;;
-        "SMPTE Bars (100%)")
+        "SMPTE SD Bars (100%)"|"SMPTE Bars (100%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_SMPTE100}" ;;
         "EBU Bars (75%)")
@@ -769,7 +769,7 @@ _start_test_signal(){
         "Silence")       TS_ASRC="anullsrc=r=48000:cl=stereo" ;;
         *)               TS_ASRC="aevalsrc=sin(1000*2*PI*t)|sin(1000*2*PI*t):channel_layout=stereo:sample_rate=48000" ;;
     esac
-    echo "test signal (${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)} + ${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    echo "test signal (${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE SD Bars (75%)} + ${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
         -f lavfi -i "${TS_VSRC}" \
         -f lavfi -i "${TS_ASRC}" \
