@@ -1688,10 +1688,12 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         <text>
                             <label>scrub (timecode):</label>
                         </text>
-                        <hscale tooltip-text="Drag to scrub: the slider position is frame-exact and the readout below shows the matching HH:MM:SS:FF timecode at the file's frame rate. Release to seek there.">
+                        <hscale range-min="0" range-max="10000" range-step="1" tooltip-text="Drag to scrub: the slider spans the whole file and the handle follows playback. The readout below shows the matching HH:MM:SS:FF timecode at the file's frame rate while dragging or playing; release to seek there.">
                             <variable>FILEPLAY_SEEK</variable>
-                            <input>if [ -n "$FILEPLAY_FRAME_MAX" ] && [ "$FILEPLAY_FRAME_MAX" -gt 0 ] ; then echo 0 ; echo "$FILEPLAY_FRAME_MAX" ; fi</input>
-                            <action signal="button-release-event">_seek_frame_playback</action>
+                            <input file>"${VRECORD_FILEPLAY_SEEKPOS_TMP}"</input>
+                            <action signal="button-press-event">echo 1 > "${VRECORD_FILEPLAY_DRAG_TMP}"</action>
+                            <action>_scrub_preview</action>
+                            <action signal="button-release-event">_seek_scale_playback</action>
                         </hscale>
                         <entry editable="false" has-frame="false" width-request="130">
                             <variable export="false">fileplay_frame</variable>
@@ -1704,6 +1706,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>refresh:fileplay_status</action>
                     <action>refresh:fileplay_image</action>
                     <action>refresh:fileplay_frame</action>
+                    <action>refresh:FILEPLAY_SEEK</action>
                 </timer>
                 <timer milliseconds="true" interval="300" visible="false">
                     <variable export="false">preview_status_timer</variable>
@@ -2114,6 +2117,8 @@ _edit_mode(){
     echo "VRECORD_PLAY_OFFSET_TMP=\"${VRECORD_PLAY_OFFSET_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_FPS_TMP=\"${VRECORD_FILEPLAY_FPS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_FRAME_TMP=\"${VRECORD_FILEPLAY_FRAME_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_SEEKPOS_TMP=\"${VRECORD_FILEPLAY_SEEKPOS_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_DRAG_TMP=\"${VRECORD_FILEPLAY_DRAG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_OUTPUT_DISPLAY_TMP=\"${VRECORD_OUTPUT_DISPLAY_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
@@ -3934,7 +3939,11 @@ VRECORD_PLAY_OFFSET_TMP="$(_maketemp .vrecord_fileplay.offset.txt)"
 VRECORD_OUTPUT_DISPLAY_TMP="$(_maketemp .vrecord_output_display.ppm)"
 VRECORD_FILEPLAY_FPS_TMP="$(_maketemp .vrecord_fileplay.fps.txt)"
 VRECORD_FILEPLAY_FRAME_TMP="$(_maketemp .vrecord_fileplay.frame.txt)"
+VRECORD_FILEPLAY_SEEKPOS_TMP="$(_maketemp .vrecord_fileplay.seekpos.txt)"
+VRECORD_FILEPLAY_DRAG_TMP="$(_maketemp .vrecord_fileplay.drag.txt)"
 echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+echo "0" > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
+echo "0" > "${VRECORD_FILEPLAY_DRAG_TMP}"
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"

@@ -441,13 +441,10 @@ _start_file_playback(){
     fi
     FP_DUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     echo "${FP_DUR}" > "${VRECORD_FILEPLAY_DUR_TMP}"
-    # frame rate and total frame count for the scrub slider and the timecode readout
+    # frame rate for the timecode readout (the scrub slider is a fixed
+    # 0..10000 scale spanning the whole media, so it needs no frame count)
     FP_FPS="$("${FFMPEG_BIN}" -nostdin -i "${VRECORD_PLAY_FILE}" -hide_banner -loglevel info 2>&1 | grep -oE '[0-9.]+ fps' | head -1 | awk '{print $1}')"
     echo "${FP_FPS}" > "${VRECORD_FILEPLAY_FPS_TMP}"
-    export FILEPLAY_FRAME_MAX=""
-    if [ -n "${FP_FPS}" ] && [ -n "${FP_DUR}" ] ; then
-        FILEPLAY_FRAME_MAX="$(awk -v d="${FP_DUR}" -v r="${FP_FPS}" 'BEGIN { printf "%d", int(d * r) }')"
-    fi
     echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     FP_DIMS="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     FP_FW="${FP_DIMS%%,*}"
@@ -470,6 +467,11 @@ _start_file_playback(){
     fi
     # seed the timecode readout with the start position until live stats arrive
     echo "$(_fp_tc "${FP_RESUME:-0}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+    # put the scrub handle at the start position and re-arm the drag guard
+    echo 0 > "${VRECORD_FILEPLAY_DRAG_TMP}"
+    if [ -n "${FP_DUR}" ] ; then
+        awk -v t="${FP_RESUME:-0}" -v d="${FP_DUR}" 'BEGIN { n = split(t, a, ":") ; s = (n >= 3) ? a[1]*3600 + a[2]*60 + a[3] : t + 0 ; v = int(s * 10000 / d + 0.5) ; if (v > 10000) v = 10000 ; printf "%d", v }' > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
+    fi
     rm -f "${VRECORD_FILEPLAY_IMG_TMP}"
     # resolve the preview reader BEFORE building the ffmpeg arguments: the
     # fifo output branch tests PREVIEW_READER, and building the args first
@@ -564,24 +566,32 @@ _pause_file_playback(){
     echo "paused at ${FP_PAUSETIME} - toggle Play to resume" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 }
 
-# Video Preview tab: scrub bar handler - seeks the file playback to a frame
-# number (the slider ranges 0..total frames once the file has been probed;
-# the readout shows the matching non-dropframe HH:MM:SS:FF timecode)
-_seek_frame_playback(){
-    FP_FRAME="${FILEPLAY_SEEK}"
-    if ! echo "${FP_FRAME}" | grep -qE '^[0-9]+$' ; then
-        return 1
-    fi
-    FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
+# Video Preview tab: scrub bar live preview - runs on every slider value
+# change (drag or programmatic follow): shows the matching timecode in the
+# readout and echoes the value back into the slider position file so a
+# refresh never yanks the handle away from an in-progress drag
+_scrub_preview(){
     FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
-    if [ -z "${FP_FPS}" ] || [ -z "${FP_DUR}" ] ; then
+    if [ -z "${FP_DUR}" ] ; then
+        return 0
+    fi
+    echo "${FILEPLAY_SEEK:-0}" > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
+    FP_SEC="$(awk -v v="${FILEPLAY_SEEK:-0}" -v d="${FP_DUR}" 'BEGIN { printf "%.3f", v * d / 10000 }')"
+    echo "$(_fp_tc "${FP_SEC}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+}
+
+# Video Preview tab: scrub bar release - seeks the file playback to the
+# slider position (the slider is a fixed 0..10000 scale spanning the whole
+# media; the readout shows the matching non-dropframe HH:MM:SS:FF timecode)
+_seek_scale_playback(){
+    echo 0 > "${VRECORD_FILEPLAY_DRAG_TMP}" 2>/dev/null
+    FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
+    FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
+    if [ -z "${FP_DUR}" ] || [ -z "${FP_FPS}" ] ; then
         echo "frame range unknown - play the file once first" > "${VRECORD_FILEPLAY_STATUS_TMP}"
         return 1
     fi
-    FP_SEC="$(awk -v f="${FP_FRAME}" -v r="${FP_FPS}" 'BEGIN { printf "%.3f", f / r }')"
-    if awk -v s="${FP_SEC}" -v d="${FP_DUR}" 'BEGIN { exit (s > d) ? 0 : 1 }' ; then
-        FP_SEC="${FP_DUR}"
-    fi
+    FP_SEC="$(awk -v v="${FILEPLAY_SEEK:-0}" -v d="${FP_DUR}" 'BEGIN { s = v * d / 10000 ; if (s > d) s = d ; printf "%.3f", s }')"
     FP_HMS="$(awk -v s="${FP_SEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
     FP_TC="$(_fp_tc "${FP_SEC}")"
     echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
@@ -1204,6 +1214,13 @@ _refresh_file_playback_status(){
             if [ -n "${FP_TIME}" ] ; then
                 echo "${VRECORD_PLAY_FILE}|${FP_TIME}" > "${VRECORD_PLAY_POS_TMP}"
                 echo "$(_fp_tc "${FP_TIME}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+                # move the scrub handle with playback unless it is being dragged
+                if [ "$(cat "${VRECORD_FILEPLAY_DRAG_TMP}" 2>/dev/null)" != "1" ] && [ -n "${FP_DUR}" ] ; then
+                    awk -v t="${FP_TIME}" -v d="${FP_DUR}" 'BEGIN {
+                        n = split(t, a, ":") ; s = (n >= 3) ? a[1]*3600 + a[2]*60 + a[3] : t + 0
+                        v = int(s * 10000 / d + 0.5) ; if (v > 10000) v = 10000 ; printf "%d", v
+                    }' > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
+                fi
             fi
             echo "playing ${FP_TIME:-00:00:00.00}${FP_DURHMS:+ / ${FP_DURHMS}}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
             return 0
