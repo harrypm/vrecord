@@ -1679,35 +1679,47 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         </checkbox>
                         <hbox space-expand="true" space-fill="true">
                             <button>
-                                <label>-100</label>
+                                <label>-100f</label>
                                 <variable export="false">fp_back100</variable>
                                 <input file stock="gtk-media-rewind"></input>
                                 <action>_step_playback -100</action>
                             </button>
                             <button>
-                                <label>-1</label>
+                                <label>-1f</label>
                                 <variable export="false">fp_back1</variable>
                                 <input file stock="gtk-media-previous"></input>
                                 <action>_step_playback -1</action>
                             </button>
-                            <togglebutton>
-                                <default>false</default>
-                                <variable export="false">fileplay_toggle</variable>
-                                <input file stock="gtk-media-play"></input>
-                                <action>if true _start_file_playback</action>
-                                <action>if false _pause_file_playback</action>
-                            </togglebutton>
+                            <eventbox>
+                                <pixmap>
+                                    <variable export="false">transport_play_icon</variable>
+                                    <input file>"${VRECORD_FILEPLAY_ICON_TMP}"</input>
+                                </pixmap>
+                                <action signal="button-press-event">_toggle_transport_play</action>
+                            </eventbox>
                             <button>
-                                <label>+1</label>
+                                <label>+1f</label>
                                 <variable export="false">fp_fwd1</variable>
                                 <input file stock="gtk-media-next"></input>
                                 <action>_step_playback 1</action>
                             </button>
                             <button>
-                                <label>+100</label>
+                                <label>+100f</label>
                                 <variable export="false">fp_fwd100</variable>
                                 <input file stock="gtk-media-forward"></input>
                                 <action>_step_playback 100</action>
+                            </button>
+                            <button>
+                                <label>+1s</label>
+                                <variable export="false">fp_fwd1s</variable>
+                                <input file stock="gtk-go-forward"></input>
+                                <action>_step_playback 1s</action>
+                            </button>
+                            <button>
+                                <label>+3s</label>
+                                <variable export="false">fp_fwd3s</variable>
+                                <input file stock="gtk-media-forward"></input>
+                                <action>_step_playback 3s</action>
                             </button>
                         </hbox>
                         <text>
@@ -1732,6 +1744,7 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>refresh:fileplay_image</action>
                     <action>refresh:fileplay_frame</action>
                     <action>refresh:FILEPLAY_SEEK</action>
+                    <action>refresh:transport_play_icon</action>
                 </timer>
                 <timer milliseconds="true" interval="300" visible="false">
                     <variable export="false">preview_status_timer</variable>
@@ -2144,6 +2157,8 @@ _edit_mode(){
     echo "VRECORD_FILEPLAY_FRAME_TMP=\"${VRECORD_FILEPLAY_FRAME_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_SEEKPOS_TMP=\"${VRECORD_FILEPLAY_SEEKPOS_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DRAG_TMP=\"${VRECORD_FILEPLAY_DRAG_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_FROZEN_TMP=\"${VRECORD_FILEPLAY_FROZEN_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_ICON_TMP=\"${VRECORD_FILEPLAY_ICON_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_OUTPUT_DISPLAY_TMP=\"${VRECORD_OUTPUT_DISPLAY_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
@@ -3966,9 +3981,13 @@ VRECORD_FILEPLAY_FPS_TMP="$(_maketemp .vrecord_fileplay.fps.txt)"
 VRECORD_FILEPLAY_FRAME_TMP="$(_maketemp .vrecord_fileplay.frame.txt)"
 VRECORD_FILEPLAY_SEEKPOS_TMP="$(_maketemp .vrecord_fileplay.seekpos.txt)"
 VRECORD_FILEPLAY_DRAG_TMP="$(_maketemp .vrecord_fileplay.drag.txt)"
+VRECORD_FILEPLAY_FROZEN_TMP="$(_maketemp .vrecord_fileplay.frozen.txt)"
+VRECORD_FILEPLAY_ICON_TMP="$(_maketemp .vrecord_fileplay.icon.png)"
 echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_DRAG_TMP}"
+echo "0" > "${VRECORD_FILEPLAY_FROZEN_TMP}"
+cp "${RESOURCE_PATH}/transport-play.png" "${VRECORD_FILEPLAY_ICON_TMP}" 2>/dev/null
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"

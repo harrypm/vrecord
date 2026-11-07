@@ -532,38 +532,74 @@ _start_file_playback(){
     ln -sf "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_OUTPUT_DISPLAY_TMP}"
 }
 
-# Video Preview tab: pause file playback, keeping the position for a later resume
+# Video Preview tab: freeze the file playback on the current frame - the
+# playout process is SIGSTOPped rather than killed, so the device output
+# keeps its mode and holds the exact frame on the monitor, and resuming
+# continues from that frame with no reload; a jogged cue restarts cleanly
 _pause_file_playback(){
-    FP_PAUSETIME=""
-    FP_RUNNING="false"
-    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
-        FP_RUNNING="true"
-        # parse the freshest stats line so the pause lands on the frame being shown,
-        # adding back the seek offset because -ss rebases ffmpeg's time= counter
-        FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
-        if [ -n "${FP_STATTIME}" ] ; then
-            FP_PAUSETIME="$(_fp_abs_time "${FP_STATTIME}")"
-        fi
+    if ! [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] || ! kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        echo "not playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        return 0
+    fi
+    # parse the freshest stats line so the freeze lands on the frame being
+    # shown, adding back the seek offset because -ss rebases time=
+    FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+    if [ -n "${FP_STATTIME}" ] ; then
+        FP_PAUSETIME="$(_fp_abs_time "${FP_STATTIME}")"
+    else
+        FP_PAUSETIME=""
     fi
     if [ -z "${FP_PAUSETIME}" ] ; then
         FP_POS="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null)"
         if [ -n "${FP_POS}" ] && [ "$(echo "${FP_POS}" | cut -d'|' -f1)" = "${VRECORD_PLAY_FILE}" ] ; then
             FP_PAUSETIME="$(echo "${FP_POS}" | cut -d'|' -f2)"
+        else
+            FP_PAUSETIME="00:00:00.00"
         fi
     fi
-    if [ "${FP_RUNNING}" != "true" ] && [ -z "${FP_PAUSETIME}" ] ; then
-        echo "not playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    FP_TC="$(_fp_tc "${FP_PAUSETIME}")"
+    kill -STOP "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null
+    echo 1 > "${VRECORD_FILEPLAY_FROZEN_TMP}"
+    echo "${VRECORD_PLAY_FILE}|${FP_PAUSETIME}" > "${VRECORD_PLAY_POS_TMP}"
+    echo "${FP_TC}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
+    echo "frozen at ${FP_TC} - toggle Play to continue" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    # show the exact frozen frame in the output pane (the pane lags the
+    # device by the reader's one-second buffer)
+    FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
+    FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
+    if [ -n "${FP_FPS}" ] && [ -n "${FP_DUR}" ] ; then
+        FP_SHOWSEC="$(echo "${FP_PAUSETIME}" | awk -v r="${FP_FPS}" -v d="${FP_DUR}" -F: '{ s = $1*3600 + $2*60 + $3 ; e = d - 0.5 / r ; if (s > e) s = e ; printf "%.3f", s }')"
+        _show_play_frame "${FP_SHOWSEC}"
+    fi
+}
+
+# Video Preview tab: transport play/pause - one control for both states:
+# freezes a running playout, thaws a frozen one (restarting instead when
+# the cue was jogged elsewhere), or starts a fresh playout; the icon
+# tracks the state through the status refresh
+_toggle_transport_play(){
+    if ! [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] || ! kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+        _start_file_playback
         return 0
     fi
-    # instant kill so the playout stops on the exact parsed frame (ffmpeg ignores
-    # SIGTERM for seconds while blocked on the decklink output)
-    _halt_file_playback
-    if [ -z "${FP_PAUSETIME}" ] ; then
-        FP_PAUSETIME="00:00:00.00"
+    if [ "$(cat "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null)" != "1" ] ; then
+        _pause_file_playback
+        return 0
     fi
-    echo "${VRECORD_PLAY_FILE}|${FP_PAUSETIME}" > "${VRECORD_PLAY_POS_TMP}"
-    echo "$(_fp_tc "${FP_PAUSETIME}")" > "${VRECORD_FILEPLAY_FRAME_TMP}"
-    echo "paused at ${FP_PAUSETIME} - toggle Play to resume" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    # frozen: resume here unless the cue was jogged to another position
+    FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
+    FP_FROZENTIME="$(_fp_abs_time "${FP_STATTIME:-00:00:00.00}")"
+    FP_CUETIME="$(cat "${VRECORD_PLAY_POS_TMP}" 2>/dev/null | cut -d'|' -f2)"
+    if [ -n "${FP_CUETIME}" ] && [ "${FP_CUETIME}" != "${FP_FROZENTIME}" ] ; then
+        _halt_file_playback
+        _start_file_playback
+        return 0
+    fi
+    kill -CONT "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null
+    echo 0 > "${VRECORD_FILEPLAY_FROZEN_TMP}"
+    # the jog/freeze preview replaced the pane symlink with a still frame
+    ln -sf "${VRECORD_FILEPLAY_IMG_TMP}" "${VRECORD_OUTPUT_DISPLAY_TMP}"
+    echo "playing (resumed from the freeze)" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 }
 
 # Video Preview tab: scrub bar live preview - runs on every slider value
@@ -605,11 +641,17 @@ _seek_scale_playback(){
 }
 
 # Video Preview tab: transport step - jog or shuttle the playout position
-# by a frame count (the transport buttons step 1 or 100 frames): while
-# playing it seeks by the offset and keeps playing; while paused it jogs
+# by a frame count (1 or 100) or a second count (1s or 3s): while playing
+# it seeks by the offset and keeps playing; while paused or frozen it jogs
 # the held position and renders that frame into the output pane
 _step_playback(){
-    FP_STEP="${1:-0}"
+    FP_STEPARG="${1:-0}"
+    FP_STEPSEC=""
+    FP_STEP=""
+    case "${FP_STEPARG}" in
+        *s) FP_STEPSEC="${FP_STEPARG%s}" ;;
+        *)  FP_STEP="${FP_STEPARG}" ;;
+    esac
     FP_DUR="$(cat "${VRECORD_FILEPLAY_DUR_TMP}" 2>/dev/null)"
     FP_FPS="$(cat "${VRECORD_FILEPLAY_FPS_TMP}" 2>/dev/null)"
     if [ -z "${FP_DUR}" ] || [ -z "${FP_FPS}" ] ; then
@@ -617,8 +659,10 @@ _step_playback(){
         return 1
     fi
     # base position: the live frame while playing, otherwise the held cue
+    # (a frozen playout counts as paused: stepping jogs the frozen frame)
     FP_BASE=""
-    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null \
+            && [ "$(cat "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null)" != "1" ] ; then
         FP_STATTIME="$(tail -c 4096 "${VRECORD_FILEPLAY_LOG_TMP}" 2>/dev/null | grep -o 'time=[0-9:.]*' | tail -n 1 | cut -d= -f2)"
         if [ -n "${FP_STATTIME}" ] ; then
             FP_BASE="$(_fp_abs_time "${FP_STATTIME}")"
@@ -633,13 +677,18 @@ _step_playback(){
         fi
     fi
     FP_BASESEC="$(echo "${FP_BASE}" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3 ; else print $1 }')"
-    FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEP}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { v = s + n / r ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
+    if [ -n "${FP_STEPSEC}" ] ; then
+        FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEPSEC}" -v d="${FP_DUR}" 'BEGIN { v = s + n ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
+    else
+        FP_NEWSEC="$(awk -v s="${FP_BASESEC:-0}" -v n="${FP_STEP}" -v r="${FP_FPS}" -v d="${FP_DUR}" 'BEGIN { v = s + n / r ; if (v < 0) v = 0 ; if (v > d) v = d ; printf "%.3f", v }')"
+    fi
     FP_HMS="$(awk -v s="${FP_NEWSEC}" 'BEGIN { printf "%02d:%02d:%06.3f", int(s/3600), int((s%3600)/60), s%60 }')"
     FP_TC="$(_fp_tc "${FP_NEWSEC}")"
     echo "${VRECORD_PLAY_FILE}|${FP_HMS}" > "${VRECORD_PLAY_POS_TMP}"
     echo "${FP_TC}" > "${VRECORD_FILEPLAY_FRAME_TMP}"
     awk -v t="${FP_HMS}" -v d="${FP_DUR}" 'BEGIN { n = split(t, a, ":") ; s = (n >= 3) ? a[1]*3600 + a[2]*60 + a[3] : t + 0 ; v = int(s * 10000 / d + 0.5) ; if (v > 10000) v = 10000 ; printf "%d", v }' > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
-    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null ; then
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null \
+            && [ "$(cat "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null)" != "1" ] ; then
         _halt_file_playback
         _start_file_playback
     else
@@ -1199,7 +1248,12 @@ _stop_video_preview(){
 
 # stop the file playout without clearing the cued position (used by the scrub bar)
 _halt_file_playback(){
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] ; then
+        # thaw a frozen playout first so pending signals are handled promptly
+        kill -CONT "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null
+    fi
     _kill_bg_process "${VRECORD_FILEPLAY_PID_TMP}" "${VRECORD_FILEPLAY_STATUS_TMP}"
+    echo 0 > "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null
     if [ -f "${VRECORD_FILEPLAY_RPID_TMP}" ] ; then
         kill "$(cat "${VRECORD_FILEPLAY_RPID_TMP}")" 2>/dev/null
         rm -f "${VRECORD_FILEPLAY_RPID_TMP}"
@@ -1252,6 +1306,16 @@ _refresh_video_preview_status(){
 }
 
 _refresh_file_playback_status(){
+    # keep the transport play/pause icon in step with the playout state
+    # (a pause icon while actually playing, a play icon otherwise)
+    FP_ICONWANT="${RESOURCE_PATH}/transport-play.png"
+    if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_FILEPLAY_PID_TMP}")" 2>/dev/null \
+            && [ "$(cat "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null)" != "1" ] ; then
+        FP_ICONWANT="${RESOURCE_PATH}/transport-pause.png"
+    fi
+    if [ -f "${FP_ICONWANT}" ] && ! cmp -s "${FP_ICONWANT}" "${VRECORD_FILEPLAY_ICON_TMP}" 2>/dev/null ; then
+        cp "${FP_ICONWANT}" "${VRECORD_FILEPLAY_ICON_TMP}"
+    fi
     # the test signal owns the output status line while it runs
     if [ -f "${VRECORD_TEST_PID_TMP}" ] && kill -0 "$(cat "${VRECORD_TEST_PID_TMP}")" 2>/dev/null ; then
         echo "test signal (bars + tone) playing" > "${VRECORD_FILEPLAY_STATUS_TMP}"
@@ -1271,6 +1335,10 @@ _refresh_file_playback_status(){
     if [ -f "${VRECORD_FILEPLAY_PID_TMP}" ] ; then
         BG_PID="$(cat "${VRECORD_FILEPLAY_PID_TMP}")"
         if [ -n "${BG_PID}" ] && kill -0 "${BG_PID}" 2>/dev/null ; then
+            if [ "$(cat "${VRECORD_FILEPLAY_FROZEN_TMP}" 2>/dev/null)" = "1" ] ; then
+                echo "frozen at ${FP_TIME:-00:00:00.00} - toggle Play to continue" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+                return 0
+            fi
             # only track the position while the playback process is alive
             if [ -n "${FP_TIME}" ] ; then
                 echo "${VRECORD_PLAY_FILE}|${FP_TIME}" > "${VRECORD_PLAY_POS_TMP}"
