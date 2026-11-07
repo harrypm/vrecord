@@ -635,24 +635,81 @@ _start_test_signal(){
         *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
     esac
     TS_SIZE_SRC="${TS_SIZE%%:*}x${TS_SIZE##*:}"
-    # full-field 100% color bars: the EBU Tech 3243 pattern and the
-    # full-amplitude SMPTE variant are the same seven-stripe layout, drawn
-    # at the target size so no scaling stage is needed
-    TS_FULLFIELD="drawbox=x=0:w=iw*1/7:h=ih:color=white:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih:color=yellow:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih:color=cyan:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih:color=green:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih:color=magenta:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih:color=red:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih:color=blue:thickness=fill"
-    # SMPTE EG 1 / RP 219-style 75% bars: 75% gray/yellow/cyan/green/magenta/
-    # red/blue on the top 2/3, the reverse castellation row (blue, magenta,
-    # cyan, 75% gray on black) on the next 1/12, and -I / 75% white / +Q /
-    # black with the 3.5-7.5-11.5 IRE PLUGE trio under the magenta column
-    # on the bottom 1/4
+    # EBU Tech 3243 full-field bars at 100% and 75% amplitude: seven equal
+    # stripes drawn at the target size so no scaling stage is needed
+    # note: hex literals throughout - ffmpeg's named 'green' is CSS green
+    # (0x008000), which is half the broadcast 100% amplitude
+    TS_EBU100="drawbox=x=0:w=iw*1/7:h=ih:color=0xFFFFFF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih:color=0xFFFF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih:color=0x00FFFF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih:color=0x00FF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih:color=0xFF00FF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih:color=0xFF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih:color=0x0000FF:thickness=fill"
+    TS_EBU75="drawbox=x=0:w=iw*1/7:h=ih:color=0xBFBFBF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih:color=0xBFBF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih:color=0x00BFBF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih:color=0x00BF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih:color=0xBF00BF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih:color=0xBF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih:color=0x0000BF:thickness=fill"
+    # SMPTE EG 1-style split-field bars, 75% and 100% amplitude: 75% gray or
+    # 100% white plus the six colors across the top 2/3, the reverse
+    # castellation row on the next 1/12, and -I / 75% white / +Q / black
+    # with the 3.5-7.5-11.5 IRE PLUGE trio on the bottom 1/4
     TS_SMPTE75="drawbox=x=0:w=iw*1/7:h=ih*2/3:color=0xBFBFBF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih*2/3:color=0xBFBF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih*2/3:color=0x00BFBF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih*2/3:color=0x00BF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih*2/3:color=0xBF00BF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih*2/3:color=0xBF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih*2/3:color=0x0000BF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x0000BF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xBF00BF:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x00BFBF:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xBFBFBF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x00214D:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x32006A:thickness=fill,drawbox=x=iw*12/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x090909:thickness=fill,drawbox=x=iw*13/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x131313:thickness=fill,drawbox=x=iw*14/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x1D1D1D:thickness=fill"
+    TS_SMPTE100="drawbox=x=0:w=iw*1/7:h=ih*2/3:color=0xFFFFFF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih*2/3:color=0xFFFF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih*2/3:color=0x00FFFF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih*2/3:color=0x00FF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih*2/3:color=0xFF00FF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih*2/3:color=0xFF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih*2/3:color=0x0000FF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x0000FF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xFF00FF:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x00FFFF:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xFFFFFF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x00214D:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x32006A:thickness=fill,drawbox=x=iw*12/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x090909:thickness=fill,drawbox=x=iw*13/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x131313:thickness=fill,drawbox=x=iw*14/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x1D1D1D:thickness=fill"
+    # SMPTE RP 219-1-style HD/UHD bars: 75% bars across the top 5/8 with
+    # 40% gray side columns when the frame is 16:9 or wider, the reverse
+    # castellation row on the next 1/8, and a bottom band with the 20% blue
+    # and 10% purple chroma chips, the PLUGE steps, and 75% and 100% white
+    # chips (built per-geometry because the side columns shift the bars)
+    TS_HD_WIDE="false"
+    if [ $(( $(echo "${TS_SIZE%%:*}") * 9 )) -ge $(( $(echo "${TS_SIZE##*:}") * 16 )) ] ; then
+        TS_HD_WIDE="true"
+    fi
+    TS_SMPTEHD=""
+    _hd_box(){
+        # _hd_box COLUMN COLOR Y HEIGHT (comma-joins onto the chain, which
+        # starts empty for the 4:3 geometry)
+        if [ -n "${TS_SMPTEHD}" ] ; then
+            TS_SMPTEHD="${TS_SMPTEHD},"
+        fi
+        if [ "${TS_HD_WIDE}" = "true" ] ; then
+            TS_SMPTEHD="${TS_SMPTEHD}drawbox=x=iw*(7+6*${1})/56:w=iw*6/56:y=${3}:h=${4}:color=${2}:thickness=fill"
+        else
+            TS_SMPTEHD="${TS_SMPTEHD}drawbox=x=iw*${1}/7:w=iw/7:y=${3}:h=${4}:color=${2}:thickness=fill"
+        fi
+    }
+    if [ "${TS_HD_WIDE}" = "true" ] ; then
+        TS_SMPTEHD="drawbox=x=0:w=iw*1/8:h=ih*5/8:color=0x666666:thickness=fill,drawbox=x=iw*7/8:w=iw*1/8:h=ih*5/8:color=0x666666:thickness=fill"
+    else
+        TS_SMPTEHD=""
+    fi
+    HD_K=0
+    for HD_C in 0xBFBFBF 0xBFBF00 0x00BFBF 0x00BF00 0xBF00BF 0xBF0000 0x0000BF ; do
+        _hd_box "${HD_K}" "${HD_C}" 0 "ih*5/8"
+        HD_K=$((HD_K+1))
+    done
+    _hd_box 0 0x0000BF "ih*5/8" "ih*1/8"
+    _hd_box 2 0xBF00BF "ih*5/8" "ih*1/8"
+    _hd_box 4 0x00BFBF "ih*5/8" "ih*1/8"
+    _hd_box 6 0xBFBFBF "ih*5/8" "ih*1/8"
+    _hd_box 1 0x000033 "ih*3/4" "ih*1/4"
+    _hd_box 3 0x1A001A "ih*3/4" "ih*1/4"
+    _hd_box 6 0xBFBFBF "ih*3/4" "ih*1/4"
+    # PLUGE steps under the red column: -2% clips to black, 0% stays black,
+    # +2% and +4% are drawn as two visible thirds
+    if [ "${TS_HD_WIDE}" = "true" ] ; then
+        TS_SMPTEHD="${TS_SMPTEHD},drawbox=x=iw*37/56:w=iw*2/56:y=ih*3/4:h=ih*1/4:color=0x050505:thickness=fill,drawbox=x=iw*39/56:w=iw*2/56:y=ih*3/4:h=ih*1/4:color=0x0A0A0A:thickness=fill,drawbox=x=iw*7/8:w=iw*1/8:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill"
+    else
+        TS_SMPTEHD="${TS_SMPTEHD},drawbox=x=iw*5/7:w=iw/21:y=ih*3/4:h=ih*1/4:color=0x050505:thickness=fill,drawbox=x=iw*16/21:w=iw/21:y=ih*3/4:h=ih*1/4:color=0x0A0A0A:thickness=fill,drawbox=x=iw*13/14:w=iw/14:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill"
+    fi
     TS_VF="scale=${TS_SIZE}"
     case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)}" in
         "SMPTE Bars (75%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_SMPTE75}" ;;
-        "SMPTE Bars (100%)"|"EBU Bars (100%)")
+        "SMPTE Bars (100%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
-            TS_VF="${TS_FULLFIELD}" ;;
+            TS_VF="${TS_SMPTE100}" ;;
+        "EBU Bars (75%)")
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_EBU75}" ;;
+        "EBU Bars (100%)")
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_EBU100}" ;;
+        "SMPTE HD/UHD Bars (75%)")
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_SMPTEHD}" ;;
         "FFmpeg Bars")  TS_VSRC="testsrc=rate=${TS_RATE}" ;;
         "Test Pattern") TS_VSRC="testsrc2=rate=${TS_RATE}" ;;
         "RGB Bars")     TS_VSRC="rgbtestsrc=rate=${TS_RATE}" ;;
