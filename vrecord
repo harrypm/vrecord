@@ -2169,14 +2169,19 @@ _edit_mode(){
     _combine_duration_fields
 
     # process the results of the edit form
+    # every path that ends or reloads the window stops all background
+    # outputs: an orphaned test signal or playout holds the device and the
+    # reloaded window's preview + relay then hang on the busy device
     if   [[ "${EXIT}" = "abort" ]] ; then
         _stop_video_preview
         _stop_file_playback
+        _stop_test_signal
         _report -d "Exiting Vrecord. Goodbye!"
         exit 0
     elif [[ "${EXIT}" = "Cancel" ]] ; then
         _stop_video_preview
         _stop_file_playback
+        _stop_test_signal
         _report -d "Editing of preferences was canceled by the user."
         _report -d "Exiting Vrecord. Goodbye!"
         exit 0
@@ -2187,10 +2192,12 @@ _edit_mode(){
     elif [[ "${EXIT}" = "audiopassthrough" ]] ; then
         RUNTYPE="audiopassthrough"
     elif [[ "${EXIT}" = "refresh" ]] ; then
+        _stop_test_signal
         RUNTYPE="edit"
     elif [[ "${EXIT}" = "timecode_scan" ]] ; then
         _stop_video_preview
         _stop_file_playback
+        _stop_test_signal
         _report -dt "Scanning each supported type of timecode."
         _review_all_options
         _report -dt "Note: some types of timecode are only supported if the video input is set to 'sdi' (currently the video input is set to '${VIDEO_INPUT}')."
@@ -2207,10 +2214,15 @@ _edit_mode(){
         RUNTYPE="edit"
         unset MIDDLEOPTIONS_ALL MIDDLEOPTIONS_PRES RECORDINGFILTER AUDIO_CHANNEL_MAP
     elif [[ "${EXIT}" = "env_reset" ]] ; then
+        _stop_test_signal
         _remove_env_vars
         _process_vars_for_gtk
         RUNTYPE="edit"
     else
+        # an unexpected exit (window manager close, etc.) still gets cleaned up
+        _stop_video_preview
+        _stop_file_playback
+        _stop_test_signal
         _report_unexpected_error EXIT
     fi
 }
@@ -3952,6 +3964,7 @@ echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
 # still hold the capture device and would block the new session's recordings
 # (a new run gets fresh tmp files, so the old run's PID files are unreachable)
 pkill -9 -f "ffmpeg.*vrecord_preview.fifo" 2>/dev/null
+pkill -9 -f "ffmpeg.*vrecord_fileplay.fifo" 2>/dev/null
 pkill -9 -f "vrecord-preview-reader" 2>/dev/null
 pkill -9 -f "vrecord-test-signal" 2>/dev/null
 VRECORD_FILEPLAY_PID_TMP="$(_maketemp .vrecord_fileplay.pid)"
