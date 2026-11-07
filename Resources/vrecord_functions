@@ -748,9 +748,20 @@ _start_test_signal(){
         "EBU Bars (100%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_EBU100}" ;;
-        "SMPTE HD Bars (75%)"|"SMPTE UHD Bars (75%)")
+        "SMPTE HD Bars (75%)")
+            # force the Rec.709 matrix for HD: the default RGB to YUV
+            # conversion uses the 601 family, which lands HD bar luma on
+            # the wrong levels (75% blue Y=140 instead of the 709 spec's
+            # 111; verified)
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
-            TS_VF="${TS_SMPTEHD}" ;;
+            TS_VF="${TS_SMPTEHD},scale=out_color_matrix=bt709" ;;
+        "SMPTE UHD Bars (BT.2020)"|"SMPTE UHD Bars (75%)")
+            # RP 219-2 UHDTV colorimetry: the same nominal bar levels
+            # converted through the BT.2020 matrix land exactly on the
+            # practice's 2020 Y'Cb'Cr values (verified: 75% blue Y=103,
+            # white Y=721, 40% gray Y=414 in 10-bit limited)
+            TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
+            TS_VF="${TS_SMPTEHD},scale=out_color_matrix=bt2020nc" ;;
         "FFmpeg Bars")  TS_VSRC="testsrc=rate=${TS_RATE}" ;;
         "Test Pattern") TS_VSRC="testsrc2=rate=${TS_RATE}" ;;
         "RGB Bars")     TS_VSRC="rgbtestsrc=rate=${TS_RATE}" ;;
