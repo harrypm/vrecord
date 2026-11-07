@@ -22,6 +22,20 @@ mkdir -p "$MACOS" "$RESOURCES/bin" "$RESOURCES/share/vrecord/Resources" "$FRAMEW
 VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' ../vrecord)"
 ROOT="$RELEASE_DIR/vrecord_ROOT/usr/local"
 
+# Target architecture (mirrors Release_Mac.sh): x86_64, arm64, or universal.
+ARCH="${ARCH:-universal}"
+case "${ARCH}" in
+    x86_64|arm64|universal) ;;
+    *) echo "ERROR: ARCH must be x86_64, arm64, or universal (got '${ARCH}')." >&2 ; exit 1 ;;
+esac
+if [ "${ARCH}" = "universal" ] ; then
+    MACOS_ARCH_FLAGS="-arch x86_64 -arch arm64"
+    APP_ZIP_NAME="vrecord.app.zip"
+else
+    MACOS_ARCH_FLAGS="-arch ${ARCH}"
+    APP_ZIP_NAME="vrecord_${ARCH}.app.zip"
+fi
+
 # --- Attempt the full release build (fetches/compiles all deps) ---
 if [ -x "$ROOT/bin/vrecord" ] || ./Release_Mac.sh 2>&1; then
     echo "full release build OK"
@@ -120,7 +134,7 @@ int main(int argc, char *argv[]) {
     return 1;
 }
 LAUNCHER
-clang -Os -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
+clang -Os -mmacosx-version-min=11.0 $MACOS_ARCH_FLAGS -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
 
 ln -snf ../Resources/share/vrecord/Resources "$MACOS/Resources"
 chmod +x "$MACOS/vrecord" "$MACOS/vplay" "$MACOS/vtest"
@@ -209,5 +223,5 @@ codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
 
 # --- zip for upload ---
 cd "$ARTIFACTS"
-zip -qry vrecord.app.zip vrecord.app
-echo "Built: $ARTIFACTS/vrecord.app and vrecord.app.zip"
+zip -qry "$APP_ZIP_NAME" vrecord.app
+echo "Built: $ARTIFACTS/vrecord.app and $APP_ZIP_NAME"

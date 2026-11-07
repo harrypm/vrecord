@@ -7,6 +7,13 @@
 #!/bin/bash
 
 # This script uses the following environment variables:
+# - ARCH: target architecture - x86_64, arm64, or universal (default: universal).
+#   Everything built from source is compiled for the target architecture and
+#   arch-specific prebuilts are selected per target (mpv). The few prebuilt
+#   dependencies that have no arm64 build anywhere (gtkdialog, MKVToolNix,
+#   dvrescue) are bundled as x86_64 in every package; on Apple Silicon they
+#   run through Rosetta 2. ffmpeg-ma, MediaInfo, MediaConch, and gnuplot are
+#   downloaded as universal binaries and work natively everywhere.
 # - MACOS_CODESIGN_IDENTITY: The subject and ID part of the Apple development certificate (optional).
 # - BMSDK: The path to the Blackmagic DeckLink SDK include directory (if not in the standard include path).
 
@@ -19,13 +26,41 @@ version="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' "${release_directory}/../vreco
 
 export MAKEOPTS=-j$(($(sysctl -n hw.logicalcpu)+1))
 
-export CXXFLAGS="-mmacosx-version-min=11.0 -arch x86_64 -arch arm64 $CXXFLAGS"
-export CFLAGS="-mmacosx-version-min=11.0 -arch x86_64 -arch arm64 $CFLAGS"
-export LDFLAGS="-mmacosx-version-min=11.0 -arch x86_64 -arch arm64 $LDFLAGS"
+# Target architecture: x86_64, arm64, or universal (both slices).
+ARCH="${ARCH:-universal}"
+case "${ARCH}" in
+    x86_64|arm64|universal) ;;
+    *) echo "ERROR: ARCH must be x86_64, arm64, or universal (got '${ARCH}')." >&2 ; exit 1 ;;
+esac
+if [ "${ARCH}" = "universal" ] ; then
+    MACOS_ARCH_FLAGS="-arch x86_64 -arch arm64"
+    ARCH_SUFFIX=""
+else
+    MACOS_ARCH_FLAGS="-arch ${ARCH}"
+    ARCH_SUFFIX="_${ARCH}"
+fi
+export MACOS_ARCH_FLAGS
+
+export CXXFLAGS="-mmacosx-version-min=11.0 ${MACOS_ARCH_FLAGS} $CXXFLAGS"
+export CFLAGS="-mmacosx-version-min=11.0 ${MACOS_ARCH_FLAGS} $CFLAGS"
+export LDFLAGS="-mmacosx-version-min=11.0 ${MACOS_ARCH_FLAGS} $LDFLAGS"
+
+# When building for a foreign architecture (e.g. arm64 on an x86_64 host),
+# tell autoconf we are cross compiling so configure skips run-time test
+# programs instead of aborting with "cannot run C compiled programs".
+# Building universal binaries on any host still runs (the host slice
+# executes), so no --host flag is needed there.
+HOST_ARCH="$(uname -m)"
+CONFIGURE_HOST_FLAGS=""
+if [ "${ARCH}" = "arm64" ] && [ "${HOST_ARCH}" != "arm64" ] ; then
+    CONFIGURE_HOST_FLAGS="--host=aarch64-apple-darwin"
+elif [ "${ARCH}" = "x86_64" ] && [ "${HOST_ARCH}" != "x86_64" ] ; then
+    CONFIGURE_HOST_FLAGS="--host=x86_64-apple-darwin"
+fi
 
 #-----------------------------------------------------------------------
 # Cleanup
-rm -f "${release_directory}/vrecord_${version}_Mac.dmg"
+rm -f "${release_directory}"/vrecord_*_Mac*.dmg
 rm -f "${release_directory}/vrecord.unsigned.pkg"
 rm -f "${release_directory}/vrecord.pkg"
 
@@ -72,9 +107,12 @@ popd
 # Get ffmpeg-ma
 pushd "${release_directory}/"
     curl -LO "https://mediaarea.net/download/snapshots/binary/ffmpeg/latest/FFmpeg_Bin_Latest_Mac_Static_universal.zip"
-    unzip -d vrecord_ROOT/usr/local/lib/vrecord -x FFmpeg_Bin_Latest_Mac_Static_universal.zip bin/ffmpeg bin/ffplay
+    # bin/ffprobe is also bundled (as ffprobe-ma): vrecord requires it and a
+    # non-brew install has no other source for it.
+    unzip -d vrecord_ROOT/usr/local/lib/vrecord -x FFmpeg_Bin_Latest_Mac_Static_universal.zip bin/ffmpeg bin/ffplay bin/ffprobe
     mv vrecord_ROOT/usr/local/lib/vrecord/bin/ffmpeg vrecord_ROOT/usr/local/lib/vrecord/bin/ffmpeg-ma
-    mv vrecord_ROOT/usr/local/lib/vrecord/bin/ffplay vrecord_ROOT/usr/local/lib/vrecord//bin/ffplay-ma
+    mv vrecord_ROOT/usr/local/lib/vrecord/bin/ffplay vrecord_ROOT/usr/local/lib/vrecord/bin/ffplay-ma
+    mv vrecord_ROOT/usr/local/lib/vrecord/bin/ffprobe vrecord_ROOT/usr/local/lib/vrecord/bin/ffprobe-ma
 popd
 
 
@@ -108,6 +146,9 @@ popd
 
 #-----------------------------------------------------------------------
 # Get dvrescue CLI
+# x86_64-only prebuilt (MediaArea ships no arm64 Mac CLI and upstream master
+# does not currently compile from source); bundled in all packages and runs
+# under Rosetta 2 on Apple Silicon.
 pushd "${release_directory}/"
     dv_version=$(curl -Ls https://mediaarea.net/download/binary/dvrescue | grep -Eo 'href="[0-9.]+/"' | head -n1 | grep -Eo '[0-9.]+')
     curl -L "https://mediaarea.net/download/binary/dvrescue/${dv_version}/dvrescue_CLI_${dv_version}_Mac.dmg" -o dvrescue.dmg
@@ -130,6 +171,9 @@ popd
 
 #-----------------------------------------------------------------------
 # Get MKVToolNix
+# 42.0.0 is the last x86_64-only release with a low macOS requirement
+# (10.14); upstream still ships no arm64 macOS build, so this runs under
+# Rosetta 2 on Apple Silicon in every package.
 pushd "${release_directory}/"
     curl -L https://mkvtoolnix.download/macos/releases/42.0.0/MKVToolNix-42.0.0.dmg -o MKVToolNix-42.0.0.dmg
 
@@ -143,11 +187,36 @@ popd
 
 #-----------------------------------------------------------------------
 # Get mpv
+# stolendata ships discrete per-arch builds of the same version (the x86_64
+# build needs macOS 11+, the arm64 build macOS 14+). The universal package
+# bundles both apps behind a small arch-dispatching wrapper.
 pushd "${release_directory}/"
-    curl -LO https://laboratory.stolendata.net/~djinn/mpv_osx/mpv-0.39.0.tar.gz
-    tar -xf mpv-0.39.0.tar.gz
-    cp -a mpv.app vrecord_ROOT/usr/local/lib/vrecord/app
-    ln -s ../app/mpv.app/Contents/MacOS/mpv vrecord_ROOT/usr/local/lib/vrecord/bin/mpv
+    if [ "${ARCH}" = "arm64" ] ; then
+        MPV_TARBALL="mpv-arm64-0.39.0.tar.gz"
+    else
+        MPV_TARBALL="mpv-0.39.0.tar.gz"
+    fi
+    curl -LO "https://laboratory.stolendata.net/~djinn/mpv_osx/${MPV_TARBALL}"
+    tar -xf "${MPV_TARBALL}"
+    if [ "${ARCH}" = "universal" ] ; then
+        mv mpv.app vrecord_ROOT/usr/local/lib/vrecord/app/mpv-x86_64.app
+        curl -LO "https://laboratory.stolendata.net/~djinn/mpv_osx/mpv-arm64-0.39.0.tar.gz"
+        tar -xf mpv-arm64-0.39.0.tar.gz
+        mv mpv.app vrecord_ROOT/usr/local/lib/vrecord/app/mpv-arm64.app
+        cat > vrecord_ROOT/usr/local/lib/vrecord/bin/mpv << 'MPVWRAPPER'
+#!/bin/sh
+# run the bundled mpv build matching the host architecture
+if [ "$(uname -m)" = "arm64" ] && [ -x "$(dirname "$0")/../app/mpv-arm64.app/Contents/MacOS/mpv" ] ; then
+    exec "$(dirname "$0")/../app/mpv-arm64.app/Contents/MacOS/mpv" "$@"
+else
+    exec "$(dirname "$0")/../app/mpv-x86_64.app/Contents/MacOS/mpv" "$@"
+fi
+MPVWRAPPER
+        chmod +x vrecord_ROOT/usr/local/lib/vrecord/bin/mpv
+    else
+        cp -a mpv.app vrecord_ROOT/usr/local/lib/vrecord/app
+        ln -s ../app/mpv.app/Contents/MacOS/mpv vrecord_ROOT/usr/local/lib/vrecord/bin/mpv
+    fi
 popd
 
 #-----------------------------------------------------------------------
@@ -172,12 +241,12 @@ pushd "${release_directory}/"
     tar -C xmlstarlet --strip-components 1 -xvf xmlstarlet-1.6.1.tar.gz
 
     pushd libxml2
-        ./configure --without-python --without-modules --without-iconv --without-icu --without-iso8859x --without-mem_debug --without-run_debug --with-regexps --with-tree --with-writer --with-pattern --with-push --with-valid --with-sax1 --with-legacy --enable-static --disable-shared
+        ./configure ${CONFIGURE_HOST_FLAGS} --without-python --without-modules --without-iconv --without-icu --without-iso8859x --without-mem_debug --without-run_debug --with-regexps --with-tree --with-writer --with-pattern --with-push --with-valid --with-sax1 --with-legacy --enable-static --disable-shared
         make
     popd
 
     pushd libxslt
-        ./configure --with-libxml-src="${release_directory}/libxml2" --without-python --without-modules --without-crypto --enable-static --disable-shared
+        ./configure ${CONFIGURE_HOST_FLAGS} --with-libxml-src="${release_directory}/libxml2" --without-python --without-modules --without-crypto --enable-static --disable-shared
         make
     popd
 
@@ -191,7 +260,12 @@ pushd "${release_directory}/"
         patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-clang17.patch"
         patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-libxml2-2.14.0-compile.patch"
         patch -p1 < "${release_directory}/patches/xmlstarlet/xmlstarlet-1.6.1-libxml2-2.13-stdin.patch"
-        ./configure --enable-static-libs --disable-build-docs --with-libxml-src="${release_directory}/libxml2" --with-libxslt-src="${release_directory}/libxslt"
+        # Seed the malloc/realloc cache vars: in cross mode configure cannot
+        # run the malloc(0) test, assumes it fails, and defines malloc as
+        # rpl_malloc, which breaks the link with undefined _rpl_malloc/
+        # _rpl_realloc (fine on macOS where malloc(0) is nonnull).
+        ac_cv_func_malloc_0_nonnull=yes ac_cv_func_realloc_0_nonnull=yes \
+        ./configure ${CONFIGURE_HOST_FLAGS} --enable-static-libs --disable-build-docs --with-libxml-src="${release_directory}/libxml2" --with-libxslt-src="${release_directory}/libxslt"
         make || true # Build fails on docs despite --disable-build-docs, force the build to be marked as successful
     popd
     cp -a xmlstarlet/xml vrecord_ROOT/usr/local/lib/vrecord/bin/xmlstarlet
@@ -208,7 +282,13 @@ pushd "${release_directory}/"
         fi
     fi
     pushd deckcontrol
-        make BMSDK="${BMSDK}"
+        # The Makefile hardcodes CFLAGS/LDFLAGS (environment values are
+        # ignored) and its += rules are dropped when variables are set on the
+        # make command line, so pass the arch flags together with the pieces
+        # those += rules would have added.
+        make BMSDK="${BMSDK}" \
+             CFLAGS="-g -mmacosx-version-min=11.0 -I${BMSDK} ${MACOS_ARCH_FLAGS}" \
+             LDFLAGS="-lstdc++ -lpthread -ldl -g -framework CoreFoundation -mmacosx-version-min=11.0 ${MACOS_ARCH_FLAGS}"
     popd
 
     cp -a deckcontrol/deckcontrol vrecord_ROOT/usr/local/lib/vrecord/bin
@@ -219,7 +299,10 @@ popd
 pushd "${release_directory}/"
     git clone --depth 1 https://github.com/MediaArea/timecodexml.git
     pushd timecodexml
-        make
+        # The Makefile compiles with $(CXXFLAGS) $(CPPFLAGS) and links with
+        # $(LDFLAGS) without assigning CPPFLAGS/LDFLAGS, so the arch flags
+        # can be passed through those variables.
+        make CPPFLAGS="-mmacosx-version-min=11.0 ${MACOS_ARCH_FLAGS}" LDFLAGS="-mmacosx-version-min=11.0 ${MACOS_ARCH_FLAGS}"
     popd
 
     cp -a timecodexml/timecodexml2webvtt vrecord_ROOT/usr/local/lib/vrecord/bin
@@ -271,7 +354,9 @@ pushd "${release_directory}/"
                 codesign --force --options runtime --timestamp --entitlements vrecord.entitlements --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" "$f"
             fi
         done
-        codesign --force --options runtime --timestamp --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" --identifier "com.github.amiaopensource.vrecord" vrecord_ROOT/usr/local/lib/vrecord/app/mpv.app
+        for mpv_app in vrecord_ROOT/usr/local/lib/vrecord/app/*.app ; do
+            codesign --force --options runtime --timestamp --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" --identifier "com.github.amiaopensource.vrecord" "${mpv_app}"
+        done
     fi
 popd
 
@@ -333,13 +418,13 @@ pushd "${release_directory}/"
         sleep 2
         hdiutil detach "/Volumes/vrecord" || hdiutil detach -force "/Volumes/vrecord"
     }
-    hdiutil convert "${tmp_path}/${tmp_dmg}" -format UDBZ -o "vrecord_${version}_Mac.dmg"
+    hdiutil convert "${tmp_path}/${tmp_dmg}" -format UDBZ -o "vrecord_${version}_Mac${ARCH_SUFFIX}.dmg"
 popd
 
 #-----------------------------------------------------------------------
 # Sign .dmg
 pushd "${release_directory}/"
     if [ -n "${MACOS_CODESIGN_IDENTITY}" ] ; then
-        codesign --force --options runtime --timestamp --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" --identifier "com.github.amiaopensource.vrecord" "vrecord_${version}_Mac.dmg"
+        codesign --force --options runtime --timestamp --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" --identifier "com.github.amiaopensource.vrecord" "vrecord_${version}_Mac${ARCH_SUFFIX}.dmg"
     fi
 popd
