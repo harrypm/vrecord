@@ -270,40 +270,62 @@ _start_file_playback(){
         FP_PROBE="$(command -v ffprobe 2>/dev/null)"
     fi
     # auto-detect mode: play the file at its native size, rate, and interlacing
-    # (the decklink output auto-matches its display mode to the stream) instead
-    # of converting to the selected standard
+    # instead of converting to the selected standard; broadcast size/rate combos
+    # get an explicit decklink format code so the card does not have to guess the
+    # mode (SD modes are interlaced-only, so files with an unmarked field order
+    # get the standard's default field marking)
     FP_AUTO="false"
     FP_VF=""
     FP_RATE_STR=""
+    FP_FORMAT_CODE=""
     if [ "${FILEPLAY_AUTO_CHOICE:-true}" != "false" ] ; then
         FP_RATE_STR="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
         FP_FIELD_STR="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=field_order -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+        FP_DIMS_STR="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
         if echo "${FP_RATE_STR}" | grep -qE '^[0-9]+/[0-9]+$' ; then
             FP_AUTO="true"
+            FP_AW="${FP_DIMS_STR%%,*}"
+            FP_AH="${FP_DIMS_STR##*,}"
+            FP_INTER="progressive"
             # ffprobe reports tt/tb (top coded first) and bb/bt (bottom coded
             # first) as well as tff/bff spellings: all are interlaced
             case "${FP_FIELD_STR}" in
-                tt|TT|tff|TFF|tb|TB) FP_VF="setfield=tff" ;;
-                bb|BB|bff|BFF|bt|BT) FP_VF="setfield=bff" ;;
+                tt|TT|tff|TFF|tb|TB) FP_VF="setfield=tff" ; FP_INTER="interlaced" ;;
+                bb|BB|bff|BFF|bt|BT) FP_VF="setfield=bff" ; FP_INTER="interlaced" ;;
+            esac
+            # deterministic mode selection for broadcast formats
+            case "${FP_AW}x${FP_AH}@${FP_RATE_STR}" in
+                720x486@30000/1001)  FP_FORMAT_CODE="ntsc" ; if [ -z "${FP_VF}" ] ; then FP_VF="setfield=bff" ; fi ;;
+                720x480@30000/1001)  FP_FORMAT_CODE="ntsc" ; if [ -n "${FP_VF}" ] ; then FP_VF="scale=720:486,${FP_VF}" ; else FP_VF="scale=720:486,setfield=bff" ; fi ;;
+                720x576@25/1)        FP_FORMAT_CODE="pal"  ; if [ -z "${FP_VF}" ] ; then FP_VF="setfield=tff" ; fi ;;
+                1920x1080@24000/1001) FP_FORMAT_CODE="23ps" ;;
+                1920x1080@24/1)      FP_FORMAT_CODE="24ps" ;;
+                1920x1080@25/1)      if [ "${FP_INTER}" = "interlaced" ] ; then FP_FORMAT_CODE="Hi50" ; else FP_FORMAT_CODE="Hp25" ; fi ;;
+                1920x1080@30000/1001) if [ "${FP_INTER}" = "interlaced" ] ; then FP_FORMAT_CODE="Hi59" ; else FP_FORMAT_CODE="Hp29" ; fi ;;
+                1920x1080@30/1)      if [ "${FP_INTER}" = "interlaced" ] ; then FP_FORMAT_CODE="Hi60" ; else FP_FORMAT_CODE="Hp30" ; fi ;;
+                1280x720@50/1)       FP_FORMAT_CODE="hp50" ;;
+                1280x720@60000/1001) FP_FORMAT_CODE="hp59" ;;
+                1280x720@60/1)       FP_FORMAT_CODE="hp60" ;;
+                *)                   FP_FORMAT_CODE="" ;;
             esac
         fi
     fi
     if [ "${FP_AUTO}" != "true" ] ; then
     # the file is converted to the output mode of the selected standard (matching the capture settings)
     case "${STANDARD_CHOICE}" in
-        "NTSC") FP_SIZE="720:486" ; FP_RATE="30000/1001" ; FP_FIELD="bff" ;;
-        "PAL")  FP_SIZE="720:576" ; FP_RATE="25/1" ; FP_FIELD="tff" ;;
-        "23ps - 1080p23.98") FP_SIZE="1920:1080" ; FP_RATE="24000/1001" ; FP_FIELD="" ;;
-        "24ps - 1080p24")    FP_SIZE="1920:1080" ; FP_RATE="24/1" ; FP_FIELD="" ;;
-        "Hp25 - 1080p25")    FP_SIZE="1920:1080" ; FP_RATE="25/1" ; FP_FIELD="" ;;
-        "Hp29 - 1080p29.97") FP_SIZE="1920:1080" ; FP_RATE="30000/1001" ; FP_FIELD="" ;;
-        "Hp30 - 1080p30")    FP_SIZE="1920:1080" ; FP_RATE="30/1" ; FP_FIELD="" ;;
-        "Hi50 - 1080i50")    FP_SIZE="1920:1080" ; FP_RATE="25/1" ; FP_FIELD="tff" ;;
-        "Hi59 - 1080i59.94") FP_SIZE="1920:1080" ; FP_RATE="30000/1001" ; FP_FIELD="tff" ;;
-        "Hi60 - 1080i60")    FP_SIZE="1920:1080" ; FP_RATE="30/1" ; FP_FIELD="tff" ;;
-        "hp50 - 720p50")     FP_SIZE="1280:720" ; FP_RATE="50/1" ; FP_FIELD="" ;;
-        "hp59 - 720p59.94")  FP_SIZE="1280:720" ; FP_RATE="60000/1001" ; FP_FIELD="" ;;
-        "hp60 - 720p60")     FP_SIZE="1280:720" ; FP_RATE="60/1" ; FP_FIELD="" ;;
+        "NTSC") FP_SIZE="720:486" ; FP_RATE="30000/1001" ; FP_FIELD="bff" ; FP_FORMAT_CODE="ntsc" ;;
+        "PAL")  FP_SIZE="720:576" ; FP_RATE="25/1" ; FP_FIELD="tff" ; FP_FORMAT_CODE="pal" ;;
+        "23ps - 1080p23.98") FP_SIZE="1920:1080" ; FP_RATE="24000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="23ps" ;;
+        "24ps - 1080p24")    FP_SIZE="1920:1080" ; FP_RATE="24/1" ; FP_FIELD="" ; FP_FORMAT_CODE="24ps" ;;
+        "Hp25 - 1080p25")    FP_SIZE="1920:1080" ; FP_RATE="25/1" ; FP_FIELD="" ; FP_FORMAT_CODE="Hp25" ;;
+        "Hp29 - 1080p29.97") FP_SIZE="1920:1080" ; FP_RATE="30000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="Hp29" ;;
+        "Hp30 - 1080p30")    FP_SIZE="1920:1080" ; FP_RATE="30/1" ; FP_FIELD="" ; FP_FORMAT_CODE="Hp30" ;;
+        "Hi50 - 1080i50")    FP_SIZE="1920:1080" ; FP_RATE="25/1" ; FP_FIELD="tff" ; FP_FORMAT_CODE="Hi50" ;;
+        "Hi59 - 1080i59.94") FP_SIZE="1920:1080" ; FP_RATE="30000/1001" ; FP_FIELD="tff" ; FP_FORMAT_CODE="Hi59" ;;
+        "Hi60 - 1080i60")    FP_SIZE="1920:1080" ; FP_RATE="30/1" ; FP_FIELD="tff" ; FP_FORMAT_CODE="Hi60" ;;
+        "hp50 - 720p50")     FP_SIZE="1280:720" ; FP_RATE="50/1" ; FP_FIELD="" ; FP_FORMAT_CODE="hp50" ;;
+        "hp59 - 720p59.94")  FP_SIZE="1280:720" ; FP_RATE="60000/1001" ; FP_FIELD="" ; FP_FORMAT_CODE="hp59" ;;
+        "hp60 - 720p60")     FP_SIZE="1280:720" ; FP_RATE="60/1" ; FP_FIELD="" ; FP_FORMAT_CODE="hp60" ;;
         "")  echo "select a standard on the Decklink tab first" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
         *)   echo "unsupported standard: ${STANDARD_CHOICE}" > "${VRECORD_FILEPLAY_STATUS_TMP}" ; return 1 ;;
     esac
@@ -363,9 +385,13 @@ _start_file_playback(){
     else
         set -- "$@" -map 0:v -vf "scale=480:-2,fps=15" -f rawvideo -pix_fmt rgb24 "${VRECORD_FILEPLAY_FIFO}"
     fi
-    # converted feed to the device output (native playback needs no filter
-    # chain unless the file is interlaced, so -vf is only added when set)
-    if [ -n "${FP_VF}" ] ; then
+    # feed to the device output: an explicit format code selects the card mode
+    # deterministically; -vf is only passed when a filter chain was composed
+    if [ -n "${FP_VF}" ] && [ -n "${FP_FORMAT_CODE}" ] ; then
+        set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -format_code "${FP_FORMAT_CODE}" -f decklink "${FILEPLAY_DEV}"
+    elif [ -n "${FP_FORMAT_CODE}" ] ; then
+        set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -format_code "${FP_FORMAT_CODE}" -f decklink "${FILEPLAY_DEV}"
+    elif [ -n "${FP_VF}" ] ; then
         set -- "$@" -map 0:v -map "0:a?" -vf "${FP_VF}" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
     else
         set -- "$@" -map 0:v -map "0:a?" -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${FILEPLAY_DEV}"
@@ -392,9 +418,9 @@ _start_file_playback(){
     fi
     echo $! > "${VRECORD_FILEPLAY_RPID_TMP}"
     if [ "${FP_AUTO}" = "true" ] ; then
-        echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}} (native ${FP_FW}x${FP_FH} @ ${FP_RATE_STR})" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}} (native ${FP_FW}x${FP_FH} @ ${FP_RATE_STR}${FP_FORMAT_CODE:+, mode ${FP_FORMAT_CODE}})" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     else
-        echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}} (converted to ${STANDARD_CHOICE})" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+        echo "playing ${VRECORD_PLAY_FILE}${FP_RESUME:+ from ${FP_RESUME}} (converted to ${STANDARD_CHOICE}${FP_FORMAT_CODE:+, mode ${FP_FORMAT_CODE}})" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     fi
     "$@" > "${VRECORD_FILEPLAY_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_FILEPLAY_PID_TMP}"
@@ -504,10 +530,21 @@ _start_test_signal(){
     # the output device is shared: file playout and the relay preview yield
     _stop_file_playback
     _stop_video_preview
-    echo "test signal (bars + tone) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
+    case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars}" in
+        "Test Pattern") TS_VSRC="testsrc2" ;;
+        "RGB Bars")     TS_VSRC="rgbtestsrc" ;;
+        "YUV Bars")     TS_VSRC="yuvtestsrc" ;;
+        *)              TS_VSRC="testsrc" ;;
+    esac
+    case "${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}" in
+        "Stereo 1k/440") TS_ASRC="aevalsrc=sin(1000*2*PI*t)|cos(440*2*PI*t):channel_layout=stereo:sample_rate=48000" ;;
+        "Silence")       TS_ASRC="anullsrc=r=48000" ;;
+        *)               TS_ASRC="sine=frequency=1000:sample_rate=48000" ;;
+    esac
+    echo "test signal (${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars} + ${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}) playing to ${TEST_DEV}" > "${VRECORD_FILEPLAY_STATUS_TMP}"
     "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -re \
-        -f lavfi -i "testsrc2=rate=${TS_RATE}" \
-        -f lavfi -i "sine=frequency=1000:sample_rate=48000" \
+        -f lavfi -i "${TS_VSRC}=rate=${TS_RATE}" \
+        -f lavfi -i "${TS_ASRC}" \
         -map 0:v -map 1:a \
         -vf "${TS_VF}" \
         -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 \
@@ -1013,6 +1050,8 @@ _update_config_file(){
         echo "PREVIEW_RELAY_DEV_CHOICE=\"${PREVIEW_RELAY_DEV_CHOICE}\""
         echo "VRECORD_PLAY_FILE=\"${VRECORD_PLAY_FILE}\""
         echo "FILEPLAY_AUTO_CHOICE=\"${FILEPLAY_AUTO_CHOICE:-true}\""
+        echo "TEST_SIGNAL_PATTERN_CHOICE=\"${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars}\""
+        echo "TEST_SIGNAL_AUDIO_CHOICE=\"${TEST_SIGNAL_AUDIO_CHOICE:-1 kHz Tone}\""
     } > "${CONFIG_FILE}"
     . "${CONFIG_FILE}"
 }

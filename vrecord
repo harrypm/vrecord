@@ -1696,11 +1696,13 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         <text>
                             <label>or check the device chain with a test signal</label>
                         </text>
-                        <checkbox tooltip-text="Sends color bars with a 1 kHz tone to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the bars immediately.">
-                            <label>Test signal (bars + tone)</label>
+                        <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
+                            <label>Test signal output</label>
                             <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
                             <action>_apply_test_signal_state</action>
                         </checkbox>
+                        $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "150" "Test pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
+                        $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "150" "Test audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
                     </vbox>
                 </hbox>
                 <timer milliseconds="true" interval="33" visible="false">
@@ -3809,6 +3811,8 @@ fi
 
 # list of selections for each vrecord option
 VIDEO_INPUT_OPTIONS=("SDI" "HDMI" "Composite" "Component" "S-Video")
+TEST_SIGNAL_PATTERN_OPTIONS=("SMPTE Bars" "Test Pattern" "RGB Bars" "YUV Bars")
+TEST_SIGNAL_AUDIO_OPTIONS=("1 kHz Tone" "Stereo 1k/440" "Silence")
 AUDIO_INPUT_OPTIONS=("Analog" "SDI Embedded Audio" "Digital Audio (AES/EBU)")
 CONTAINER_OPTIONS=("QuickTime" "Matroska" "AVI" "MXF" "MP4")
 DV_CONTAINER_OPTIONS=("DV" "Matroska" "QuickTime")
