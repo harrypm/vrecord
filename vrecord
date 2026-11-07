@@ -228,7 +228,9 @@ _setup_env_variables(){
         OPEN_COMMAND="open"
         ZCAT_COMMAND="gzcat"
         DECKLINK_DRIVER_PLIST="/Library/Extensions/DeckLink_Driver.kext/Contents/Info.plist"
-        VIDEO_CARD_DRIVER_VERSION="$(defaults read "${DECKLINK_DRIVER_PLIST}" CFBundleVersion)"
+        if [[ -f "${DECKLINK_DRIVER_PLIST}" ]] ; then
+            VIDEO_CARD_DRIVER_VERSION="$(defaults read "${DECKLINK_DRIVER_PLIST}" CFBundleVersion)"
+        fi
         DIR_SELECTION_DIALOG="Select an existing folder (or drag/drop one below). File System/Volumes for external media."
     elif [[ "${QUERY_OS_TYPE}" = "Linux" ]] ; then
         OS_TYPE="linux"
@@ -994,7 +996,7 @@ _get_inputs(){
     unset DECKLINK_DEVICES
     while read decklink_device ; do
         DECKLINK_DEVICES+=("${decklink_device}")
-    done < <("${FFMPEG_BIN}" -nostdin -v 0 -sources decklink | awk -F'[][]' '{print $2}' | grep -v "^$")
+    done < <(_list_decklink_sources)
     if [[ "${#DECKLINK_DEVICES[@]}" = 1 ]] ; then # default to first input if only one
         DECKLINK_INPUT_CHOICE="${DECKLINK_DEVICES[0]}"
     fi

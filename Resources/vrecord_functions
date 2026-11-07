@@ -30,7 +30,7 @@ _check_ffmpeg_install(){
         echo "Exiting."
         exit 1
     fi
-    if [ -z "$("${FFMPEG_BIN}" -nostdin -v 0 -sources decklink)" ] ; then
+    if ! "${FFMPEG_BIN}" -hide_banner -devices 2>/dev/null | grep -q decklink ; then
         echo "vrecord is set to use a decklink input but ${FFMPEG_BIN} does not appear to support decklink inputs."
         echo "Please review installation and troubleshooting information for vrecord or install ffmpeg-ma."
         exit 1
@@ -902,10 +902,23 @@ _get_output_filename(){
     echo "${DIR}/${PREFIX}${ID}${SUFFIX}.${EXTENSION}"
 }
 
+_list_decklink_sources(){
+    # ffmpeg 9+ prints the source list to stderr at info level, so running
+    # with '-v 0' suppresses the device names entirely; collect merged output
+    # and parse both the new (indented lines after the header) and the legacy
+    # (bracketed) source-list formats
+    DECKLINK_SOURCES="$(${FFMPEG_BIN} -nostdin -sources decklink 2>&1)"
+    DECKLINK_LIST="$(printf '%s\n' "${DECKLINK_SOURCES}" | sed -n '/sources for decklink:/,$p' | sed '1d;s/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true)"
+    if [ -z "${DECKLINK_LIST}" ] ; then
+        DECKLINK_LIST="$(printf '%s\n' "${DECKLINK_SOURCES}" | awk -F'[][]' '{print $2}' | grep -v '^$' || true)"
+    fi
+    printf '%s\n' "${DECKLINK_LIST}"
+}
+
 _get_decklink_input_list(){
     # get information on what input device options are available
     #unset DECKLINK_DEVICES
-    "${FFMPEG_BIN}" -nostdin -v 0 -sources decklink | awk -F'[][]' '{print $2}' | grep -v "^$"
+    _list_decklink_sources
 }
 
 _get_format_list(){
