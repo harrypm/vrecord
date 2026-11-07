@@ -1679,46 +1679,38 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                         </checkbox>
                         <hbox space-expand="true" space-fill="true">
                             <button>
-                                <label>-100f</label>
                                 <variable export="false">fp_back100</variable>
-                                <input file stock="gtk-media-rewind"></input>
+                                <input file>"${RESOURCE_PATH}/transport-fast-back.png"</input>
                                 <action>_step_playback -100</action>
                             </button>
                             <button>
-                                <label>-1f</label>
                                 <variable export="false">fp_back1</variable>
-                                <input file stock="gtk-media-previous"></input>
+                                <input file>"${RESOURCE_PATH}/transport-step-back.png"</input>
                                 <action>_step_playback -1</action>
                             </button>
-                            <eventbox>
-                                <pixmap>
-                                    <variable export="false">transport_play_icon</variable>
-                                    <input file>"${VRECORD_FILEPLAY_ICON_TMP}"</input>
-                                </pixmap>
-                                <action signal="button-press-event">_toggle_transport_play</action>
-                            </eventbox>
                             <button>
-                                <label>+1f</label>
+                                <variable export="false">transport_play_icon</variable>
+                                <input file>"${VRECORD_FILEPLAY_ICON_TMP}"</input>
+                                <action>_toggle_transport_play</action>
+                            </button>
+                            <button>
                                 <variable export="false">fp_fwd1</variable>
-                                <input file stock="gtk-media-next"></input>
+                                <input file>"${RESOURCE_PATH}/transport-step-fwd.png"</input>
                                 <action>_step_playback 1</action>
                             </button>
                             <button>
-                                <label>+100f</label>
                                 <variable export="false">fp_fwd100</variable>
-                                <input file stock="gtk-media-forward"></input>
+                                <input file>"${RESOURCE_PATH}/transport-fast-fwd.png"</input>
                                 <action>_step_playback 100</action>
                             </button>
                             <button>
-                                <label>+1s</label>
                                 <variable export="false">fp_fwd1s</variable>
-                                <input file stock="gtk-go-forward"></input>
+                                <input file>"${RESOURCE_PATH}/transport-skip1.png"</input>
                                 <action>_step_playback 1s</action>
                             </button>
                             <button>
-                                <label>+3s</label>
                                 <variable export="false">fp_fwd3s</variable>
-                                <input file stock="gtk-media-forward"></input>
+                                <input file>"${RESOURCE_PATH}/transport-skip3.png"</input>
                                 <action>_step_playback 3s</action>
                             </button>
                         </hbox>
@@ -2159,6 +2151,7 @@ _edit_mode(){
     echo "VRECORD_FILEPLAY_DRAG_TMP=\"${VRECORD_FILEPLAY_DRAG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_FROZEN_TMP=\"${VRECORD_FILEPLAY_FROZEN_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_ICON_TMP=\"${VRECORD_FILEPLAY_ICON_TMP}\"" >> "${GTK_INC}"
+    echo "VRECORD_FILEPLAY_PROBE_TMP=\"${VRECORD_FILEPLAY_PROBE_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_OUTPUT_DISPLAY_TMP=\"${VRECORD_OUTPUT_DISPLAY_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_IMG_TMP=\"${VRECORD_FILEPLAY_IMG_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_FILEPLAY_DUR_TMP=\"${VRECORD_FILEPLAY_DUR_TMP}\"" >> "${GTK_INC}"
@@ -3983,6 +3976,8 @@ VRECORD_FILEPLAY_SEEKPOS_TMP="$(_maketemp .vrecord_fileplay.seekpos.txt)"
 VRECORD_FILEPLAY_DRAG_TMP="$(_maketemp .vrecord_fileplay.drag.txt)"
 VRECORD_FILEPLAY_FROZEN_TMP="$(_maketemp .vrecord_fileplay.frozen.txt)"
 VRECORD_FILEPLAY_ICON_TMP="$(_maketemp .vrecord_fileplay.icon.png)"
+VRECORD_FILEPLAY_PROBE_TMP="$(_maketemp .vrecord_fileplay.probe.txt)"
+rm -f "${VRECORD_FILEPLAY_PROBE_TMP}"
 echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_DRAG_TMP}"

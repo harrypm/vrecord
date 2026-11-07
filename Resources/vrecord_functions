@@ -305,13 +305,36 @@ _start_file_playback(){
     fi
     # remember the selected file across sessions
     _update_config_file
-    FP_PROBE="${FFPROBE_BIN}"
-    if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
-        FP_PROBE="$(dirname "${FFMPEG_BIN}")/ffprobe-ma"
+    # probe the file once per session and cache the results, so restarts
+    # (transport skips, jog resumes) launch immediately without re-probing
+    FP_CACHE="$(cat "${VRECORD_FILEPLAY_PROBE_TMP}" 2>/dev/null)"
+    if [ "$(echo "${FP_CACHE}" | cut -d'|' -f1)" != "${VRECORD_PLAY_FILE}" ] ; then
+        FP_PROBE="${FFPROBE_BIN}"
+        if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
+            FP_PROBE="$(dirname "${FFMPEG_BIN}")/ffprobe-ma"
+        fi
+        if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
+            FP_PROBE="$(command -v ffprobe 2>/dev/null)"
+        fi
+        FP_CDUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+        FP_NFPS="$("${FFMPEG_BIN}" -nostdin -i "${VRECORD_PLAY_FILE}" -hide_banner -loglevel info 2>&1 | grep -oE '[0-9.]+ fps' | head -1 | awk '{print $1}')"
+        FP_CDIMS="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+        FP_CRATE="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+        FP_CFIELD="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=field_order -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+        # never cache a failed probe (bad dims would poison every restart
+        # until another file is played); use the fresh values directly instead
+        if echo "${FP_CDIMS}" | grep -qE '^[0-9]+,[0-9]+$' ; then
+            echo "${VRECORD_PLAY_FILE}|${FP_CDUR}|${FP_NFPS}|${FP_CDIMS}|${FP_CRATE}|${FP_CFIELD}" > "${VRECORD_FILEPLAY_PROBE_TMP}"
+            FP_CACHE="$(cat "${VRECORD_FILEPLAY_PROBE_TMP}")"
+        else
+            FP_CACHE="${VRECORD_PLAY_FILE}|${FP_CDUR}|${FP_NFPS}|${FP_CDIMS}|${FP_CRATE}|${FP_CFIELD}"
+        fi
     fi
-    if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
-        FP_PROBE="$(command -v ffprobe 2>/dev/null)"
-    fi
+    FP_DUR="$(echo "${FP_CACHE}" | cut -d'|' -f2)"
+    FP_FPS="$(echo "${FP_CACHE}" | cut -d'|' -f3)"
+    FP_DIMS="$(echo "${FP_CACHE}" | cut -d'|' -f4)"
+    FP_RATE_STR="$(echo "${FP_CACHE}" | cut -d'|' -f5)"
+    FP_FIELD_STR="$(echo "${FP_CACHE}" | cut -d'|' -f6)"
     # auto-detect mode: play the file at its native size, rate, and interlacing
     # instead of converting to the selected standard; broadcast size/rate combos
     # get an explicit decklink format code so the card does not have to guess the
@@ -319,16 +342,12 @@ _start_file_playback(){
     # get the standard's default field marking)
     FP_AUTO="false"
     FP_VF=""
-    FP_RATE_STR=""
     FP_FORMAT_CODE=""
     if [ "${FILEPLAY_AUTO_CHOICE:-true}" != "false" ] ; then
-        FP_RATE_STR="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
-        FP_FIELD_STR="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=field_order -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
-        FP_DIMS_STR="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
         if echo "${FP_RATE_STR}" | grep -qE '^[0-9]+/[0-9]+$' ; then
             FP_AUTO="true"
-            FP_AW="${FP_DIMS_STR%%,*}"
-            FP_AH="${FP_DIMS_STR##*,}"
+            FP_AW="${FP_DIMS%%,*}"
+            FP_AH="${FP_DIMS##*,}"
             FP_INTER="progressive"
             # ffprobe reports tt/tb (top coded first) and bb/bt (bottom coded
             # first) as well as tff/bff spellings: all are interlaced
@@ -431,22 +450,11 @@ _start_file_playback(){
         FP_VF="${FP_VF},setfield=${FP_FIELD}"
     fi
     fi
-    # file duration and video dimensions, used by the scrub bar, the position display, and the preview pane
-    FP_PROBE="${FFPROBE_BIN}"
-    if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
-        FP_PROBE="$(dirname "${FFMPEG_BIN}")/ffprobe-ma"
-    fi
-    if [ -z "${FP_PROBE}" ] || [ ! -x "${FP_PROBE}" ] ; then
-        FP_PROBE="$(command -v ffprobe 2>/dev/null)"
-    fi
-    FP_DUR="$(${FP_PROBE} -v error -show_entries format=duration -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
+    # duration, frame rate, and dimensions come from the once-per-file probe
+    # cache above; the tmp copies feed the timecode readout and the scrub math
     echo "${FP_DUR}" > "${VRECORD_FILEPLAY_DUR_TMP}"
-    # frame rate for the timecode readout (the scrub slider is a fixed
-    # 0..10000 scale spanning the whole media, so it needs no frame count)
-    FP_FPS="$("${FFMPEG_BIN}" -nostdin -i "${VRECORD_PLAY_FILE}" -hide_banner -loglevel info 2>&1 | grep -oE '[0-9.]+ fps' | head -1 | awk '{print $1}')"
     echo "${FP_FPS}" > "${VRECORD_FILEPLAY_FPS_TMP}"
     echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
-    FP_DIMS="$(${FP_PROBE} -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${VRECORD_PLAY_FILE}" 2>/dev/null)"
     FP_FW="${FP_DIMS%%,*}"
     FP_FH="${FP_DIMS##*,}"
     if ! echo "${FP_FW}" | grep -qE '^[0-9]+$' || ! echo "${FP_FH}" | grep -qE '^[0-9]+$' ; then
