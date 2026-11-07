@@ -647,52 +647,93 @@ _start_test_signal(){
     # with the 3.5-7.5-11.5 IRE PLUGE trio on the bottom 1/4
     TS_SMPTE75="drawbox=x=0:w=iw*1/7:h=ih*2/3:color=0xBFBFBF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih*2/3:color=0xBFBF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih*2/3:color=0x00BFBF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih*2/3:color=0x00BF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih*2/3:color=0xBF00BF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih*2/3:color=0xBF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih*2/3:color=0x0000BF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x0000BF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xBF00BF:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x00BFBF:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xBFBFBF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x00214D:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x32006A:thickness=fill,drawbox=x=iw*12/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x090909:thickness=fill,drawbox=x=iw*13/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x131313:thickness=fill,drawbox=x=iw*14/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x1D1D1D:thickness=fill"
     TS_SMPTE100="drawbox=x=0:w=iw*1/7:h=ih*2/3:color=0xFFFFFF:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:h=ih*2/3:color=0xFFFF00:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:h=ih*2/3:color=0x00FFFF:thickness=fill,drawbox=x=iw*3/7:w=iw*1/7:h=ih*2/3:color=0x00FF00:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:h=ih*2/3:color=0xFF00FF:thickness=fill,drawbox=x=iw*5/7:w=iw*1/7:h=ih*2/3:color=0xFF0000:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:h=ih*2/3:color=0x0000FF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x0000FF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xFF00FF:thickness=fill,drawbox=x=iw*4/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0x00FFFF:thickness=fill,drawbox=x=iw*6/7:w=iw*1/7:y=ih*2/3:h=ih*1/12:color=0xFFFFFF:thickness=fill,drawbox=x=0:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x00214D:thickness=fill,drawbox=x=iw*1/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill,drawbox=x=iw*2/7:w=iw*1/7:y=ih*3/4:h=ih*1/4:color=0x32006A:thickness=fill,drawbox=x=iw*12/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x090909:thickness=fill,drawbox=x=iw*13/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x131313:thickness=fill,drawbox=x=iw*14/21:w=iw*1/21:y=ih*3/4:h=ih*1/4:color=0x1D1D1D:thickness=fill"
-    # SMPTE RP 219-1-style HD/UHD bars: 75% bars across the top 5/8 with
-    # 40% gray side columns when the frame is 16:9 or wider, the reverse
-    # castellation row on the next 1/8, and a bottom band with the 20% blue
-    # and 10% purple chroma chips, the PLUGE steps, and 75% and 100% white
-    # chips (built per-geometry because the side columns shift the bars)
+    # SMPTE RP 219-1:2014 HD/UHD bars, laid out as the practice specifies:
+    # pattern 1 (top 7/12) the 75% bars with 40% gray side columns at 16:9 or
+    # wider; pattern 2 (next 1/12) the chroma reference row with 100% cyan
+    # and 100% blue side columns and the -I patch (sub-pattern *2) under the
+    # first bar; pattern 3 (next 1/12) the luminance ramp row with 100%
+    # yellow and 100% red side columns, the +Q patch (sub-pattern *3), a
+    # 24-step black-to-white ramp across five bar widths, and 100% white;
+    # pattern 4 (bottom 1/4) the 15% gray side columns, 0% black, the 100%
+    # white chip, and the -2/0/+2/0/+4% PLUGE steps. The 4:3 center is
+    # always laid out in 720 units so one geometry serves both aspect
+    # ratios; side panels are only drawn at 16:9 or wider. The -2% step and
+    # the optional sub-black/super-white ramps sit outside the RGB range
+    # and render at their clipped levels through an RGB pipeline (the -I,
+    # +I, and +Q values round-trip exactly to the spec Y'Cb'Cr).
     TS_HD_WIDE="false"
     if [ $(( $(echo "${TS_SIZE%%:*}") * 9 )) -ge $(( $(echo "${TS_SIZE##*:}") * 16 )) ] ; then
         TS_HD_WIDE="true"
     fi
     TS_SMPTEHD=""
-    _hd_box(){
-        # _hd_box COLUMN COLOR Y HEIGHT (comma-joins onto the chain, which
-        # starts empty for the 4:3 geometry)
-        if [ -n "${TS_SMPTEHD}" ] ; then
-            TS_SMPTEHD="${TS_SMPTEHD},"
-        fi
+    _hd_add(){
+        if [ -n "${TS_SMPTEHD}" ] ; then TS_SMPTEHD="${TS_SMPTEHD}," ; fi
+        TS_SMPTEHD="${TS_SMPTEHD}${1}"
+    }
+    _hd_side(){
+        # _hd_side X960 W960 COLOR Y H: side panel, 16:9 and wider only
         if [ "${TS_HD_WIDE}" = "true" ] ; then
-            TS_SMPTEHD="${TS_SMPTEHD}drawbox=x=iw*(7+6*${1})/56:w=iw*6/56:y=${3}:h=${4}:color=${2}:thickness=fill"
-        else
-            TS_SMPTEHD="${TS_SMPTEHD}drawbox=x=iw*${1}/7:w=iw/7:y=${3}:h=${4}:color=${2}:thickness=fill"
+            _hd_add "drawbox=x=iw*${1}/960:w=iw*${2}/960:y=${4}:h=${5}:color=${3}:thickness=fill"
         fi
     }
-    if [ "${TS_HD_WIDE}" = "true" ] ; then
-        TS_SMPTEHD="drawbox=x=0:w=iw*1/8:h=ih*5/8:color=0x666666:thickness=fill,drawbox=x=iw*7/8:w=iw*1/8:h=ih*5/8:color=0x666666:thickness=fill"
-    else
-        TS_SMPTEHD=""
-    fi
-    HD_K=0
-    for HD_C in 0xBFBFBF 0xBFBF00 0x00BFBF 0x00BF00 0xBF00BF 0xBF0000 0x0000BF ; do
-        _hd_box "${HD_K}" "${HD_C}" 0 "ih*5/8"
-        HD_K=$((HD_K+1))
+    _hd_c(){
+        # _hd_c W720 COLOR Y H: box in the 4:3 center, advances the cursor
+        if [ "${TS_HD_WIDE}" = "true" ] ; then
+            _hd_add "drawbox=x=iw*$((120 + TS_HD_CX))/960:w=iw*${1}/960:y=${3}:h=${4}:color=${2}:thickness=fill"
+        else
+            _hd_add "drawbox=x=iw*${TS_HD_CX}/720:w=iw*${1}/720:y=${3}:h=${4}:color=${2}:thickness=fill"
+        fi
+        TS_HD_CX=$((TS_HD_CX + $1))
+    }
+    # pattern 1: 75% bars (bar widths 103 x6 then 102 across the center)
+    _hd_side 0 120 0x666666 0 "ih*7/12"
+    _hd_side 840 120 0x666666 0 "ih*7/12"
+    TS_HD_CX=0
+    for HD_C in 0xBFBFBF 0xBFBF00 0x00BFBF 0x00BF00 0xBF00BF 0xBF0000 ; do
+        _hd_c 103 "${HD_C}" 0 "ih*7/12"
     done
-    _hd_box 0 0x0000BF "ih*5/8" "ih*1/8"
-    _hd_box 2 0xBF00BF "ih*5/8" "ih*1/8"
-    _hd_box 4 0x00BFBF "ih*5/8" "ih*1/8"
-    _hd_box 6 0xBFBFBF "ih*5/8" "ih*1/8"
-    _hd_box 1 0x000033 "ih*3/4" "ih*1/4"
-    _hd_box 3 0x1A001A "ih*3/4" "ih*1/4"
-    _hd_box 6 0xBFBFBF "ih*3/4" "ih*1/4"
-    # PLUGE steps under the red column: -2% clips to black, 0% stays black,
-    # +2% and +4% are drawn as two visible thirds
-    if [ "${TS_HD_WIDE}" = "true" ] ; then
-        TS_SMPTEHD="${TS_SMPTEHD},drawbox=x=iw*37/56:w=iw*2/56:y=ih*3/4:h=ih*1/4:color=0x050505:thickness=fill,drawbox=x=iw*39/56:w=iw*2/56:y=ih*3/4:h=ih*1/4:color=0x0A0A0A:thickness=fill,drawbox=x=iw*7/8:w=iw*1/8:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill"
-    else
-        TS_SMPTEHD="${TS_SMPTEHD},drawbox=x=iw*5/7:w=iw/21:y=ih*3/4:h=ih*1/4:color=0x050505:thickness=fill,drawbox=x=iw*16/21:w=iw/21:y=ih*3/4:h=ih*1/4:color=0x0A0A0A:thickness=fill,drawbox=x=iw*13/14:w=iw/14:y=ih*3/4:h=ih*1/4:color=0xFFFFFF:thickness=fill"
-    fi
+    _hd_c 102 0x0000BF 0 "ih*7/12"
+    # pattern 2: chroma reference row (-I under the first bar, 75% white on)
+    _hd_side 0 120 0x00FFFF "ih*7/12" "ih*1/12"
+    _hd_side 840 120 0x0000FF "ih*7/12" "ih*1/12"
+    TS_HD_CX=0
+    _hd_c 103 0x0000FF "ih*7/12" "ih*1/12"
+    TS_HD_CX=103
+    for HD_K in 1 2 3 4 5 ; do _hd_c 103 0xBFBFBF "ih*7/12" "ih*1/12" ; done
+    _hd_c 102 0xBFBFBF "ih*7/12" "ih*1/12"
+    # pattern 3: ramp row (+Q, 24-step ramp over five bar widths, white)
+    _hd_side 0 120 0xFFFF00 "ih*8/12" "ih*1/12"
+    _hd_side 840 120 0xFF0000 "ih*8/12" "ih*1/12"
+    TS_HD_CX=0
+    _hd_c 103 0x410078 "ih*8/12" "ih*1/12"
+    TS_HD_CX=103
+    HD_K=0
+    while [ "${HD_K}" -lt 24 ] ; do
+        HD_X0=$((103 + 514 * HD_K / 24))
+        HD_X1=$((103 + 514 * (HD_K + 1) / 24))
+        HD_W=$((HD_X1 - HD_X0))
+        [ "${HD_W}" -le 0 ] && HD_W=1
+        HD_G=$(((255 * HD_K + 12) / 23))
+        HD_HEX=$(printf '0x%02X%02X%02X' "${HD_G}" "${HD_G}" "${HD_G}")
+        TS_HD_CX=${HD_X0}
+        _hd_c "${HD_W}" "${HD_HEX}" "ih*8/12" "ih*1/12"
+        HD_K=$((HD_K + 1))
+    done
+    TS_HD_CX=617
+    _hd_c 103 0xFFFFFF "ih*8/12" "ih*1/12"
+    # pattern 4: bottom band (0% black, 100% white chip, PLUGE steps)
+    _hd_side 0 120 0x262626 "ih*9/12" "ih*3/12"
+    _hd_side 840 120 0x262626 "ih*9/12" "ih*3/12"
+    TS_HD_CX=0
+    _hd_c 154 0x000000 "ih*9/12" "ih*3/12"
+    _hd_c 206 0xFFFFFF "ih*9/12" "ih*3/12"
+    _hd_c 85 0x000000 "ih*9/12" "ih*3/12"
+    _hd_c 34 0x000000 "ih*9/12" "ih*3/12"
+    _hd_c 35 0x000000 "ih*9/12" "ih*3/12"
+    _hd_c 34 0x050505 "ih*9/12" "ih*3/12"
+    _hd_c 35 0x000000 "ih*9/12" "ih*3/12"
+    _hd_c 34 0x0A0A0A "ih*9/12" "ih*3/12"
+    _hd_c 103 0x000000 "ih*9/12" "ih*3/12"
     TS_VF="scale=${TS_SIZE}"
     case "${TEST_SIGNAL_PATTERN_CHOICE:-SMPTE Bars (75%)}" in
         "SMPTE Bars (75%)")
@@ -707,7 +748,7 @@ _start_test_signal(){
         "EBU Bars (100%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_EBU100}" ;;
-        "SMPTE HD/UHD Bars (75%)")
+        "SMPTE HD Bars (75%)"|"SMPTE UHD Bars (75%)")
             TS_VSRC="color=c=black:size=${TS_SIZE_SRC}:rate=${TS_RATE}"
             TS_VF="${TS_SMPTEHD}" ;;
         "FFmpeg Bars")  TS_VSRC="testsrc=rate=${TS_RATE}" ;;
