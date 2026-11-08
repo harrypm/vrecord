@@ -40,6 +40,9 @@ jobs:
           brew tap mediaarea/mediaarea
           # CI brew sets HOMEBREW_REQUIRE_TAP_TRUST; trust the taps we pull formulas from
           brew trust --tap mediaarea/mediaarea
+          # tap-new commits the tap skeleton, so the runner needs an identity
+          git config --global user.email "ci@vrecord.invalid"
+          git config --global user.name "vrecord CI"
           brew tap-new harrypm/vendored
           # vendored gtk+: the current core gtk+ formula with the
           # deprecation/disable markers stripped, so our copy outlives the
