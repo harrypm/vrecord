@@ -86,7 +86,10 @@ jobs:
           # built static in-tree, then the dvrescue CLI, then the
           # dvpackager script.
           curl -fsSL https://mediaarea.net/download/binary/dvrescue/24.07/dvrescue_CLI_24.07_GNU_FromSource.tar.xz | tar -xJ
-          cd dvrescue_CLI_GNU_FromSource/dvrescue
+          # ZenLib / MediaInfoLib / dvrescue are siblings under the tarball
+          # root (brew strips that root when staging, which is why the
+          # formula's paths look one level deep)
+          cd dvrescue_CLI_GNU_FromSource
           ( cd ZenLib/Project/GNU/Library \
               && ./configure --disable-debug --enable-static --disable-shared --prefix=/usr/local \
               && make -j"$(nproc)" && sudo make install )
@@ -96,7 +99,7 @@ jobs:
           ( cd dvrescue/Project/GNU/CLI \
               && ./configure --disable-debug --enable-staticlibs --disable-dependency-tracking --disable-silent-rules --prefix=/usr/local \
               && make -j"$(nproc)" && sudo make install )
-          sudo install -m755 Source/GUI/dvrescue/dvrescue/dvpackager /usr/local/bin/dvpackager
+          sudo install -m755 dvrescue/Source/GUI/dvrescue/dvrescue/dvpackager /usr/local/bin/dvpackager
           cd "$GITHUB_WORKSPACE"
 
       - name: Build .deb package
