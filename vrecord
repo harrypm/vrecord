@@ -2195,7 +2195,7 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '/<timer/{skip=1} !skip{print} /<\/timer>/{skip=0}')"
     # Shrink the two oversized inner scrollables (1080/1420) - their natural
     # width clamps the window to 1446px, wider than the --geometry request.
-    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed 's/width=\\"1080\\"/width=\"1000\"/g; s/width=\\"1420\\"/width=\"1000\"/g')"
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed 's/width="1080"/width="1000"/g; s/width="1420"/width="1000"/g')"
     # Drop command_is_true conditions that shell-out on every show.
     MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/condition="command_is_true/d')"
 fi

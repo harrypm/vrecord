@@ -1,44 +1,32 @@
 # vrecord Windows Port Notes
 
-Status (2026-11-08, harrypm/vrecord `windows-port` branch on this station):
-**Working portable package** with Intensity Pro 4K + Desktop Video 16.0.
+Status (2026-11-08): **GUI verified working in autotest** (no freezes across idle + scripted clicks), dark theme, native dropdowns, all optional tools embedded.
 
-## What works (verified hard data)
-- `ffmpeg-ma` 9.0.1 (MediaArea patch set eea3be9) built under MSYS2 UCRT64 with `--enable-decklink`
-- `-sources decklink` lists: `Intensity Pro 4K`
-- Direct 2s capture from the card wrote `card.mkv` (NTSC 720x486 FFV1 + PCM)
-- `vrecord -s smoketest` wrote `smoketest.mkv` (8s FFV1 10-bit Matroska) after Windows path conversion
-- gtkdialog 0.8.5 built against GTK+ 3
-- xmlstarlet, MediaInfo CLI, mkvtoolnix tools bundled
+## Root causes fixed this session (all verified with instrumented builds)
+1. **Constant freeze**: gtkdialog timers with disabled="true" only make the widget insensitive - their actions STILL fire. preview_status_timer spawned bash every 300ms, each a g_spawn_sync blocking the GTK main loop 40-185ms. Fix: delete timer blocks entirely on Windows (awk in the GUI hardening block).
+2. **Broken option lists**: items containing raw & (e.g. "1 Stereo Track (From Channels 1 & 2)") broke the gtkdialog XML parser mid-dialog; every list after the audio-mapping list rendered empty. Fix: XML-escape & at emit time in _expand_list2items.
+3. **"Column 0" headers**: gtkdialog's list widget defaults the column label to "Column 0". Windows now uses <comboboxtext> native dropdowns instead of tree lists (also fixes selection unreliability in the Win32 build).
+4. **Window opened 1446x1381**: gtkdialog --geometry used gtk_widget_set_size_request (minimum only, content natural size wins). Patched widget_window.c to use gtk_window_set_default_size + demote CENTER_ALWAYS to CENTER_ONCE (CENTER_ALWAYS fights user resizing on Win32).
+5. **Launcher**: record.cmd had cmd.exe quoting fragility ("or was unexpected at this time"). Replaced with a native record.exe launcher (C, CreateProcess -> MSYS2 bash, no cmd.exe).
 
-## Package layout
-- `Release/build-windows-portable.sh` → `Release/artifacts/vrecord_windows_<VERSION>/` + zip
-- `Release/build-windows-installer.sh` → NSIS script (+ setup.exe if `makensis` is installed)
-- Launch with `vrecord.cmd` (needs MSYS2 or Git Bash) or `vrecord.sh` from MSYS2
+## Embedded optional tools (all verified running from portable bin)
+- mpv v0.42.0 (shinchiro build)
+- mediaconch 25.04 (MediaArea CLI)
+- dvrescue 24.07 + dvpackager script (MIPoPS/MediaArea)
+- gnuplot 6.0.3 (MSYS2 UCRT64 build) + share/gnuplot
+- mkvpropedit/mkvmerge 103.0 (mkvtoolnix)
+- deckcontrol: **built from source** (bavc/deckcontrol) against the DeckLink SDK Windows headers with a COM shim (DeckLinkAPIDispatch_win.cpp = CoCreateInstance replacement for the Linux dlopen dispatch)
 
-## Runtime requirements (only system install)
-- Blackmagic **Desktop Video** drivers (this station: 16.0.0.0)
-- MSYS2 bash (`C:\msys64`) or Git Bash for the launcher
+## Build trees / new files
+- Release/vrecord-launcher.c - native launcher
+- Release/autotest-gui.ps1 - click autotest with Responding sampling
+- Release/autotest-visual.ps1 - navigates tabs + screenshots + freeze diagnostics
+- gtkdialog patches in record-build/patch_gtkdialog_*.py (bash spawn, popen, instrument, window size)
+- Package: Release/artifacts/vrecord_windows_2026-11-05/ + record_2026-11-08_windows_portable.zip (132.6 MB)
 
-## Script changes (minimal)
-- `vrecord` `_setup_env_variables`: MINGW/MSYS/Cygwin → `OS_TYPE=windows`
-- `_windows_native_path`: convert MSYS paths to `C:/...` for native MinGW ffmpeg
-- `Resources/vrecord_functions`: Windows preview uses image2 update path (no POSIX fifo); dshow audio device list
-
-## DeckLink headers
-- Official BMD SDK zip is behind a JS form; used `MartinPulec/desktopvideo_sdk-api` v16.0
-- Windows headers from release asset `deck-win-api.zip` + shim `DeckLinkAPI_v14_2_1.h`
-- MediaArea patch 0015 `IID_IUnknown` needed a Windows GUID-layout fix in the build tree
-
-## Known gaps / next
-- Preview reader C helper needs POSIX `sys/select.h` (shell/image fallback used on Windows)
-- awk division-by-zero warning during some option reviews (non-fatal)
-- Full GUI (`vrecord -e`) needs user confirmation on this station
-- Real tape/source capture needs user confirmation of physical input (Composite/HDMI/etc.)
-- NSIS installer needs `makensis` installed to produce the setup exe
-- Bundle a minimal standalone bash runtime to drop the MSYS2 dependency (future)
-
-## Options originally considered
-1. WSL2 + X — **not viable** for PCIe Intensity Pro 4K (no passthrough)
-2. MSYS2 recompile — **chosen and working**
-3. Full native rewrite — not required for this milestone
+## Known gaps
+- Deck Control UI works via deckcontrol.exe but the status/timecode auto-refresh timer is removed on Windows (manual Refresh); RS422 needs a serial deck anyway.
+- Preview page is stubbed on Windows (use Passthrough for live view).
+- mpv download was vendored from shinchiro 20261108 after GitHub CDN 504s; re-pin version when scripting builds.
+- Window width clamps to ~1383px (long non-wrapping text labels set the GTK minimum); fits 1440p, tight on 1080p.
+- NSIS installer still needs makensis.

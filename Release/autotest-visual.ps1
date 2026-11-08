@@ -30,6 +30,9 @@ function Shot([string]$name, [int]$wx, [int]$wy, [int]$ww, [int]$wh) {
     Write-Output "shot: $name.png"
 }
 
+$env:GTKDIALOG_ACTION_LOG = 'C:\Users\Harry\vrecord-smoke-out\gtkdialog-actions.log'
+Remove-Item $env:GTKDIALOG_ACTION_LOG -ErrorAction SilentlyContinue
+
 # kill + relaunch
 Get-Process gtkdialog -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process bash -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\msys64*' } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -67,6 +70,17 @@ Shot "04-themes" $r.L $r.T $W $H
 [U2]::Click([int]($r.L + $W*0.043), [int]($r.T + $H*0.057)); Start-Sleep -Seconds 3
 Shot "05-decklink" $r.L $r.T $W $H
 
-$gd.Refresh()
-Write-Output "final responding=$($gd.Responding) cpu=$([math]::Round($gd.CPU,1))s"
+# freeze diagnostics: thread wait reasons + action log tail
+$gd2 = Get-Process -Id $gd.Id -ErrorAction SilentlyContinue
+if ($gd2) {
+    Write-Output "final responding=$($gd2.Responding) cpu=$([math]::Round($gd2.CPU,1))s"
+    if (-not $gd2.Responding) {
+        Write-Output "--- threads at freeze ---"
+        $gd2.Threads | ForEach-Object { "tid $($_.Id) state=$($_.ThreadState) wait=$($_.WaitReason)" }
+        if (Test-Path $env:GTKDIALOG_ACTION_LOG) {
+            Write-Output "--- last actions ---"
+            Get-Content $env:GTKDIALOG_ACTION_LOG -Tail 12
+        }
+    }
+}
 Write-Output "GUI left OPEN (pid $($gd.Id))"
