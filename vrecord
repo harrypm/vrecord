@@ -132,13 +132,40 @@ _parse_report(){
     echo "${REPORT}" | grep -i "^[ ]*${KEY}:" | cut -d : -f 2- | awk '{$1=$1;print}'
 }
 
+
+# Windows (native MinGW ffmpeg) needs drive-letter paths, not MSYS /c/ or /tmp
+_windows_native_path(){
+    local P="${1}"
+    if command -v cygpath >/dev/null 2>&1 ; then
+        cygpath -m "${P}" 2>/dev/null || echo "${P}"
+    else
+        # fallback: /c/Users -> C:/Users
+        case "${P}" in
+            /[a-zA-Z]/*)
+                local drive
+                drive="$(printf '%s' "${P:1:1}" | tr '[:lower:]' '[:upper:]')"
+                echo "${drive}:${P:2}"
+                ;;
+            *)
+                echo "${P}"
+                ;;
+        esac
+    fi
+}
+
 _maketemp(){
     if [[ "${1}" ]] ; then
         EXT="${1}"
     else
         EXT=""
     fi
-    echo "$(mktemp -q "/tmp/$(basename "${0}").XXXXXX")${EXT}"
+    local TMPF
+    TMPF="$(mktemp -q "/tmp/$(basename "${0}").XXXXXX")${EXT}"
+    # Native Win32 gtkdialog/ffmpeg cannot open MSYS /tmp paths; convert early.
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) TMPF="$(_windows_native_path "${TMPF}")" ;;
+    esac
+    echo "${TMPF}"
 }
 
 _process_vars_for_gtk(){
@@ -263,16 +290,44 @@ _setup_env_variables(){
         OPEN_COMMAND="xdg-open"
         ZCAT_COMMAND="zcat"
         DIR_SELECTION_DIALOG="Select an existing folder (or drag/drop one below)."
+    elif [[ "${QUERY_OS_TYPE}" = MINGW* || "${QUERY_OS_TYPE}" = MSYS* || "${QUERY_OS_TYPE}" = CYGWIN* ]] ; then
+        # Windows via MSYS2/MinGW/Cygwin (portable self-contained package or dev checkout)
+        OS_TYPE="windows"
+        if [[ -n "${VRECORD_RESOURCES}" ]] && [[ -d "${VRECORD_RESOURCES}" ]] ; then
+            RESOURCE_PATH="${VRECORD_RESOURCES}"
+        else
+            RESOURCE_PATH="${SCRIPTDIR}/Resources"
+        fi
+        # bundled DejaVu first (portable package), then common Windows system fonts
+        if [[ -f "${RESOURCE_PATH}/fonts/DejaVuSans.ttf" ]] ; then
+            DEFAULTFONT="${RESOURCE_PATH}/fonts/DejaVuSans.ttf"
+        elif [[ -f "/c/Windows/Fonts/consola.ttf" ]] ; then
+            DEFAULTFONT="/c/Windows/Fonts/consola.ttf"
+        elif [[ -f "/c/Windows/Fonts/arial.ttf" ]] ; then
+            DEFAULTFONT="/c/Windows/Fonts/arial.ttf"
+        else
+            _report -wt "vrecord can't find a preferred font to use, please report this error to https://github.com/amiaopensource/vrecord/issues"
+        fi
+        CORE_COUNT="$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-1}")"
+        COMPUTER_MODEL_NAME="$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).Model" 2>/dev/null | tr -d '\r' || echo "Windows PC")"
+        OPEN_COMMAND="cmd //c start"
+        ZCAT_COMMAND="zcat"
+        if ! command -v zcat >/dev/null 2>&1 ; then
+            ZCAT_COMMAND="gzip -dc"
+        fi
+        # Desktop Video driver version from the uninstall registry key
+        VIDEO_CARD_DRIVER_VERSION="$(powershell.exe -NoProfile -Command "Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { \$_.DisplayName -eq 'Blackmagic Desktop Video' } | Select-Object -ExpandProperty DisplayVersion -First 1" 2>/dev/null | tr -d '\r')"
+        DIR_SELECTION_DIALOG="Select an existing folder (or drag/drop one below)."
     else
         echo "Unsupported OS, ${QUERY_OS_TYPE}, detected. Exiting."
         exit 1
     fi
     # set gtkdialog path
     if [[ -n "${DEPENDENCYDIR}" ]] ; then
-        GTKDIALOGBIN=$(find "${DEPENDENCYDIR}" -iname "gtkdialog" | head -n1)
+        GTKDIALOGBIN=$(find "${DEPENDENCYDIR}" \( -iname "gtkdialog" -o -iname "gtkdialog.exe" \) 2>/dev/null | head -n1)
     fi
     if [[ -z "${GTKDIALOGBIN}" ]] ; then
-        GTKDIALOGBIN="$(which gtkdialog)"
+        GTKDIALOGBIN="$(command -v gtkdialog 2>/dev/null || command -v gtkdialog.exe 2>/dev/null)"
     fi
 }
 
@@ -290,16 +345,16 @@ _gather_ffmpeg_vars(){
         fi
     fi
     if [[ -n "${DEPENDENCYDIR}" ]] ; then
-        FFMPEGALT=$(find "${DEPENDENCYDIR}" -iname "ffmpeg-ma" | head -n1)
+        FFMPEGALT=$(find "${DEPENDENCYDIR}" \( -iname "ffmpeg-ma" -o -iname "ffmpeg-ma.exe" \) 2>/dev/null | head -n1)
     fi
     if [[ -n "${FFMPEGALT}" ]] ; then
         FFMPEG_BIN="${FFMPEGALT}"
-        FFPLAY_BIN=$(find "${DEPENDENCYDIR}" -iname "ffplay-ma" | head -n1)
-        FFPROBE_BIN=$(find "${DEPENDENCYDIR}" -iname "ffprobe-ma" | head -n1)
-    elif which ffmpeg-ma &> /dev/null ; then
-        FFMPEG_BIN="$(which ffmpeg-ma)"
-        FFPLAY_BIN="$(which ffplay-ma)"
-        FFPROBE_BIN="$(which ffprobe-ma)"
+        FFPLAY_BIN=$(find "${DEPENDENCYDIR}" \( -iname "ffplay-ma" -o -iname "ffplay-ma.exe" \) 2>/dev/null | head -n1)
+        FFPROBE_BIN=$(find "${DEPENDENCYDIR}" \( -iname "ffprobe-ma" -o -iname "ffprobe-ma.exe" \) 2>/dev/null | head -n1)
+    elif command -v ffmpeg-ma &> /dev/null || command -v ffmpeg-ma.exe &> /dev/null ; then
+        FFMPEG_BIN="$(command -v ffmpeg-ma.exe 2>/dev/null || command -v ffmpeg-ma)"
+        FFPLAY_BIN="$(command -v ffplay-ma.exe 2>/dev/null || command -v ffplay-ma)"
+        FFPROBE_BIN="$(command -v ffprobe-ma.exe 2>/dev/null || command -v ffprobe-ma)"
     elif
         [[ -d "${BREW_PREFIX}/bin" ]] ; then
         FFMPEG_BIN="${BREW_PREFIX}/bin/ffmpeg-ma"
@@ -613,16 +668,31 @@ _gtk_vbox_list() {
         fi
     }
 
+    # Windows: use native dropdowns - the tree-based <list> renders and
+    # selects unreliably in the Win32 gtkdialog build (and items with XML
+    # entities break its parser). Upstream Linux/macOS keep the plain list.
+    local GUI_LIST_OPEN="<list selection-mode=\"1\" selected-row=\"${SELECTION}\">"
+    local GUI_LIST_CLOSE="</list>"
+    local GUI_LIST_LABEL="<label>${LABEL}</label>"
+    local GUI_LIST_DEFAULT=""
+    if [[ "${OS_TYPE}" = "windows" ]] ; then
+        GUI_LIST_OPEN="<comboboxtext>"
+        GUI_LIST_CLOSE="</comboboxtext>"
+        GUI_LIST_LABEL=""
+        GUI_LIST_DEFAULT="<default>\"${!VARIABLE_NAME}\"</default>"
+    fi
     echo "<vbox space-fill=\"true\">
       <text>
           <label>${LABEL}</label>
       </text>
-      <list selection-mode=\"1\" selected-row=\"${SELECTION}\">
+      ${GUI_LIST_OPEN}
           <width>${WIDTH}</width>
+          ${GUI_LIST_LABEL}
+          ${GUI_LIST_DEFAULT}
           <variable>${VARIABLE_NAME}</variable>
           ${LIST}
           $(_get_list_extras)
-      </list>
+      ${GUI_LIST_CLOSE}
       $(_get_vbox_extras)
     </vbox>"
 }
@@ -1045,6 +1115,9 @@ _set_up_edit_form() {
   _expand_list2items(){
     LIST=( "$@" )
     for i in "${LIST[@]}" ; do
+        # escape XML entities so options like "Channels 1 & 2" parse cleanly
+        # (gtkdialog decodes them back, so choice matching is unaffected)
+        i="${i//&/&amp;}"
         echo "<item>${i}</item>"
     done
   }
@@ -1487,6 +1560,16 @@ if [[ "${OS_TYPE}" = "linux" ]] ; then
         DV_STOP_CMD='dvrescue "device://${DVRESCUE_INPUT_INDEX}" -cmd stop '
         DV_FF_CMD='dvrescue "device://${DVRESCUE_INPUT_INDEX}" -cmd ff '
         STATUS_CMD='dvrescue "device://${DVRESCUE_INPUT_INDEX}" -status 2>&1'
+    else
+        # Windows (and any other OS): leave DV deck commands empty so
+        # _get_deckcontrol_button omits the buttons, and give the status
+        # timer a no-op command so gtkdialog never sees a bare "> file &" action.
+        DV_REPACK_CMD=""
+        DV_RW_CMD=""
+        DV_PLAY_CMD=""
+        DV_STOP_CMD=""
+        DV_FF_CMD=""
+        STATUS_CMD='echo disabled'
 fi
 
 DVRESCUE_INPUT_GUI=$(cat << DVRESCUE_FORM
@@ -1588,6 +1671,7 @@ DVRESCUE_INPUT_GUI=$(cat << DVRESCUE_FORM
                     $(_get_deckcontrol_button "dvrescue_play"   "gtk-media-play"    "Play"   "${DV_PLAY_CMD}")
                     $(_get_deckcontrol_button "dvrescue_stop"   "gtk-media-stop"    "Stop"   "${DV_STOP_CMD}")
                     $(_get_deckcontrol_button "dvrescue_ff"     "gtk-media-forward" "FF"     "${DV_FF_CMD}")
+                    $(if [[ -z "${DV_RW_CMD}${DV_PLAY_CMD}${DV_STOP_CMD}${DV_FF_CMD}${DV_REPACK_CMD}" ]] ; then echo "<text><label>DV deck control not available on this platform</label></text>" ; fi)
                 </hbox>
             </vbox>
         </hbox>
@@ -2089,12 +2173,45 @@ export MAIN_DIALOG='
     <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
 </window>
 '
+
+# Windows GUI hardening: keep the dialog responsive under gtkdialog+Win32.
+if [[ "${OS_TYPE}" = "windows" ]] ; then
+    # Window sizing is handled with gtkdialog's --geometry option at exec time
+    # (tag width-request/height-request are silently ignored by gtkdialog and the
+    # unsized window opened at 1446x1381 - taller/wider than many screens, which
+    # also made the resize edges unreachable).
+    # Drop auto-start preview on realize (can lock the decklink device / freeze UI).
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/signal="realize">_start_video_preview<\/action>/d')"
+    # Drop mouse enter/leave and show-time validation refreshes (spawn bash constantly).
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/enter-notify-event.*VRECORD_FORM_VALIDATION/d;/leave-notify-event.*VRECORD_FORM_VALIDATION/d;/signal="show" type="refresh">VRECORD_FORM_VALIDATION/d')"
+    # Keep output name static unless user hits Refresh. Every refresh of
+    # VRECORD_OUTPUT_NAME runs <input>_get_output_filename</input> as a blocking
+    # popen bash - strip live refreshes from keystrokes, notebook clicks and shows.
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/type="refresh">VRECORD_OUTPUT_NAME/d')"
+    # Remove ALL timer blocks on Windows. The disabled="true" attribute only makes
+    # the timer insensitive - instrumented builds show its actions STILL fire
+    # (preview_status_timer spawned bash every 300ms, each a g_spawn_sync that
+    # blocked the GTK main loop 40-185ms - the constant-freeze root cause).
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '/<timer/{skip=1} !skip{print} /<\/timer>/{skip=0}')"
+    # Drop command_is_true conditions that shell-out on every show.
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/condition="command_is_true/d')"
+fi
 }
+
+
+
 
 # apply the theme chosen in the Themes tab by setting GTK environment variables
 # before gtkdialog is launched (GTK3-based gtkdialog builds read GTK_THEME,
 # GTK2-based builds read GTK2_RC_FILES)
 _apply_theme(){
+    # Help GTK3 find Adwaita stock/symbolic icons on Windows (MSYS2 UCRT64).
+    if [[ "${OS_TYPE}" = "windows" ]] ; then
+        if [[ -d /ucrt64/share/icons ]] ; then
+            export XDG_DATA_DIRS="/ucrt64/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+        fi
+        export GTK_ICON_THEME_NAME="${GTK_ICON_THEME_NAME:-Adwaita}"
+    fi
     case "${THEME_CHOICE}" in
         "Dark")
             export GTK_THEME="Adwaita:dark"
@@ -2107,7 +2224,12 @@ _apply_theme(){
             unset GTK2_RC_FILES
             ;;
         "System"|*)
-            unset GTK_THEME GTK2_RC_FILES
+            if [[ "${OS_TYPE}" = "windows" ]] ; then
+                # dark theme default on Windows (user preference: easier on eyes)
+                export GTK_THEME="Adwaita:dark"
+            else
+                unset GTK_THEME GTK2_RC_FILES
+            fi
             ;;
     esac
 }
@@ -2156,12 +2278,25 @@ _edit_mode(){
     echo "VRECORD_PASS_LOG_TMP=\"${VRECORD_PASS_LOG_TMP}\"" >> "${GTK_INC}"
     echo "INPUT_MEM_TMP=\"${INPUT_MEM_TMP}\"" >> "${GTK_INC}"
     echo "VRECORD_BIN=\"${VRECORD_BIN}\"" >> "${GTK_INC}"
-    cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
-
-    if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
-        eval "$("${GTKDIALOGBIN}" --include="${GTK_INC}" --program MAIN_DIALOG --center)"
+    if [[ "${OS_TYPE}" = "windows" ]] && [[ -f "${RESOURCE_PATH}/vrecord_functions_windows_min.sh" ]] ; then
+        cat "${RESOURCE_PATH}/vrecord_functions_windows_min.sh" >> "${GTK_INC}"
     else
-        eval "$("${GTKDIALOGBIN}" --include="${GTK_INC}" --program MAIN_DIALOG --center 2> /dev/null)"
+        cat "${SHARED_FUNCTIONS_FILE}" >> "${GTK_INC}"
+    fi
+
+    # TEMP DEBUG (Windows): dump the final dialog XML for list diagnosis
+    if [[ "${OS_TYPE}" = "windows" ]] ; then
+        printf '%s' "${MAIN_DIALOG}" > "${TMPDIR:-/tmp}/vrecord.maindialog.debug"
+    fi
+    # open at a sane size on Windows (window remains user-resizable)
+    GTKDIALOG_GEOM=()
+    if [[ "${OS_TYPE}" = "windows" ]] ; then
+        GTKDIALOG_GEOM=(--geometry=1100x720)
+    fi
+    if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
+        eval "$("${GTKDIALOGBIN}" --include="${GTK_INC}" --program MAIN_DIALOG --center "${GTKDIALOG_GEOM[@]}")"
+    else
+        eval "$("${GTKDIALOGBIN}" --include="${GTK_INC}" --program MAIN_DIALOG --center "${GTKDIALOG_GEOM[@]}" 2> /dev/null)"
     fi
     MAIN_DIALOG="${MAIN_DIALOG_TMP}"
 
@@ -4260,6 +4395,13 @@ if [[ -z "${LOGDIR}" ]] ; then
 elif [[ ! -d "${LOGDIR}" ]] ; then
     _report -w "Error: The directory for auxiliary files at ${DIR} is not a valid directory. Let's use ${DIR} instead."
     LOGDIR="${DIR}"
+fi
+if [[ "${OS_TYPE}" = "windows" ]] ; then
+    DIR="$(_windows_native_path "${DIR}")"
+    LOGDIR="$(_windows_native_path "${LOGDIR}")"
+    if [[ -n "${DEFAULTFONT}" ]] ; then
+        DEFAULTFONT="$(_windows_native_path "${DEFAULTFONT}")"
+    fi
 fi
 
 if [[ "${DEVICE_INPUT_CHOICE}" = "0" ]] ; then

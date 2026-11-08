@@ -223,6 +223,32 @@ _start_video_preview(){
     _stop_test_signal
     _write_black_ppm "${VRECORD_PREVIEW_TMP}"
     rm -f "${VRECORD_PREVIEW_FIFO}"
+    # Windows native ffmpeg cannot write/read POSIX fifos reliably; fall back to a
+    # low-rate direct JPEG update of the preview pane (still useful for settings).
+    if [ "${OS_TYPE}" = "windows" ] ; then
+        PREVIEW_W=480
+        PREVIEW_H="$(awk -v w="${PREVIEW_SRCW}" -v h="${PREVIEW_SRCH}" 'BEGIN { printf "%d", int(((480 * h / w) + 1) / 2) * 2 }')"
+        set -- "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}" -f decklink -i "${DECKLINK_INPUT_CHOICE}" -map 0:v -vf "scale=480:-2,fps=5" -update 1 -f image2 "${VRECORD_PREVIEW_TMP}"
+        if [ "${PREVIEW_RELAY_CHOICE}" = "true" ] ; then
+            PREVIEW_RELAY_DEV="${DECKLINK_INPUT_CHOICE}"
+            if [ -n "${PREVIEW_RELAY_DEV_CHOICE}" ] ; then
+                PREVIEW_RELAY_DEV="${PREVIEW_RELAY_DEV_CHOICE}"
+            fi
+            case "${AUDIO_INPUT_CHOICE}" in
+                "SDI Embedded Audio")      PREVIEW_AINPUT="embedded" ;;
+                "Digital Audio (AES/EBU)") PREVIEW_AINPUT="aes_ebu" ;;
+                *)                         PREVIEW_AINPUT="analog" ;;
+            esac
+            # separate relay process: Windows can't mux decklink out alongside image2 update easily here
+            "${FFMPEG_BIN}" -nostdin -nostats -loglevel error -y -format_code "${PREVIEW_FORMAT}" -video_input "${PREVIEW_VINPUT}" -audio_input "${PREVIEW_AINPUT}" -f decklink -i "${DECKLINK_INPUT_CHOICE}" -map 0:v -map 0:a -c:v v210 -c:a pcm_s16le -ar 48000 -ac 2 -f decklink "${PREVIEW_RELAY_DEV}" > "${VRECORD_PREVIEW_LOG_TMP}.relay" 2>&1 &
+            echo $! > "${VRECORD_PREVIEW_RPID_TMP}"
+            ln -sf "${VRECORD_PREVIEW_TMP}" "${VRECORD_OUTPUT_DISPLAY_TMP}" 2>/dev/null || cp -f "${VRECORD_PREVIEW_TMP}" "${VRECORD_OUTPUT_DISPLAY_TMP}" 2>/dev/null
+        fi
+        echo "starting preview (windows image path)..." > "${VRECORD_PREVIEW_STATUS_TMP}"
+        "$@" > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
+        echo $! > "${VRECORD_PREVIEW_PID_TMP}"
+        return 0
+    fi
     mkfifo "${VRECORD_PREVIEW_FIFO}"
     # lossless preview: raw RGB frames through a fifo; a reader wraps each frame in a
     # PPM header and renames it into place atomically so the pane never shows a torn frame
@@ -1852,6 +1878,9 @@ _get_audio_device_list(){
         arecord -l | grep -E '\[.*\]' | cut -d ':' -f1-2 | awk '{$1=$1;print}'
     elif [ "${OS_TYPE}" = "macOS" ] ; then
         "${FFMPEG_BIN}" -nostdin -hide_banner -f avfoundation -list_devices 1 -i dummy 2>&1 | grep -A 10 "AVFoundation audio devices" | grep -o "\[[0-9]\].*" | cut -d " " -f2-
+    elif [ "${OS_TYPE}" = "windows" ] ; then
+        # non-Blackmagic system audio on Windows uses dshow; Blackmagic audio goes through decklink
+        "${FFMPEG_BIN}" -nostdin -hide_banner -f dshow -list_devices true -i dummy 2>&1 | sed -n '/DirectShow audio devices/,/DirectShow video devices/p' | grep -o '"[^"]*"' | tr -d '"' || true
     fi
 }
 

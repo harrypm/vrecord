@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Assemble a self-contained Windows portable package for vrecord.
+# Expects prior builds under VRECORD_BUILD (default: $HOME/vrecord-build):
+#   ffmpeg-install/, gtkdialog-install/, xmlstarlet-install/,
+#   decklink-include/, mediainfo-cli/, mkvtoolnix/, dejavu fonts, cowsay/
+#
+# Output: Release/artifacts/vrecord_windows_<VERSION>/ + .zip
+
+set -euo pipefail
+cd "$(dirname "$0")"
+RELEASE_DIR="$(pwd)"
+ROOT="$(cd .. && pwd)"
+VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' "$ROOT/vrecord")"
+BUILD_DIR="${VRECORD_BUILD:-$HOME/vrecord-build}"
+# On Windows MSYS this is typically /c/Users/.../vrecord-build
+if [[ ! -d "$BUILD_DIR" && -d /c/Users/Harry/vrecord-build ]]; then
+  BUILD_DIR=/c/Users/Harry/vrecord-build
+fi
+ARTIFACTS="$RELEASE_DIR/artifacts"
+PKG="$ARTIFACTS/vrecord_windows_${VERSION}"
+rm -rf "$PKG"
+mkdir -p "$PKG/bin" "$PKG/Resources/fonts" "$ARTIFACTS"
+
+echo "Packaging vrecord Windows portable ${VERSION}"
+echo "  build dir: $BUILD_DIR"
+
+cp "$ROOT/vrecord" "$ROOT/vtest" "$ROOT/vplay" "$PKG/" 2>/dev/null || true
+chmod 755 "$PKG/vrecord" "$PKG/vtest" "$PKG/vplay" 2>/dev/null || true
+cp -a "$ROOT/Resources/." "$PKG/Resources/"
+
+# fonts
+if [[ -d "$BUILD_DIR/dejavu-fonts" ]]; then
+  find "$BUILD_DIR/dejavu-fonts" -name 'DejaVuSans*.ttf' -exec cp -f {} "$PKG/Resources/fonts/" \;
+fi
+
+# core binaries
+cp -f "$BUILD_DIR/ffmpeg-install/bin/ffmpeg-ma.exe" \
+      "$BUILD_DIR/ffmpeg-install/bin/ffplay-ma.exe" \
+      "$BUILD_DIR/ffmpeg-install/bin/ffprobe-ma.exe" "$PKG/bin/"
+cp -f "$BUILD_DIR/ffmpeg-install/bin/"*.dll "$PKG/bin/" 2>/dev/null || true
+cp -f "$BUILD_DIR/gtkdialog-install/bin/gtkdialog.exe" "$PKG/bin/"
+cp -f "$BUILD_DIR/xmlstarlet-install/bin/xmlstarlet.exe" "$PKG/bin/" 2>/dev/null || true
+cp -f "$BUILD_DIR/xmlstarlet-install/bin/xml.exe" "$PKG/bin/" 2>/dev/null || true
+cp -f "$BUILD_DIR/mediainfo-cli/MediaInfo.exe" "$BUILD_DIR/mediainfo-cli/"*.dll "$PKG/bin/" 2>/dev/null || true
+find "$BUILD_DIR/mkvtoolnix" -name mkvpropedit.exe -exec cp -f {} "$PKG/bin/" \; 2>/dev/null || true
+find "$BUILD_DIR/mkvtoolnix" -name mkvmerge.exe -exec cp -f {} "$PKG/bin/" \; 2>/dev/null || true
+if [[ -d "$BUILD_DIR/cowsay" ]]; then
+  mkdir -p "$PKG/share/cowsay"
+  cp -a "$BUILD_DIR/cowsay/bin/"* "$PKG/bin/" 2>/dev/null || true
+  cp -a "$BUILD_DIR/cowsay/share/cowsay/"* "$PKG/share/cowsay/" 2>/dev/null || true
+fi
+
+# transitive UCRT DLLs
+export PATH="/ucrt64/bin:${PATH}"
+collect_once() {
+  local changed=0
+  local bin lib base
+  for bin in "$PKG/bin/"*; do
+    [[ -f "$bin" ]] || continue
+    while read -r lib; do
+      [[ -f "$lib" ]] || continue
+      base="$(basename "$lib")"
+      if [[ ! -f "$PKG/bin/$base" ]]; then
+        cp -f "$lib" "$PKG/bin/"
+        changed=1
+      fi
+    done < <(ldd "$bin" 2>/dev/null | awk '/=> \/ucrt64\// { print $3 }')
+  done
+  echo "$changed"
+}
+for _ in 1 2 3 4 5; do
+  [[ "$(collect_once)" = 0 ]] && break
+done
+
+cat > "$PKG/vrecord.sh" << 'EOF'
+#!/usr/bin/env bash
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+export PATH="$ROOT/bin:$PATH"
+export VRECORD_RESOURCES="$ROOT/Resources"
+cd "$ROOT"
+exec bash ./vrecord "$@"
+EOF
+chmod +x "$PKG/vrecord.sh"
+
+cat > "$PKG/vrecord.cmd" << 'EOF'
+@echo off
+setlocal EnableExtensions
+set "ROOT=%~dp0"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "PATH=%ROOT%\bin;%PATH%"
+set "VRECORD_RESOURCES=%ROOT%\Resources"
+set "BASH="
+if exist "C:\msys64\usr\bin\bash.exe" set "BASH=C:\msys64\usr\bin\bash.exe"
+if not defined BASH if exist "%ProgramFiles%\Git\bin\bash.exe" set "BASH=%ProgramFiles%\Git\bin\bash.exe"
+if not defined BASH (
+  echo ERROR: Need MSYS2 bash (C:\msys64) or Git Bash to run vrecord on Windows.
+  exit /b 1
+)
+for /f "usebackq delims=" %%I in (`"%BASH%" -lc "cygpath -u '%ROOT%'" 2^>nul`) do set "MROOT=%%I"
+if not defined MROOT (
+  echo ERROR: could not convert package path for bash
+  exit /b 1
+)
+"%BASH%" -lc "export PATH=\"$MROOT/bin:$PATH\"; export VRECORD_RESOURCES=\"$MROOT/Resources\"; cd \"$MROOT\"; exec bash ./vrecord \"$@\"" -- %*
+exit /b %ERRORLEVEL%
+EOF
+
+cat > "$PKG/README-WINDOWS.txt" << EOF
+vrecord Windows portable ${VERSION}
+===================================
+
+Requirements:
+  - Blackmagic Desktop Video drivers installed (this station: 16.0.x)
+  - MSYS2 bash at C:\\msys64 OR Git Bash
+
+Run:
+  vrecord.cmd
+  vrecord.cmd -e
+  vrecord.cmd -s testid
+  vrecord.cmd mytape
+
+Notes:
+  - Output directories must be normal Windows paths (e.g. C:/Captures).
+  - ffmpeg-ma is a MinGW build with decklink indev/outdev enabled.
+  - gtkdialog GUI is GTK3-based; preview uses a Windows-safe image path.
+  - Only the Desktop Video driver is a system install; everything else is bundled.
+EOF
+
+(
+  cd "$ARTIFACTS"
+  if command -v zip >/dev/null 2>&1; then
+    rm -f "vrecord_${VERSION}_windows_portable.zip"
+    (cd "vrecord_windows_${VERSION}" && zip -qry "../vrecord_${VERSION}_windows_portable.zip" .)
+  else
+    powershell.exe -NoProfile -Command "Compress-Archive -Path 'vrecord_windows_${VERSION}\\*' -DestinationPath 'vrecord_${VERSION}_windows_portable.zip' -Force"
+  fi
+)
+
+echo "Built: $PKG"
+echo "Zip:   $ARTIFACTS/vrecord_${VERSION}_windows_portable.zip"
