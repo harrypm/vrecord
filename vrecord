@@ -2188,11 +2188,37 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     # VRECORD_OUTPUT_NAME runs <input>_get_output_filename</input> as a blocking
     # popen bash - strip live refreshes from keystrokes, notebook clicks and shows.
     MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/type="refresh">VRECORD_OUTPUT_NAME/d')"
-    # Remove ALL timer blocks on Windows. The disabled="true" attribute only makes
-    # the timer insensitive - instrumented builds show its actions STILL fire
-    # (preview_status_timer spawned bash every 300ms, each a g_spawn_sync that
-    # blocked the GTK main loop 40-185ms - the constant-freeze root cause).
-    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '/<timer/{skip=1} !skip{print} /<\/timer>/{skip=0}')"
+    # Remove timer blocks that spawn bash. The disabled="true" attribute only
+    # makes the timer insensitive - instrumented builds show its actions STILL
+    # fire (preview_status_timer spawned bash every 300ms, each a g_spawn_sync
+    # that blocked the GTK main loop 40-185ms - the constant-freeze root cause).
+    # Refresh-only timers (preview image/status) stay: refresh: is in-process.
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '
+        /<timer/{buf=$0; cap=1; next}
+        cap { buf=buf "\n" $0; if (/<\/timer>/) { cap=0;
+                 if (buf ~ /_refresh_preview_page|deckcontrol |echo disabled/) next;
+                 print buf } ; next }
+        !cap { print }')"
+    # the kept 33ms preview/fileplay timers are far too hot - 500ms is plenty
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed 's/interval="33"/interval="500"/g')"
+    # give the window (and taskbar) the real app icon (square monitor-with-V,
+    # rendered from Resources/vrecord-icon.svg - NOT the 924x124 wordmark)
+    VRECORD_ICON_WIN="$(_windows_native_path "${RESOURCE_PATH}/vrecord-icon.png")"
+    MAIN_DIALOG="${MAIN_DIALOG/<window title=\"Welcome to Vrecord!\">/<window title=\"Welcome to Vrecord!\" image-name=\"${VRECORD_ICON_WIN}\">}"
+    # THE big image bug: the dialog embeds RESOURCE_PATH as an MSYS path (/c/...)
+    # which native GTK cannot open - every icon/logo/pixmap was broken. Rewrite
+    # every embedded image path to the native C:/ form.
+    local RESOURCE_PATH_WIN="$(_windows_native_path "${RESOURCE_PATH}")"
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed "s|\"${RESOURCE_PATH}/|\"${RESOURCE_PATH_WIN}/|g")"
+    # Adwaita on MSYS2 ships no legacy stock icons - point the stock refs at
+    # our bundled PNGs (Release/gen-gui-icons.ps1 renders them into Resources/icons)
+    local SEDSTOCK=""
+    for icon in gtk-index gtk-open gtk-save gtk-refresh gtk-media-record gtk-media-play \
+                gtk-media-stop gtk-media-rewind gtk-media-forward gtk-media-previous \
+                gtk-media-next gtk-execute gtk-yes gtk-no ; do
+        SEDSTOCK+="s|<input file stock=\\\"${icon}\\\"></input>|<input file>\\\"${RESOURCE_PATH_WIN}/icons/${icon}.png\\\"</input>|g; "
+    done
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed "${SEDSTOCK%; }")"
     # Shrink the two oversized inner scrollables (1080/1420) - their natural
     # width clamps the window to 1446px, wider than the --geometry request.
     MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed 's/width="1080"/width="1000"/g; s/width="1420"/width="1000"/g')"

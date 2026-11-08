@@ -70,6 +70,39 @@ Shot "04-themes" $r.L $r.T $W $H
 [U2]::Click([int]($r.L + $W*0.043), [int]($r.T + $H*0.057)); Start-Sleep -Seconds 3
 Shot "05-decklink" $r.L $r.T $W $H
 
+# --- fileselect probe: click the file-to-play browse button (bottom right) ---
+Add-Type @"
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class WinEnum {
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    public static List<string> Titles(uint pid) {
+        var found = new List<string>();
+        EnumWindows((h, l) => {
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (p == pid && IsWindowVisible(h)) {
+                var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+                found.Add(sb.ToString());
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+}
+"@
+Write-Output "windows before: $(([WinEnum]::Titles($gd.Id)) -join ' | ')"
+[U2]::Click([int]($r.L + $W*0.975), [int]($r.T + $H*0.82)); Start-Sleep -Seconds 3
+Write-Output "windows after browse click: $(([WinEnum]::Titles($gd.Id)) -join ' | ')"
+Shot "06-fileselect" $r.L $r.T $W $H
+[System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+Start-Sleep -Seconds 1
+
 # freeze diagnostics: thread wait reasons + action log tail
 $gd2 = Get-Process -Id $gd.Id -ErrorAction SilentlyContinue
 if ($gd2) {

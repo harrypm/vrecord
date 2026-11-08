@@ -62,8 +62,25 @@ _get_audio_device_list(){ echo ""; }
 _get_dvrescue_input_list(){ echo ""; }
 _get_summary(){ echo "Windows portable vrecord"; }
 
-_start_video_preview(){ echo "preview: use Passthrough for live view on Windows" > "${VRECORD_PREVIEW_STATUS_TMP}"; }
-_stop_video_preview(){ :; }
+# Windows preview: decklink -> one overwriting JPEG frame (image2 -update 1),
+# displayed by the gtkdialog pixmap + its refresh-only timer (no bash per tick).
+_start_video_preview(){
+    _stop_video_preview
+    echo "starting" > "${VRECORD_PREVIEW_STATUS_TMP}"
+    "${FFMPEG_BIN}" -nostdin -loglevel error -f decklink -raw_format uyvy422 \
+        -i "${DECKLINK_INPUT_CHOICE}" -an -vf fps=4 \
+        -update 1 -q:v 5 -y "${VRECORD_PREVIEW_TMP}" \
+        > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
+    echo $! > "${VRECORD_PREVIEW_PID_TMP}"
+    echo "live (${DECKLINK_INPUT_CHOICE})" > "${VRECORD_PREVIEW_STATUS_TMP}"
+}
+_stop_video_preview(){
+    if [[ -f "${VRECORD_PREVIEW_PID_TMP}" ]] ; then
+        kill "$(cat "${VRECORD_PREVIEW_PID_TMP}")" 2>/dev/null
+        rm -f "${VRECORD_PREVIEW_PID_TMP}"
+    fi
+    echo "stopped" > "${VRECORD_PREVIEW_STATUS_TMP}"
+}
 _start_file_playback(){ :; }
 _stop_file_playback(){ :; }
 _pause_file_playback(){ :; }
