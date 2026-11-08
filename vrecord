@@ -597,16 +597,21 @@ _gtk_vbox_list() {
     shift 3
     OPTION_LIST=("${@}")
     SELECTION="$(_get_index_of_value "${!VARIABLE_NAME}" "${OPTION_LIST[@]}")"
+    # comboboxtext only treats <input> as a shell command with the explicit
+    # "command:" prefix - without it the value is read as a FILE name and the
+    # dropdown never fills (decklink detection appeared dead on Windows)
+    local INPUT_PREFIX=""
+    [[ "${OS_TYPE}" = "windows" ]] && INPUT_PREFIX="command:"
     if [[ "${VARIABLE_NAME}" == "DECKLINK_INPUT_CHOICE" ]] ; then
-        LIST="<input>_get_decklink_input_list</input>"
+        LIST="<input>${INPUT_PREFIX}_get_decklink_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "PREVIEW_RELAY_DEV_CHOICE" ]] ; then
-        LIST="<input>_get_decklink_input_list</input>"
+        LIST="<input>${INPUT_PREFIX}_get_decklink_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "DVRESCUE_INPUT_CHOICE" ]] ; then
-        LIST="<input>_get_dvrescue_input_list</input>"
+        LIST="<input>${INPUT_PREFIX}_get_dvrescue_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "AUDIO_DEV_CHOICE" ]] ; then
-        LIST="<input>_get_audio_device_list</input>"
+        LIST="<input>${INPUT_PREFIX}_get_audio_device_list</input>"
     elif [[ "${VARIABLE_NAME}" == "STANDARD_CHOICE" ]] ; then
-        LIST="<input>_get_format_list</input>"
+        LIST="<input>${INPUT_PREFIX}_get_format_list</input>"
     else
         LIST="$(_expand_list2items "${OPTION_LIST[@]}")"
     fi
