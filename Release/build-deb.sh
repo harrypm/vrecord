@@ -35,7 +35,7 @@ cp ../vtest.1 "$PREFIX/share/man/man1/"
 #     when glibc matches; we target ubuntu 24.04 glibc 2.39) ---
 for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
            mkvextract mkvinfo mkvmerge mkvpropedit xmlstarlet cowsay gnuplot \
-           dvrescue dvpackager deckcontrol timecodexml; do
+           dvrescue dvpackager deckcontrol timecodexml2webvtt; do
     BINPATH="$(command -v "$BIN" 2>/dev/null || true)"
     if [ -n "$BINPATH" ]; then
         cp "$BINPATH" "$PREFIX/lib/vrecord/bin/"
