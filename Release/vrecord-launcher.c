@@ -83,7 +83,9 @@ int main(int argc, char **argv)
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof si);
     si.cb = sizeof si;
-    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, root, &si, &pi)) {
+    /* GUI launch: bash is a console app - without CREATE_NO_WINDOW it would
+     * open its own terminal window next to the GUI. */
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, root, &si, &pi)) {
         fprintf(stderr, "vrecord: failed to start bash (error %lu)\n", GetLastError());
         return 1;
     }
