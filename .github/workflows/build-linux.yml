@@ -48,14 +48,22 @@ jobs:
           brew trust --tap harrypm/vendored
           # vendored gtk+: the current core gtk+ formula with the
           # deprecation/disable markers stripped, so our copy outlives the
-          # 2027-08-28 disable date of the core formula
-          brew cat gtk+ | sed '/deprecate!/d; /disable!/d' > "$(brew --repo harrypm/vendored)/Formula/gtk+.rb"
+          # 2027-08-28 disable date of the core formula (read the formula
+          # file directly: brew cat can come up empty for deprecated
+          # formulae, which writes an empty class and fails to load)
+          CORE_GTKPLUS="$(brew --repo homebrew/core)/Formula/g/gtk+.rb"
+          [ -f "$CORE_GTKPLUS" ] || CORE_GTKPLUS="$(brew --repo homebrew/core)/Formula/gtk+.rb"
+          sed '/deprecate!/d; /disable!/d' "$CORE_GTKPLUS" > "$(brew --repo harrypm/vendored)/Formula/gtk+.rb"
           # vendored gtkdialog: the amiaos 0.8.5e formula (same tarball,
           # same DATA patch) with the runtime dependency repointed at the
           # vendored gtk+
           curl -fsSL https://raw.githubusercontent.com/amiaopensource/homebrew-amiaos/master/gtkdialog.rb \
             | sed 's|depends_on "gtk+"$|depends_on "harrypm/vendored/gtk+"|' \
             > "$(brew --repo harrypm/vendored)/Formula/gtkdialog.rb"
+          # fail loudly if either vendored formula came up empty
+          VDIR="$(brew --repo harrypm/vendored)/Formula"
+          grep -q "^class " "$VDIR/gtk+.rb" || { echo "::error::vendored gtk+ formula is empty or invalid"; exit 1; }
+          grep -q "^class " "$VDIR/gtkdialog.rb" || { echo "::error::vendored gtkdialog formula is empty or invalid"; exit 1; }
           brew install ffmpeg-ma dvrescue cowsay harrypm/vendored/gtkdialog
 
       - name: Build .deb package
