@@ -44,6 +44,8 @@ jobs:
           git config --global user.email "ci@vrecord.invalid"
           git config --global user.name "vrecord CI"
           brew tap-new harrypm/vendored
+          # the CI trust requirement covers local taps too
+          brew trust --tap harrypm/vendored
           # vendored gtk+: the current core gtk+ formula with the
           # deprecation/disable markers stripped, so our copy outlives the
           # 2027-08-28 disable date of the core formula
