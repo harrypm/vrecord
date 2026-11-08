@@ -65,7 +65,11 @@ jobs:
           VDIR="$(brew --repo harrypm/vendored)/Formula"
           grep -q "^class " "$VDIR/gtk+.rb" || { echo "::error::vendored gtk+ formula is empty or invalid"; exit 1; }
           grep -q "^class " "$VDIR/gtkdialog.rb" || { echo "::error::vendored gtkdialog formula is empty or invalid"; exit 1; }
-          brew install ffmpeg-ma dvrescue cowsay harrypm/vendored/gtkdialog
+          # (dvrescue/dvpackager were never in the linux packages - the old
+          # vrecord formula's dvrescue dependency is conditional and did not
+          # apply here; its source build fails on superenv-scrubbed
+          # pkg-config paths anyway - the collectors skip absent binaries)
+          brew install ffmpeg-ma cowsay harrypm/vendored/gtkdialog
 
       - name: Build .deb package
         run: |
