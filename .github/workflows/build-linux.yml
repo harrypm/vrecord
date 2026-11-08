@@ -22,7 +22,20 @@ jobs:
             git mkvtoolnix gnuplot xmlstarlet mpv mediaconch \
             libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools \
             binutils file desktop-file-utils librsvg2-bin
-          # homebrew-on-linux for the tap deps (ffmpeg-ma, gtkdialog)
+          # homebrew-on-linux for the tap deps (ffmpeg-ma, gtkdialog).
+          # Two known runner annotations surface here, neither fixable in
+          # this workflow (documented in the FUTO best-practices Runners
+          # Note):
+          # 1. 'gtk+ has been deprecated ... disabled on 2027-08-28' - the
+          #    amiaos gtkdialog formula builds against brew's gtk+ (gtk2),
+          #    which Homebrew deprecated because gtk2 is EOL upstream. This
+          #    LINUX BUILD BREAKS ON 2027-08-28 unless the GUI stack
+          #    migrates (gtkdialog gtk3, or prebuilt bottles). Tracking
+          #    that migration is a project, not a workflow edit.
+          # 2. 'Landlock ABI 10 or later is required ... found ABI 8' - the
+          #    runner kernel's Landlock LSM is older than brew's sandbox
+          #    wants; brew applies partial restrictions. Harmless, goes
+          #    away when the runner image updates its kernel.
           /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
