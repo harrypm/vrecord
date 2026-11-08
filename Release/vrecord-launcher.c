@@ -72,6 +72,13 @@ int main(int argc, char **argv)
     }
     SetEnvironmentVariableA("PATH", path);
     SetEnvironmentVariableA("VRECORD_RESOURCES", mres);
+    /* pin HOME to the real profile (MSYS defaults to /home/<user>, which
+     * would put the vrecord config in C:\msys64\home instead of the profile) */
+    {
+        const char *up = getenv("USERPROFILE");
+        if (up && *up)
+            SetEnvironmentVariableA("HOME", up);
+    }
 
     /* bash <abs-script> <args...>  — non-login; env PATH/VRECORD_RESOURCES already set,
      * cwd = package root. (A login shell would cd to $HOME and lose ./vrecord.) */

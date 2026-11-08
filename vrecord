@@ -3,9 +3,14 @@
 # vrecord
 # Open-source software for capturing a video signal and turning it into a digital file.
 
-VERSION="2026-11-05"
+VERSION="2026-03-03"
 SCRIPTNAME="$(basename "${0}")"
 SCRIPTDIR="$(dirname "${0}")"
+# Windows/MSYS2: disable automatic argument path conversion - filter_complex
+# graphs (colon-heavy file= targets, tee muxer specs) get mangled by it and
+# native exes then fail to launch. Inert on macOS/Linux.
+export MSYS2_ARG_CONV_EXCL="*"
+export MSYS_NO_PATHCONV=1
 CONFIG_FILE="${HOME}/.${SCRIPTNAME}.conf"
 SAT_OUTLIER_THRSHLD=14
 AUD_OUTLIER_THRSHLD=10
@@ -302,6 +307,13 @@ _setup_env_variables(){
     elif [[ "${QUERY_OS_TYPE}" = MINGW* || "${QUERY_OS_TYPE}" = MSYS* || "${QUERY_OS_TYPE}" = CYGWIN* ]] ; then
         # Windows via MSYS2/MinGW/Cygwin (portable self-contained package or dev checkout)
         OS_TYPE="windows"
+        # MSYS2 rewrites arguments that look like POSIX paths or path lists
+        # before exec'ing native exes - the filter_complex graphs (colon-heavy
+        # file= targets, tee muxer specs) get mangled into launch failures.
+        # Disable argument conversion entirely; the script already uses native
+        # C:/ paths everywhere they reach a native binary.
+        export MSYS2_ARG_CONV_EXCL="*"
+        export MSYS_NO_PATHCONV=1
         if [[ -n "${VRECORD_RESOURCES}" ]] && [[ -d "${VRECORD_RESOURCES}" ]] ; then
             RESOURCE_PATH="${VRECORD_RESOURCES}"
         else
@@ -796,7 +808,12 @@ _setup_vrecord_process(){
     if [[ "${DEVICE_INPUT_CHOICE}" = 0 ]] ; then
         WINDOW_NAME="mode:${RUNTYPE} - video:'${VIDEO_INPUT}' audio:'${AUDIO_INPUT}' - to end recording press q, esc, or close video window"
         # DEVICE_INPUT_CHOICE=0 is decklink, other DEVICE_INPUT_CHOICE values don't yet use such filtering
-        if [[ "${RUNTYPE}" = "record" || \
+        if [[ "${VRECORD_HEADLESS}" = "1" ]] ; then
+            # backend/CI mode: no player window - keep the record|player
+            # pipeline shape but drain the player pipe with cat (the tee
+            # muxer aborts the capture if its pipe slave closes early)
+            VRECORD_STEPS="2"
+        elif [[ "${RUNTYPE}" = "record" || \
             "${SIGNAL_INPUT}" = 'true' || \
             "${PLAYBACKVIEW_CHOICE_PASS}" = "Audio + Video" || \
             "${MEDIA_PLAYER_CHOICE}" = "mpv" || \
@@ -809,7 +826,9 @@ _setup_vrecord_process(){
         # caption handling if ntsc
         if [[ "${STANDARD}" == "ntsc" ]] ; then
             CAPTION_TMP="$(_maketemp .eia608.txt)"
-            CAPTION_WRITE=",readeia608=lp=1:spw=0.27,metadata=mode=print:key=lavfi.readeia608.0.cc:file=${CAPTION_TMP}"
+            # Windows drive-letter colons must be escaped inside filter args
+            CAPTION_TMP_ESC="${CAPTION_TMP//:/\\:}"
+            CAPTION_WRITE=",readeia608=lp=1:spw=0.27,metadata=mode=print:key=lavfi.readeia608.0.cc:file='${CAPTION_TMP_ESC}'"
         fi
 
         RECORD_COMMAND=("${FFMPEG_BIN}")
@@ -823,7 +842,8 @@ _setup_vrecord_process(){
             MIDDLEOPTIONS_PRES+=(-map_metadata 0:s:v:0)
             if [[ "${CONTAINER_CHOICE}" != "Matroska" ]] ; then
                 TC_TMP=$(_maketemp .timecode.txt)
-                TC_WRITE=",metadata=mode=print:file=${TC_TMP}"
+                TC_TMP_ESC="${TC_TMP//:/\\:}"
+                TC_WRITE=",metadata=mode=print:file='${TC_TMP_ESC}'"
             fi
             RECORD_COMMAND+=(-timecode_format all)
             RECORD_COMMAND+=(-guess_layout_max 0)
@@ -875,14 +895,16 @@ _setup_vrecord_process(){
                 (( VIDEO_STREAM_IDX++ ))
                 EXTRAOPTIONS+=(-c:v:"${QC_THUMB_V_IDX}" mjpeg -pix_fmt:v:"${QC_THUMB_V_IDX}" yuvj420p -qmin:v:"${QC_THUMB_V_IDX}" 8 -qmax:v:"${QC_THUMB_V_IDX}" 12 -metadata:s:v:"${QC_THUMB_V_IDX}" title="Frame Thumbnails")
                 QC_VIDEO_DUMP="$(_maketemp .qc_video.txt)"
+                QC_VIDEO_DUMP_ESC="${QC_VIDEO_DUMP//:/\\:}"
                 RECORD_COMMAND_QC_FILTER=";[${QC_SRC_V_PADNAME}]split=2[${QC_THUMB_PADNAME}_pre][QC_STATS_V]"
                 RECORD_COMMAND_QC_FILTER+=";[${QC_THUMB_PADNAME}_pre]scale=72:72[${QC_THUMB_PADNAME}]"
-                RECORD_COMMAND_QC_FILTER+=";[QC_STATS_V]signalstats=stat=tout+vrep+brng,metadata=mode=print:file=${QC_VIDEO_DUMP},nullsink"
+                RECORD_COMMAND_QC_FILTER+=";[QC_STATS_V]signalstats=stat=tout+vrep+brng,metadata=mode=print:file='${QC_VIDEO_DUMP_ESC}',nullsink"
                 QC_AUDIO_DUMPS=()
                 for IDX in "${AUDIO_CHANNEL_IDX[@]}" ; do
                     QC_AUDIO_DUMP="$(_maketemp ".qc_audio${IDX}.txt")"
+                    QC_AUDIO_DUMP_ESC="${QC_AUDIO_DUMP//:/\\:}"
                     QC_AUDIO_DUMPS+=("${QC_AUDIO_DUMP}")
-                    RECORD_COMMAND_QC_FILTER+=";[QC_A${IDX}]aformat=sample_fmts=flt|fltp,astats=metadata=1:reset=1:length=0.4,ametadata=mode=print:file=${QC_AUDIO_DUMP},anullsink"
+                    RECORD_COMMAND_QC_FILTER+=";[QC_A${IDX}]aformat=sample_fmts=flt|fltp,astats=metadata=1:reset=1:length=0.4,ametadata=mode=print:file='${QC_AUDIO_DUMP_ESC}',anullsink"
                 done
             fi
 
@@ -1068,6 +1090,9 @@ _setup_vrecord_process(){
         fi
         PLAYER_COMMAND=("${FFPLAY_BIN}" "${FFPLAY_OPTIONS[@]}")
     fi
+    if [[ "${VRECORD_HEADLESS}" = "1" ]] ; then
+        PLAYER_COMMAND=(cat)
+    fi
     if [[ "${VERBOSE_GTKDIALOG}" = "Y" ]] ; then
         echo "RUNTYPE ${RUNTYPE}"
         echo "STEPS ${VRECORD_STEPS}"
@@ -1130,9 +1155,9 @@ _set_up_edit_form() {
   _expand_list2items(){
     LIST=( "$@" )
     for i in "${LIST[@]}" ; do
-        # escape XML entities so options like "Channels 1 & 2" parse cleanly
-        # (gtkdialog decodes them back, so choice matching is unaffected)
-        i="${i//&/&amp;}"
+        # NOTE: no XML entity escaping - gtkdialog's lenient parser does not
+        # decode entities, so &amp; would leak into saved values verbatim.
+        # Raw '&' (upstream behavior) parses fine.
         echo "<item>${i}</item>"
     done
   }
@@ -2203,23 +2228,16 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     # VRECORD_OUTPUT_NAME runs <input>_get_output_filename</input> as a blocking
     # popen bash - strip live refreshes from keystrokes, notebook clicks and shows.
     MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed '/type="refresh">VRECORD_OUTPUT_NAME/d')"
-    # Remove timer blocks that spawn bash. The disabled="true" attribute only
-    # makes the timer insensitive - instrumented builds show its actions STILL
-    # fire (preview_status_timer spawned bash every 300ms, each a g_spawn_sync
-    # that blocked the GTK main loop 40-185ms - the constant-freeze root cause).
-    # Refresh-only timers (preview image/status) stay: refresh: is in-process.
-    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '
-        /<timer/{buf=$0; cap=1; next}
-        cap { buf=buf "\n" $0; if (/<\/timer>/) { cap=0;
-                 if (buf ~ /_refresh_preview_page|deckcontrol |echo disabled/) next;
-                 print buf } ; next }
-        !cap { print }')"
-    # the kept 33ms preview/fileplay timers are far too hot - 500ms is plenty
-    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | sed 's/interval="33"/interval="500"/g')"
-    # give the window (and taskbar) the real app icon (square monitor-with-V,
-    # rendered from Resources/vrecord-icon.svg - NOT the 924x124 wordmark)
-    VRECORD_ICON_WIN="$(_windows_native_path "${RESOURCE_PATH}/vrecord-icon.png")"
-    MAIN_DIALOG="${MAIN_DIALOG/<window title=\"Welcome to Vrecord!\">/<window title=\"Welcome to Vrecord!\" image-name=\"${VRECORD_ICON_WIN}\">}"
+    # Remove ALL timer blocks on Windows (backend-first: even refresh-only
+    # timers participate in a gdk SRW-lock message-reentry deadlock seen under
+    # gdb - the preview snapshot updates when Preview is toggled instead).
+    # The disabled="true" attribute only makes timers insensitive - instrumented
+    # builds show their actions STILL fire (the original freeze root cause).
+    MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '/<timer/{buf=$0; cap=1; next} cap { buf=buf "\n" $0; if (/<\/timer>/) { cap=0; next } ; next } !cap { print }')"
+    # BISECTION: window icon attr disabled - gdb shows the freeze is a
+    # sent-message (WM_GETTEXT/UxTheme) reentry deadlocking an SRW lock in gdk
+    #VRECORD_ICON_WIN="$(_windows_native_path "${RESOURCE_PATH}/vrecord-icon.png")"
+    #MAIN_DIALOG="${MAIN_DIALOG/<window title=\"Welcome to Vrecord!\">/<window title=\"Welcome to Vrecord!\" image-name=\"${VRECORD_ICON_WIN}\">}"
     # THE big image bug: the dialog embeds RESOURCE_PATH as an MSYS path (/c/...)
     # which native GTK cannot open - every icon/logo/pixmap was broken. Rewrite
     # every embedded image path to the native C:/ form.
@@ -2792,49 +2810,49 @@ _lookup_choice(){
         "2 Stereo Tracks (Channels 1 & 2 -> 1st Track Stereo, Channels 3 & 4 -> 2nd Track Stereo)")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=stereo|c0=c0|c1=${PHASE_VALUE_2}c1,asplit=${ASPLIT_N}[MAIN_STEREO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]");[0:a:0]pan=stereo|c0=c2|c1=${PHASE_VALUE_4}c3,asplit=${ASPLIT_N}[MAIN_STEREO_A2]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A2]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A2]")"
             AUDIO_PLAY_MAP="pan=4c|c0=c0|c1=${PHASE_VALUE_2}c1|c2=c2|c3=${PHASE_VALUE_4}c3"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='L(1)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT}:text='R(1)':fontcolor=white:fontsize=18:x=0:y=20,drawtext=fontfile=${DEFAULTFONT}:text='L(2)':fontcolor=white:fontsize=18:x=0:y=40,drawtext=fontfile=${DEFAULTFONT}:text='R(2)':fontcolor=white:fontsize=18:x=0:y=60"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='L(1)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT_ESC}:text='R(1)':fontcolor=white:fontsize=18:x=0:y=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text='L(2)':fontcolor=white:fontsize=18:x=0:y=40,drawtext=fontfile=${DEFAULTFONT_ESC}:text='R(2)':fontcolor=white:fontsize=18:x=0:y=60"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_STEREO_A1]" -map "[MAIN_STEREO_A2]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]" -map "[MP4_A2]")
             AUDIO_CHANNEL_IDX=(1 2) ;;
         "1 Stereo Track (From Channels 1 & 2)")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=stereo|c0=c0|c1=${PHASE_VALUE_2}c1,asplit=${ASPLIT_N}[MAIN_STEREO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]")"
             AUDIO_PLAY_MAP="pan=stereo|c0=c0|c1=${PHASE_VALUE_2}c1"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='L(1)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT}:text='R(1)':fontcolor=white:fontsize=18:x=0:y=20"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='L(1)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT_ESC}:text='R(1)':fontcolor=white:fontsize=18:x=0:y=20"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_STEREO_A1]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]")
             AUDIO_CHANNEL_IDX=(1) ;;
         "1 Stereo Track (From Channels 3 & 4)")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=stereo|c0=c2|c1=${PHASE_VALUE_2}c3,asplit=${ASPLIT_N}[MAIN_STEREO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]")"
             AUDIO_PLAY_MAP="pan=stereo|c0=c2|c1=${PHASE_VALUE_2}c3"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='L(1)':fontcolor=white:fontsize=18:x=0:y=40,drawtext=fontfile=${DEFAULTFONT}:text='R(1)':fontcolor=white:fontsize=18:x=0:y=60"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='L(1)':fontcolor=white:fontsize=18:x=0:y=40,drawtext=fontfile=${DEFAULTFONT_ESC}:text='R(1)':fontcolor=white:fontsize=18:x=0:y=60"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_STEREO_A1]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]")
             AUDIO_CHANNEL_IDX=(1) ;;
         "Channel 1 -> 1st Track Mono, Channel 2 -> 2nd Track Mono")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=mono|c0=c0,asplit=${ASPLIT_N}[MAIN_MONO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]");[0:a:0]pan=mono| c0=${PHASE_VALUE_2}c1,asplit=${ASPLIT_N}[MAIN_MONO_A2]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A2]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A2]")"
             AUDIO_PLAY_MAP="pan=stereo|c0=c0|c1=${PHASE_VALUE_2}c1"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT}:text='M(2)':fontcolor=white:fontsize=18:x=0:y=20"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT_ESC}:text='M(2)':fontcolor=white:fontsize=18:x=0:y=20"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_MONO_A1]" -map "[MAIN_MONO_A2]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]" -map "[MP4_A2]")
             AUDIO_CHANNEL_IDX=(1 2) ;;
         "Channel 2 -> 1st Track Mono, Channel 1 -> 2nd Track Mono")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=mono|c0=${PHASE_VALUE_2}c1,asplit=${ASPLIT_N}[MAIN_MONO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]");[0:a:0]pan=mono| c0=c0,asplit=${ASPLIT_N}[MAIN_MONO_A2]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A2]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A2]")"
             AUDIO_PLAY_MAP="pan=stereo|c0=${PHASE_VALUE_2}c1|c1=c0"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='M(2)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=20"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='M(2)':fontcolor=white:fontsize=18:x=0:y=0,drawtext=fontfile=${DEFAULTFONT_ESC}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=20"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_MONO_A1]" -map "[MAIN_MONO_A2]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]" -map "[MP4_A2]")
             AUDIO_CHANNEL_IDX=(1 2) ;;
         "Channel 1 -> Single Track Mono")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=mono|c0=c0,asplit=${ASPLIT_N}[MAIN_MONO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]")"
             AUDIO_PLAY_MAP="pan=mono| c0=c0"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=0"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=0"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_MONO_A1]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]")
             AUDIO_CHANNEL_IDX=(1) ;;
         "Channel 2 -> Single Track Mono")
             AUDIOMAP="[0:a:0]asplit=2[ORIG_A][ORIG_A2];[ORIG_A2]pan=mono|c0=c1,asplit=${ASPLIT_N}[MAIN_MONO_A1]$([[ "${MP4_CHOICE}" = "true" ]] && echo "[MP4_A1]")$([[ "${QCTOOLSXML_V2_CHOICE}" = "true" ]] && echo "[QC_A1]")"
             AUDIO_PLAY_MAP="pan=mono| c0=c1"
-            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=20"
+            AUDIO_PLAY_LABELS=",drawtext=fontfile=${DEFAULTFONT_ESC}:text='M(1)':fontcolor=white:fontsize=18:x=0:y=20"
             AUDIO_CHANNEL_MAP+=(-map "[ORIG_A]" -map "[MAIN_MONO_A1]")
             [[ "${MP4_CHOICE}" = "true" ]] && AUDIO_MP4_MAP+=(-map "[MP4_A1]")
             AUDIO_CHANNEL_IDX=(1) ;;
@@ -3402,8 +3420,8 @@ if [[ "${RUNTYPE}" = "record" ]] ; then
     [f]astats=metadata=1:reset=1,adrawgraph=m1=lavfi.astats.2.Min_level:m2=lavfi.astats.2.Max_level:size=700x160:bg=Black:fg1=0xFF00FF00:fg2=0xFF00FF00:slide=scroll:min=-32767:max=32767[wav2]"
     AP_MAP='[c1][wav1][wav2]xstack=inputs=3:layout=0_0|0_h0|0_h0+h1[out0]'
 else
-    PRINT_PHASE=",drawtext=fontfile=${DEFAULTFONT}:box=1:text=Phase\\\: %{metadata\\\:lavfi.astats.1.DC_offset}:x=135:y=380:fontcolor=black"
-    PRINT_CHANNELS_1_2=",drawtext=fontfile=${DEFAULTFONT}:text=Ch.1/2:x=10: y=10:fontcolor=white"
+    PRINT_PHASE=",drawtext=fontfile=${DEFAULTFONT_ESC}:box=1:text=Phase\\\: %{metadata\\\:lavfi.astats.1.DC_offset}:x=135:y=380:fontcolor=black"
+    PRINT_CHANNELS_1_2=",drawtext=fontfile=${DEFAULTFONT_ESC}:text=Ch.1/2:x=10: y=10:fontcolor=white"
     AUDIO_SPLIT='7[a][b][c][d][e][f][out1],'
     WAVEFORM="[e]astats=metadata=1:reset=1,adrawgraph=m1=lavfi.astats.1.Min_level:m2=lavfi.astats.1.Max_level:size=800x200:bg=Black:fg1=0xFFFF0000:fg2=0xFFFF0000:slide=scroll:min=-32767:max=32767[wav1],\
     [f]astats=metadata=1:reset=1,adrawgraph=m1=lavfi.astats.2.Min_level:m2=lavfi.astats.2.Max_level:size=800x200:bg=Black:fg1=0xFF00FF00:fg2=0xFF00FF00:slide=scroll:min=-32767:max=32767[wav2]"
@@ -3441,9 +3459,9 @@ else
     vectorscope=i=0.04:mode=color2:c=1:envelope=instant:graticule=green:flags=name,\
     scale=400:400"
     if [[ "${AUDIO_MAPPING_CHOICE}" = '2 Stereo Tracks (Channels 1 & 2 -> 1st Track Stereo, Channels 3 & 4 -> 2nd Track Stereo)' ]] ; then
-        PRINT_PHASE=",drawtext=fontfile=${DEFAULTFONT}:box=1:text=Phase\\\: %{metadata\\\:lavfi.astats.1.DC_offset}:x=135:y=180:fontcolor=black"
-        PRINT_CHANNELS_1_2=",drawtext=fontfile=${DEFAULTFONT}:text=Ch.1/2:x=10: y=10:fontcolor=white"
-        PRINT_CHANNELS_3_4=",drawtext=fontfile=${DEFAULTFONT}:text=Ch.3/4:x=10: y=10:fontcolor=white"
+        PRINT_PHASE=",drawtext=fontfile=${DEFAULTFONT_ESC}:box=1:text=Phase\\\: %{metadata\\\:lavfi.astats.1.DC_offset}:x=135:y=180:fontcolor=black"
+        PRINT_CHANNELS_1_2=",drawtext=fontfile=${DEFAULTFONT_ESC}:text=Ch.1/2:x=10: y=10:fontcolor=white"
+        PRINT_CHANNELS_3_4=",drawtext=fontfile=${DEFAULTFONT_ESC}:text=Ch.3/4:x=10: y=10:fontcolor=white"
         AUDIO_SPLIT='6[a][aa][b][d][e][out1]'
         CHANNEL_PARAMS="[b]pan=stereo|c0=c0|c1=c1,avectorscope=s=320x400${PRINT_CHANNELS_1_2}[b1],[e]pan=stereo|c0=c2|c1=c3,avectorscope=s=320x400${PRINT_CHANNELS_3_4}[e1]"
         AP_MAP='[phase1][phase2][b1][e1][x][d1][TFIELD][BFIELD][vector]xstack=inputs=9:layout=0_0|0_h0|w0_0|w0+w2_0|w0+w2+w3_0|0_h0+h1|0_h0+h1+h5|w6_h0+h1+h5|w5_h0+h1,fps=25[out0]'
@@ -3452,8 +3470,8 @@ else
         [aa]pan=stereo|c0=c2|c1=c3,aformat=dblp,channelsplit,axcorrelate,astats=metadata=1:reset=1,adrawgraph=lavfi.astats.1.DC_offset:max=1.01:min=-1.01:size=400x200:bg=black:fg1=0x99999999,drawbox=x=0:y=100:w=400:c=white:h=1${PRINT_PHASE}${PRINT_CHANNELS_3_4}[phase2]"
         SPECTRUM_SIZE='755x265'
     else
-        PRINT_PHASE=",drawtext=fontfile=${DEFAULTFONT}:box=1:text=Phase\\\: %{metadata\\\:lavfi.astats.1.DC_offset}:x=135:y=380:fontcolor=black"
-        PRINT_CHANNELS_1_2=",drawtext=fontfile=${DEFAULTFONT}:text=Ch.1/2:x=10: y=10:fontcolor=white"
+        PRINT_PHASE=",drawtext=fontfile=${DEFAULTFONT_ESC}:box=1:text=Phase\\\: %{metadata\\\:lavfi.astats.1.DC_offset}:x=135:y=380:fontcolor=black"
+        PRINT_CHANNELS_1_2=",drawtext=fontfile=${DEFAULTFONT_ESC}:text=Ch.1/2:x=10: y=10:fontcolor=white"
         AUDIO_SPLIT='4[a][b][d][out1]'
         CHANNEL_PARAMS="[b]pan=stereo|c0=c0|c1=c1,avectorscope=s=320x400${PRINT_CHANNELS_1_2}[b1]"
         AP_MAP='[a1][b1][x][d1][TFIELD][BFIELD][vector]xstack=inputs=7:layout=0_0|w0_0|w0+w1_0|0_h0+h4|0_h0|w4_h0|w0+w1+w2_0,fps=25[out0]'
@@ -3494,13 +3512,13 @@ ${PLAYBACK_FILTER_ADJUSTMENT}split=6[a][b][c][d][e][f];\
 [e2]format=yuv422p,geq=lum=60:cb=128:cr=128,\
 scale=180:ih+512,setsar=1/1,\
 drawtext=fontcolor=white:fontsize=22:\
-fontfile=${DEFAULTFONT}:textfile=${DRAWTEXT_TMP_1},\
+fontfile=${DEFAULTFONT_ESC}:textfile=${DRAWTEXT_TMP_1_ESC},\
 drawtext=fontcolor=white:fontsize=17:\
-fontfile=${DEFAULTFONT}:textfile=${DRAWTEXT_TMP_2}:y=480,\
+fontfile=${DEFAULTFONT_ESC}:textfile=${DRAWTEXT_TMP_2_ESC}:y=480,\
 drawtext=fontcolor=white:fontsize=52:\
-fontfile=${DEFAULTFONT}:textfile=${DRAWTEXT_TMP_3}:y=640[e3];\
+fontfile=${DEFAULTFONT_ESC}:textfile=${DRAWTEXT_TMP_3_ESC}:y=640[e3];\
 [f]scale=iw+512+180:82,format=yuv422p,geq=lum=60:cb=128:cr=128,drawtext=fontcolor=white:fontsize=22:\
-fontfile=${DEFAULTFONT}:textfile=${VRECORD_INPUT_TMP}:\
+fontfile=${DEFAULTFONT_ESC}:textfile=${VRECORD_INPUT_TMP_ESC}:\
 reload=1:y=82-th[f1];\
 [e3][a1][b1][c1][e1][d1][f1]xstack=inputs=7:layout=0_0|w0_0|w0_h1|w0_h1+h2|w0+w1_0|w0+w1_h1|0_h0" ;;
       "Color Matrix")
@@ -3527,20 +3545,20 @@ split=9[x][hm][hp][sm][sp][hmsm][hmsp][hpsm][hpsp];\
               BITS=10
               SPLIT="10[b0][b1][b2][b3][b4][b5][b6][b7][b8][b9]"
               STACK="\
-[b8]bitplanenoise=bitplane=2,crop=iw/10:ih:(iw/10)*8:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-9))*pow(2\\,9),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.2}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.2}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.2}:y=40:fontcolor=white:fontsize=20[b8c];\
-[b9]bitplanenoise=bitplane=1,crop=iw/10:ih:(iw/10)*9:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-10))*pow(2\\,10),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.1}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.1}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.1}:y=40:fontcolor=silver:fontsize=20[b9c];\
+[b8]bitplanenoise=bitplane=2,crop=iw/10:ih:(iw/10)*8:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-9))*pow(2\\,9),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.2}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.2}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.2}:y=40:fontcolor=white:fontsize=20[b8c];\
+[b9]bitplanenoise=bitplane=1,crop=iw/10:ih:(iw/10)*9:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-10))*pow(2\\,10),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.1}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.1}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.1}:y=40:fontcolor=silver:fontsize=20[b9c];\
 [b0c][b1c][b2c][b3c][b4c][b5c][b6c][b7c][b8c][b9c]hstack=10,format=yuv444p,drawgrid=w=iw/10:h=ih:t=2:c=green@0.5"
           fi
           PLAYBACKFILTER="\
 ${PLAYBACK_FILTER_ADJUSTMENT}format=yuv420p10le|yuv422p10le|yuv444p10le|yuv440p10le,split=${SPLIT};\
-[b0]bitplanenoise=bitplane=10,crop=iw/${BITS}:ih:(iw/${BITS})*0:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-1))*pow(2\\,1),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.10}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.10}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.10}:y=40:fontcolor=white:fontsize=20[b0c];\
-[b1]bitplanenoise=bitplane=9,crop=iw/${BITS}:ih:(iw/${BITS})*1:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-2))*pow(2\\,2),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.9}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.9}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.9}:y=40:fontcolor=silver:fontsize=20[b1c];\
-[b2]bitplanenoise=bitplane=8,crop=iw/${BITS}:ih:(iw/${BITS})*2:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-3))*pow(2\\,3),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.8}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.8}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.8}:y=40:fontcolor=white:fontsize=20[b2c];\
-[b3]bitplanenoise=bitplane=7,crop=iw/${BITS}:ih:(iw/${BITS})*3:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-4))*pow(2\\,4),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.7}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.7}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.7}:y=40:fontcolor=silver:fontsize=20[b3c];\
-[b4]bitplanenoise=bitplane=6,crop=iw/${BITS}:ih:(iw/${BITS})*4:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-5))*pow(2\\,5),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.6}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.6}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.6}:y=40:fontcolor=white:fontsize=20[b4c];\
-[b5]bitplanenoise=bitplane=5,crop=iw/${BITS}:ih:(iw/${BITS})*5:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-6))*pow(2\\,6),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.5}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.5}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.5}:y=40:fontcolor=silver:fontsize=20[b5c];\
-[b6]bitplanenoise=bitplane=4,crop=iw/${BITS}:ih:(iw/${BITS})*6:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-7))*pow(2\\,7),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.4}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.4}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.4}:y=40:fontcolor=white:fontsize=20[b6c];\
-[b7]bitplanenoise=bitplane=3,crop=iw/${BITS}:ih:(iw/${BITS})*7:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-8))*pow(2\\,8),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.0.3}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.1.3}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT}:text=%{metadata\\\:lavfi.bitplanenoise.2.3}:y=40:fontcolor=silver:fontsize=20[b7c];\
+[b0]bitplanenoise=bitplane=10,crop=iw/${BITS}:ih:(iw/${BITS})*0:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-1))*pow(2\\,1),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.10}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.10}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.10}:y=40:fontcolor=white:fontsize=20[b0c];\
+[b1]bitplanenoise=bitplane=9,crop=iw/${BITS}:ih:(iw/${BITS})*1:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-2))*pow(2\\,2),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.9}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.9}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.9}:y=40:fontcolor=silver:fontsize=20[b1c];\
+[b2]bitplanenoise=bitplane=8,crop=iw/${BITS}:ih:(iw/${BITS})*2:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-3))*pow(2\\,3),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.8}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.8}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.8}:y=40:fontcolor=white:fontsize=20[b2c];\
+[b3]bitplanenoise=bitplane=7,crop=iw/${BITS}:ih:(iw/${BITS})*3:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-4))*pow(2\\,4),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.7}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.7}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.7}:y=40:fontcolor=silver:fontsize=20[b3c];\
+[b4]bitplanenoise=bitplane=6,crop=iw/${BITS}:ih:(iw/${BITS})*4:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-5))*pow(2\\,5),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.6}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.6}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.6}:y=40:fontcolor=white:fontsize=20[b4c];\
+[b5]bitplanenoise=bitplane=5,crop=iw/${BITS}:ih:(iw/${BITS})*5:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-6))*pow(2\\,6),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.5}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.5}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.5}:y=40:fontcolor=silver:fontsize=20[b5c];\
+[b6]bitplanenoise=bitplane=4,crop=iw/${BITS}:ih:(iw/${BITS})*6:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-7))*pow(2\\,7),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.4}:y=0:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.4}:y=20:fontcolor=white:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.4}:y=40:fontcolor=white:fontsize=20[b6c];\
+[b7]bitplanenoise=bitplane=3,crop=iw/${BITS}:ih:(iw/${BITS})*7:0,lutyuv=u=(maxval/2):v=(maxval/2):y=bitand(val\\,pow(2\\,10-8))*pow(2\\,8),pad=iw:ih+64:0:64,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.0.3}:y=0:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.1.3}:y=20:fontcolor=silver:fontsize=20,drawtext=fontfile=${DEFAULTFONT_ESC}:text=%{metadata\\\:lavfi.bitplanenoise.2.3}:y=40:fontcolor=silver:fontsize=20[b7c];\
 ${STACK}" ;;
         "Frame Positioning")
             CORNER_W=24
@@ -3551,10 +3569,10 @@ ${PLAYBACK_FILTER_ADJUSTMENT}format=yuv420p10le|yuv422p10le|yuv444p10le|yuv440p1
 [f1]field=top,split=4[t1][t2][t3][t4];\
 [f2]field=bottom,split=4[b1][b2][b3][b4];\
 color=color=darkgray,scale=${CORNER_W}*${CORNER_ZOOM}*2:${CORNER_H}*2,split=4[l1][l2][l3][l4];\
-[l1]drawtext=fontfile=${DEFAULTFONT}:text='Top ${CORNER_H} Rows of Field 1 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l1t];\
-[l2]drawtext=fontfile=${DEFAULTFONT}:text='Top ${CORNER_H} Rows of Field 2 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l2t];\
-[l3]drawtext=fontfile=${DEFAULTFONT}:text='Bottom ${CORNER_H} Rows of Field 1 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l3t];\
-[l4]drawtext=fontfile=${DEFAULTFONT}:text='Bottom ${CORNER_H} Rows of Field 2 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l4t];\
+[l1]drawtext=fontfile=${DEFAULTFONT_ESC}:text='Top ${CORNER_H} Rows of Field 1 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l1t];\
+[l2]drawtext=fontfile=${DEFAULTFONT_ESC}:text='Top ${CORNER_H} Rows of Field 2 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l2t];\
+[l3]drawtext=fontfile=${DEFAULTFONT_ESC}:text='Bottom ${CORNER_H} Rows of Field 1 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l3t];\
+[l4]drawtext=fontfile=${DEFAULTFONT_ESC}:text='Bottom ${CORNER_H} Rows of Field 2 - Left ${CORNER_W} pixels and Right ${CORNER_W} pixels':fontcolor=white:fontsize=${CORNER_H}*2:x=(w-text_w)/2:y=(h-text_h)/2[l4t];\
 [t1]crop=w=${CORNER_W}:h=${CORNER_H}:x=0:y=0[a1t];\
 [t2]crop=w=${CORNER_W}:h=${CORNER_H}:x=iw-${CORNER_H}:y=0[b1t];\
 [t3]crop=w=${CORNER_W}:h=${CORNER_H}:x=0:y=ih-${CORNER_H}[c1t];\
@@ -3572,18 +3590,18 @@ color=color=darkgray,scale=${CORNER_W}*${CORNER_ZOOM}*2:${CORNER_H}*2,split=4[l1
             if [[ "${RUNTYPE}" = "record" ]] ; then
             PLAYBACKFILTER="\
                 ${PLAYBACK_FILTER_ADJUSTMENT}format=yuv420p10le|yuv422p10le|yuv444p10le|yuv440p10le,split=4[f1][f2][f3][f4];\
-                [f1]readeia608=scan_max=2:spw=0.30,drawtext=fontfile=${DEFAULTFONT}:fontcolor=white:fontsize=36:box=1:boxcolor=black@0.5:x=(w-tw)/2:y=h*3/4-ascent:text=Line %{metadata\\\:lavfi.readeia608.0.line\\\:-} %{metadata\\\:lavfi.readeia608.0.cc\\\:------} - Line %{metadata\\\:lavfi.readeia608.1.line\\\:-} %{metadata\\\:lavfi.readeia608.1.cc\\\:------}[f1b];\
+                [f1]readeia608=scan_max=2:spw=0.30,drawtext=fontfile=${DEFAULTFONT_ESC}:fontcolor=white:fontsize=36:box=1:boxcolor=black@0.5:x=(w-tw)/2:y=h*3/4-ascent:text=Line %{metadata\\\:lavfi.readeia608.0.line\\\:-} %{metadata\\\:lavfi.readeia608.0.cc\\\:------} - Line %{metadata\\\:lavfi.readeia608.1.line\\\:-} %{metadata\\\:lavfi.readeia608.1.cc\\\:------}[f1b];\
                 [f2]crop=iw:1:0:1,scale=iw:2:flags=neighbor,tile=layout=1x120:overlap=119:init_padding=119[caption_scroll];\
-                [f3]format=gray,crop=iw:1:0:1,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT}:text='Line 1':fontcolor=white:fontsize=18:x=20:y=20[wvf];\
-                [f4]format=gray,crop=iw:1:0:2,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT}:text='Line 2':fontcolor=white:fontsize=18:x=20:y=20[wvf2];\
+                [f3]format=gray,crop=iw:1:0:1,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT_ESC}:text='Line 1':fontcolor=white:fontsize=18:x=20:y=20[wvf];\
+                [f4]format=gray,crop=iw:1:0:2,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT_ESC}:text='Line 2':fontcolor=white:fontsize=18:x=20:y=20[wvf2];\
                 [caption_scroll][f1b][wvf][wvf2]vstack=4" 
             else
                 PLAYBACKFILTER="\
                 ${PLAYBACK_FILTER_ADJUSTMENT}format=yuv420p10le|yuv422p10le|yuv444p10le|yuv440p10le,split=4[f1][f2][f3][f4];\
-                [f1]readeia608=scan_max=2:spw=0.30,metadata=mode=print:key=lavfi.readeia608.0.cc,drawtext=fontfile=${DEFAULTFONT}:fontcolor=white:fontsize=36:box=1:boxcolor=black@0.5:x=(w-tw)/2:y=h*3/4-ascent:text=Line %{metadata\\\:lavfi.readeia608.0.line\\\:-} %{metadata\\\:lavfi.readeia608.0.cc\\\:------} - Line %{metadata\\\:lavfi.readeia608.1.line\\\:-} %{metadata\\\:lavfi.readeia608.1.cc\\\:------},drawtext=fontfile=${DEFAULTFONT}:textfile=${CAP_DISPLAY_TMP}:reload=1:fontcolor=white:fontsize=18:x=(w-text_w)/2:y=h-100:shadowcolor=blue:shadowx=1:shadowy=1[f1b];\
+                [f1]readeia608=scan_max=2:spw=0.30,metadata=mode=print:key=lavfi.readeia608.0.cc,drawtext=fontfile=${DEFAULTFONT_ESC}:fontcolor=white:fontsize=36:box=1:boxcolor=black@0.5:x=(w-tw)/2:y=h*3/4-ascent:text=Line %{metadata\\\:lavfi.readeia608.0.line\\\:-} %{metadata\\\:lavfi.readeia608.0.cc\\\:------} - Line %{metadata\\\:lavfi.readeia608.1.line\\\:-} %{metadata\\\:lavfi.readeia608.1.cc\\\:------},drawtext=fontfile=${DEFAULTFONT_ESC}:textfile=${CAP_DISPLAY_TMP_ESC}:reload=1:fontcolor=white:fontsize=18:x=(w-text_w)/2:y=h-100:shadowcolor=blue:shadowx=1:shadowy=1[f1b];\
                 [f2]crop=iw:1:0:1,scale=iw:2:flags=neighbor,tile=layout=1x120:overlap=119:init_padding=119[caption_scroll];\
-                [f3]format=gray,crop=iw:1:0:1,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT}:text='Line 1':fontcolor=white:fontsize=18:x=20:y=20[wvf];\
-                [f4]format=gray,crop=iw:1:0:2,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT}:text='Line 2':fontcolor=white:fontsize=18:x=20:y=20[wvf2];\
+                [f3]format=gray,crop=iw:1:0:1,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT_ESC}:text='Line 1':fontcolor=white:fontsize=18:x=20:y=20[wvf];\
+                [f4]format=gray,crop=iw:1:0:2,waveform=i=1:g=green,drawtext=fontfile=${DEFAULTFONT_ESC}:text='Line 2':fontcolor=white:fontsize=18:x=20:y=20[wvf2];\
                 [caption_scroll][f1b][wvf][wvf2]vstack=4" 
             fi ;;
         # others
@@ -3642,6 +3660,10 @@ _set_up_drawtext(){
  V        %{metadata:lavfi.signalstats.VBITDEPTH}" > "${DRAWTEXT_TMP_2}"
     echo "BRNG
 %{metadata:lavfi.signalstats.BRNG}" > "${DRAWTEXT_TMP_3}"
+    # escaped (colon-free) twins for use inside filter graphs on Windows
+    DRAWTEXT_TMP_1_ESC="${DRAWTEXT_TMP_1//:/\\:}"
+    DRAWTEXT_TMP_2_ESC="${DRAWTEXT_TMP_2//:/\\:}"
+    DRAWTEXT_TMP_3_ESC="${DRAWTEXT_TMP_3//:/\\:}"
 }
 
 # select playback view
@@ -3744,7 +3766,7 @@ _review_all_options(){
     _set_scopes
     if [[ "${RUNTYPE}" = "passthrough" ]] && [[ -n "${PLAYBACKVIEW_CHOICE_PASS}" ]] && [[ "${PLAYBACKVIEW_CHOICE_PASS}" != "Unselected" ]] ; then
         if [[ "${RUNTYPE}" = "passthrough" ]] ; then
-            TIMECODE_OVERLAY=",drawtext=fontfile=${DEFAULTFONT}:x=(w-text_w)*0.5:y=(h-text_h)*0.75:fontcolor=white:box=1:boxcolor=gray@0.7:boxborderw=4:fontsize=22:shadowx=1:shadowy=1:text=%{metadata\\\:timecode}"
+            TIMECODE_OVERLAY=",drawtext=fontfile=${DEFAULTFONT_ESC}:x=(w-text_w)*0.5:y=(h-text_h)*0.75:fontcolor=white:box=1:boxcolor=gray@0.7:boxborderw=4:fontsize=22:shadowx=1:shadowy=1:text=%{metadata\\\:timecode}"
         fi
         _review_option -d "Visual" "PLAYBACKVIEW_CHOICE_PASS" "${PLAYBACKVIEW_PASS_OPTIONS[@]}"
     else
@@ -4448,6 +4470,7 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     LOGDIR="$(_windows_native_path "${LOGDIR}")"
     if [[ -n "${DEFAULTFONT}" ]] ; then
         DEFAULTFONT="$(_windows_native_path "${DEFAULTFONT}")"
+        DEFAULTFONT_ESC="${DEFAULTFONT//:/\\:}"
     fi
 fi
 
@@ -4611,6 +4634,13 @@ _report -d "Close the playback window to stop recording."
 
 # vrecord process!
 _setup_vrecord_process
+# TEMP DEBUG: probe ffmpeg launchability in this exact context
+{
+    echo "FFMPEG_BIN=${FFMPEG_BIN}"
+    echo "PATH=${PATH}"
+    "${FFMPEG_BIN}" -nostdin -version 2>&1 | head -1
+    echo "probe_rc=$?"
+} > /tmp/vrecord-p1probe.txt 2>&1
 if [[ "${VRECORD_STEPS}" = "2" ]] ; then
     _writeingestlog "Record command" "${RECORD_COMMAND[@]}"
     _writeingestlog "Playback command" "${PLAYER_COMMAND[@]}"

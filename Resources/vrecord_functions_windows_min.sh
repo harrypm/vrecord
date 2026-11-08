@@ -1,5 +1,12 @@
 # Minimal Windows helpers for gtkdialog actions (keep this file small - sourced on every click)
 
+# gtkdialog does NOT decode XML entities in item values - values saved from
+# dropdowns carry &amp; literally, which the backend rejects. Normalize here.
+_unescape_amp(){
+    local V="${1//&amp;/&}"
+    printf '%s' "${V}"
+}
+
 _update_config_file(){
     : > "${CONFIG_FILE}.tmp"
     {
@@ -10,7 +17,7 @@ _update_config_file(){
         echo "DECKLINK_INPUT_CHOICE=\"${DECKLINK_INPUT_CHOICE}\""
         echo "VIDEO_INPUT_CHOICE=\"${VIDEO_INPUT_CHOICE}\""
         echo "AUDIO_INPUT_CHOICE=\"${AUDIO_INPUT_CHOICE}\""
-        echo "AUDIO_MAPPING_CHOICE=\"${AUDIO_MAPPING_CHOICE}\""
+        echo "AUDIO_MAPPING_CHOICE=\"$(_unescape_amp "${AUDIO_MAPPING_CHOICE}")\""
         echo "STANDARD_CHOICE=\"${STANDARD_CHOICE}\""
         echo "VIDEO_BIT_DEPTH_CHOICE=\"${VIDEO_BIT_DEPTH_CHOICE}\""
         echo "ASPECT_RATIO_CHOICE=\"${ASPECT_RATIO_CHOICE}\""
