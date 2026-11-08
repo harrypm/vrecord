@@ -16,7 +16,7 @@ CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 FRAMEWORKS="$CONTENTS/Frameworks"
-LAUNCHER_SRC="$ARTIFACTS/vrecord-launcher.c"
+LAUNCHER_SRC="$ARTIFACTS/vrecord-launcher.m"
 mkdir -p "$MACOS" "$RESOURCES/bin" "$RESOURCES/share/vrecord/Resources" "$FRAMEWORKS"
 
 VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' ../vrecord)"
@@ -74,17 +74,96 @@ else
 fi
 
 # Always build the launcher (Info.plist sets CFBundleExecutable to it):
-# it prepends the bundled Resources/bin to PATH and execs the vrecord script.
-# This previously ran only in the brew-fallback branch, leaving the .app
-# unlaunchable after a successful full release build.
+# it prepends the bundled Resources/bin to PATH and runs the vrecord script
+# as a child while hosting the app's NSApplication, so the Dock lifecycle
+# works: Dock-Quit terminates the wrapped process tree, and clicking the
+# Dock icon while the window is minimised restores it through the
+# Accessibility API. (The previous execv-based launcher made the bundle's
+# main process a shell, which ignores Dock Apple Events, so the app could
+# not be quit from the Dock nor reopened from its Dock icon when minimised.)
 cat > "$LAUNCHER_SRC" << 'LAUNCHER'
-#include <libgen.h>
-#include <limits.h>
-#include <mach-o/dyld.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <libgen.h>
+#import <mach-o/dyld.h>
+#import <signal.h>
+#import <stdio.h>
+#import <stdlib.h>
+#import <string.h>
+#import <unistd.h>
+#import <sys/wait.h>
+
+static pid_t child_pid = 0;
+static int child_status = 0;
+static int shutting_down = 0;
+
+static void kill_child_tree(int sig) {
+    if (child_pid <= 0) return;
+    kill(-child_pid, sig);   // the child's whole process group
+    kill(child_pid, sig);
+}
+
+static void forward_signal(int sig) {
+    if (shutting_down) return;
+    shutting_down = 1;
+    kill_child_tree(sig);
+    _exit(128 + sig);
+}
+
+static void restore_child_windows(void) {
+    AXUIElementRef app = AXUIElementCreateApplication((pid_t)child_pid);
+    if (!app) return;
+    CFTypeRef windows_ref = NULL;
+    AXError err = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &windows_ref);
+    if (err == kAXErrorSuccess && windows_ref) {
+        CFArrayRef windows = (CFArrayRef)windows_ref;
+        for (CFIndex i = 0; i < CFArrayGetCount(windows); ++i) {
+            AXUIElementRef win = (AXUIElementRef)CFArrayGetValueAtIndex(windows, i);
+            CFTypeRef mini = NULL;
+            if (AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute, &mini) == kAXErrorSuccess && mini) {
+                if (CFBooleanGetValue((CFBooleanRef)mini)) {
+                    AXUIElementSetAttributeValue(win, kAXMinimizedAttribute, kCFBooleanFalse);
+                    AXUIElementPerformAction(win, kAXRaiseAction);
+                }
+                CFRelease(mini);
+            }
+        }
+        CFRelease(windows_ref);
+    } else if (err == kAXErrorAPIDisabled || err == kAXErrorCannotComplete) {
+        fprintf(stderr, "vrecord: allow Accessibility permission once to restore the minimised window from the Dock\n");
+    }
+    if (windows_ref) CFRelease(windows_ref);
+    CFRelease(app);
+}
+
+@interface VrecordDelegate : NSObject
+@end
+@implementation VrecordDelegate
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)theApplication hasVisibleWindows:(BOOL)hasVisible {
+    (void)theApplication;
+    if (child_pid > 0) {
+        restore_child_windows();
+        // make sure nothing is stuck stopped
+        kill(child_pid, SIGCONT);
+        [[NSRunningApplication currentApplication] activateIgnoringOtherApps:YES];
+    }
+    return YES;
+}
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    shutting_down = 1;
+    if (child_pid > 0) {
+        kill_child_tree(SIGTERM);
+        for (int i = 0; i < 30; ++i) {
+            int st = 0;
+            if (waitpid(child_pid, &st, WNOHANG) == child_pid) { child_status = st; break; }
+            usleep(100000);
+        }
+        kill_child_tree(SIGKILL);
+    }
+    return NSTerminateNow;
+}
+@end
 
 int main(int argc, char *argv[]) {
     char exe_path[PATH_MAX];
@@ -93,13 +172,11 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to resolve executable path\n");
         return 1;
     }
-
     char resolved_path[PATH_MAX];
     if (realpath(exe_path, resolved_path) == NULL) {
         perror("realpath");
         return 1;
     }
-
     char macos_dir[PATH_MAX];
     strncpy(macos_dir, resolved_path, sizeof(macos_dir) - 1);
     macos_dir[sizeof(macos_dir) - 1] = '\0';
@@ -120,21 +197,58 @@ int main(int argc, char *argv[]) {
         perror("calloc");
         return 1;
     }
-
     child_argv[0] = "bash";
     child_argv[1] = script_path;
-    for (int i = 1; i < argc; ++i) {
-        child_argv[i + 1] = argv[i];
-    }
+    for (int i = 1; i < argc; ++i) child_argv[i + 1] = argv[i];
     child_argv[argc + 1] = NULL;
 
-    execv("/bin/bash", child_argv);
-    perror("execv");
-    free(child_argv);
-    return 1;
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return 1;
+    }
+    if (pid == 0) {
+        // the vrecord process tree leads its own group so a Dock-Quit can
+        // clean up every descendant (ffmpeg readers, test signal, ...)
+        setpgid(0, 0);
+        execv("/bin/bash", child_argv);
+        perror("execv");
+        _exit(127);
+    }
+    child_pid = pid;
+
+    signal(SIGINT, forward_signal);
+    signal(SIGTERM, forward_signal);
+    signal(SIGHUP, forward_signal);
+    signal(SIGQUIT, forward_signal);
+
+    [NSApplication sharedApplication];
+    VrecordDelegate *delegate = [[VrecordDelegate alloc] init];
+    [NSApp setDelegate:delegate];
+
+    // when the script's window closes the script exits: end the app too,
+    // with the child's exit status
+    NSTimer *poll = [NSTimer timerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        (void)timer;
+        if (child_pid <= 0) return;
+        int st = 0;
+        pid_t r = waitpid(child_pid, &st, WNOHANG);
+        if (r == child_pid) {
+            child_status = st;
+            child_pid = 0;
+            shutting_down = 1;
+            [NSApp terminate:nil];
+        }
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:poll forMode:NSDefaultRunLoopMode];
+
+    [NSApp run];
+    kill_child_tree(SIGKILL);
+    if (WIFEXITED(child_status)) return WEXITSTATUS(child_status);
+    return 0;
 }
 LAUNCHER
-clang -Os -mmacosx-version-min=11.0 $MACOS_ARCH_FLAGS -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
+clang -Os -mmacosx-version-min=11.0 $MACOS_ARCH_FLAGS -framework Foundation -framework AppKit -framework ApplicationServices -o "$MACOS/vrecord-launcher" "$LAUNCHER_SRC"
 
 ln -snf ../Resources/share/vrecord/Resources "$MACOS/Resources"
 chmod +x "$MACOS/vrecord" "$MACOS/vplay" "$MACOS/vtest"
