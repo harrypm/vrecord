@@ -30,7 +30,7 @@ cp -r ../Resources/* "$APPDIR/usr/share/vrecord/Resources/"
 # --- runtime binaries ---
 for BIN in ffmpeg-ma ffplay-ma ffprobe-ma gtkdialog mpv mediaconch mediainfo \
            mkvextract mkvinfo mkvmerge mkvpropedit xmlstarlet cowsay gnuplot \
-           dvrescue dvpackager; do
+           dvrescue dvpackager deckcontrol timecodexml; do
     BINPATH="$(command -v "$BIN" 2>/dev/null || true)"
     if [ -n "$BINPATH" ]; then
         cp "$BINPATH" "$APPDIR/usr/lib/vrecord/bin/"

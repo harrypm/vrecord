@@ -67,7 +67,7 @@ jobs:
           VDIR="$(brew --repo harrypm/vendored)/Formula"
           grep -q "^class " "$VDIR/gtk+.rb" || { echo "::error::vendored gtk+ formula is empty or invalid"; exit 1; }
           grep -q "^class " "$VDIR/gtkdialog.rb" || { echo "::error::vendored gtkdialog formula is empty or invalid"; exit 1; }
-          brew install ffmpeg-ma cowsay amiaopensource/amiaos/decklinksdk harrypm/vendored/gtkdialog
+          brew install ffmpeg-ma cowsay timecodexml amiaopensource/amiaos/decklinksdk harrypm/vendored/gtkdialog
           # deckcontrol: built outside brew - its Makefile lists -lstdc++
           # BEFORE the objects, which GNU ld discards (macOS ld64 tolerates
           # the order, which is why the mac build works); reorder the link
