@@ -1,6 +1,6 @@
 # autotest-visual.ps1 - launch GUI and capture screenshots at each navigation step
 param(
-    [string]$ExePath = 'C:\Users\Harry\vrecord\Release\artifacts\vrecord_windows_2026-11-05\vrecord.exe',
+    [string]$ExePath = 'C:\Users\Harry\vrecord\Release\artifacts\vrecord_windows_2026-11-05\Vrecord.exe',
     [string]$ShotDir = 'C:\Users\Harry\vrecord-smoke-out'
 )
 $ErrorActionPreference = 'Continue'
@@ -33,19 +33,27 @@ function Shot([string]$name, [int]$wx, [int]$wy, [int]$ww, [int]$wh) {
 $env:GTKDIALOG_ACTION_LOG = 'C:\Users\Harry\vrecord-smoke-out\gtkdialog-actions.log'
 Remove-Item $env:GTKDIALOG_ACTION_LOG -ErrorAction SilentlyContinue
 
-# kill + relaunch
+# kill + relaunch (force-killing MSYS bash can transiently poison cygwin
+# fork state - settle, and retry the launch once if the GUI never appears)
 Get-Process gtkdialog -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process bash -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\msys64*' } | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep 1
-Start-Process -FilePath $ExePath | Out-Null
+Start-Sleep 2
 $gd = $null
-$deadline = (Get-Date).AddSeconds(60)
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 500
-    $gd = Get-Process gtkdialog -ErrorAction SilentlyContinue | Select-Object -First 1
+foreach ($attempt in 1..2) {
+    Start-Process -FilePath $ExePath | Out-Null
+    $deadline = (Get-Date).AddSeconds(45)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        $gd = Get-Process 'vrecord-dialog' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $gd) { $gd = Get-Process gtkdialog -ErrorAction SilentlyContinue | Select-Object -First 1 }
+        if ($gd -and $gd.MainWindowHandle -ne 0) { break }
+    }
     if ($gd -and $gd.MainWindowHandle -ne 0) { break }
+    Log "launch attempt $attempt failed - settling and retrying"
+    Get-Process gtkdialog,'vrecord-dialog',bash -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep 4
 }
-if (-not $gd) { Write-Output "FATAL: no gtkdialog"; return }
+if (-not $gd -or $gd.MainWindowHandle -eq 0) { Log "FATAL: gtkdialog never started"; exit 1 }
 Start-Sleep -Seconds 8
 
 $r = New-Object U2+RECT
@@ -69,6 +77,11 @@ Shot "04-themes" $r.L $r.T $W $H
 # Decklink tab (1st)
 [U2]::Click([int]($r.L + $W*0.043), [int]($r.T + $H*0.057)); Start-Sleep -Seconds 3
 Shot "05-decklink" $r.L $r.T $W $H
+
+# --- Save Settings probe: bottom-bar Save (~0.86) then check the config file ---
+[U2]::Click([int]($r.L + $W*0.86), [int]($r.T + $H*0.965)); Start-Sleep -Seconds 4
+Write-Output "config file after Save click: $(Test-Path "$env:USERPROFILE\.vrecord.conf")"
+if (Test-Path "$env:USERPROFILE\.vrecord.conf") { Get-Content "$env:USERPROFILE\.vrecord.conf" | Select-Object -First 10 }
 
 # --- fileselect probe: click the file-to-play browse button (bottom right) ---
 Add-Type @"
