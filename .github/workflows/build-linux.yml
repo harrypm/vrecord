@@ -80,11 +80,14 @@ jobs:
           sudo install -m755 deckcontrol /usr/local/bin/deckcontrol
           cd "$GITHUB_WORKSPACE"
           # dvrescue + dvpackager: built OUTSIDE brew (brew's superenv
-          # scrubs pkg-config and hides the system libavc1394 the build
-          # needs; outside, the apt -dev libs are visible). Same three-stage
-          # sequence the mediaarea formula uses: ZenLib and MediaInfoLib
-          # built static in-tree, then the dvrescue CLI, then the
-          # dvpackager script.
+          # scrubs pkg-config, and the brew-installed pkg-config that ends
+          # up first on PATH only searches brew paths - the system
+          # libavc1394.pc from apt stays invisible, failing dvrescue's
+          # configure). Re-expose the system pkg-config dirs. Same
+          # three-stage sequence the mediaarea formula uses: ZenLib and
+          # MediaInfoLib built static in-tree, then the dvrescue CLI, then
+          # the dvpackager script.
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           curl -fsSL https://mediaarea.net/download/binary/dvrescue/24.07/dvrescue_CLI_24.07_GNU_FromSource.tar.xz | tar -xJ
           # ZenLib / MediaInfoLib / dvrescue are siblings under the tarball
           # root (brew strips that root when staging, which is why the
