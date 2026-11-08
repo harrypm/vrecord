@@ -22,29 +22,36 @@ jobs:
             git mkvtoolnix gnuplot xmlstarlet mpv mediaconch \
             libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools \
             binutils file desktop-file-utils librsvg2-bin
-          # homebrew-on-linux for the tap deps (ffmpeg-ma, gtkdialog).
-          # Two known runner annotations surface here, neither fixable in
-          # this workflow (documented in the FUTO best-practices Runners
-          # Note):
-          # 1. 'gtk+ has been deprecated ... disabled on 2027-08-28' - the
-          #    amiaos gtkdialog formula builds against brew's gtk+ (gtk2),
-          #    which Homebrew deprecated because gtk2 is EOL upstream. This
-          #    LINUX BUILD BREAKS ON 2027-08-28 unless the GUI stack
-          #    migrates (gtkdialog gtk3, or prebuilt bottles). Tracking
-          #    that migration is a project, not a workflow edit.
-          # 2. 'Landlock ABI 10 or later is required ... found ABI 8' - the
-          #    runner kernel's Landlock LSM is older than brew's sandbox
-          #    wants; brew applies partial restrictions. Harmless, goes
-          #    away when the runner image updates its kernel.
+          # homebrew-on-linux for ffmpeg-ma (mediaarea tap) and a VENDORED
+          # GUI stack. Two annotations were seen here:
+          # 1. 'gtk+ has been deprecated ... disabled 2027-08-28' - FIXED by
+          #    vendoring: a private in-runner tap holds the current core
+          #    gtk+ formula with the deprecation markers stripped, plus the
+          #    amiaos gtkdialog 0.8.5e formula (same source tarball and
+          #    patch) repointed at our vendored gtk+, so the build never
+          #    touches the deprecated core gtk+ formula.
+          # 2. 'Landlock ABI 10 or later ... found ABI 8' - the runner
+          #    kernel's sandbox capability; brew applies partial
+          #    restrictions. Harmless, self-resolves with a runner image
+          #    update; no action.
           /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-          brew tap amiaopensource/amiaos
           brew tap mediaarea/mediaarea
           # CI brew sets HOMEBREW_REQUIRE_TAP_TRUST; trust the taps we pull formulas from
-          brew trust --tap amiaopensource/amiaos
           brew trust --tap mediaarea/mediaarea
-          brew install vrecord ffmpeg-ma gtkdialog
+          brew tap-new harrypm/vendored
+          # vendored gtk+: the current core gtk+ formula with the
+          # deprecation/disable markers stripped, so our copy outlives the
+          # 2027-08-28 disable date of the core formula
+          brew cat gtk+ | sed '/deprecate!/d; /disable!/d' > "$(brew --repo harrypm/vendored)/Formula/gtk+.rb"
+          # vendored gtkdialog: the amiaos 0.8.5e formula (same tarball,
+          # same DATA patch) with the runtime dependency repointed at the
+          # vendored gtk+
+          curl -fsSL https://raw.githubusercontent.com/amiaopensource/homebrew-amiaos/master/gtkdialog.rb \
+            | sed 's|depends_on "gtk+"$|depends_on "harrypm/vendored/gtk+"|' \
+            > "$(brew --repo harrypm/vendored)/Formula/gtkdialog.rb"
+          brew install ffmpeg-ma dvrescue dvpackager cowsay harrypm/vendored/gtkdialog
 
       - name: Build .deb package
         run: |
