@@ -4155,6 +4155,8 @@ VRECORD_FILEPLAY_DRAG_TMP="$(_maketemp .vrecord_fileplay.drag.txt)"
 VRECORD_FILEPLAY_FROZEN_TMP="$(_maketemp .vrecord_fileplay.frozen.txt)"
 VRECORD_FILEPLAY_JOG_TMP="$(_maketemp .vrecord_fileplay.jog.txt)"
 VRECORD_FILEPLAY_ICON_TMP="$(_maketemp .vrecord_fileplay.icon.png)"
+# NOTE: the transport-play.png copy happens after _process_vars_for_gtk -
+# RESOURCE_PATH does not exist yet here (the cp silently failed every run)
 VRECORD_FILEPLAY_PROBE_TMP="$(_maketemp .vrecord_fileplay.probe.txt)"
 rm -f "${VRECORD_FILEPLAY_PROBE_TMP}"
 echo "00:00:00:00" > "${VRECORD_FILEPLAY_FRAME_TMP}"
@@ -4162,7 +4164,6 @@ echo "0" > "${VRECORD_FILEPLAY_SEEKPOS_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_DRAG_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_FROZEN_TMP}"
 echo "0" > "${VRECORD_FILEPLAY_JOG_TMP}"
-cp "${RESOURCE_PATH}/transport-play.png" "${VRECORD_FILEPLAY_ICON_TMP}" 2>/dev/null
 echo "stopped" > "${VRECORD_FILEPLAY_STATUS_TMP}"
 VRECORD_FILEPLAY_IMG_TMP="$(_maketemp .vrecord_fileplay.img.jpg)"
 VRECORD_FILEPLAY_DUR_TMP="$(_maketemp .vrecord_fileplay.dur.txt)"
@@ -4207,6 +4208,8 @@ SHARED_FUNCTIONS_FILE="${RESOURCE_PATH}/vrecord_functions"
 # both panes start black rather than showing missing-file warning icons
 _write_black_ppm "${VRECORD_PREVIEW_TMP}"
 _write_black_ppm "${VRECORD_OUTPUT_DISPLAY_TMP}"
+# transport play/pause button icon (RESOURCE_PATH only exists from here on)
+cp "${RESOURCE_PATH}/transport-play.png" "${VRECORD_FILEPLAY_ICON_TMP}" 2>/dev/null
 
 # optional dependency checks
 DECKCONTROL_INSTALLED="$(if command -v deckcontrol >/dev/null ; then echo true ; else echo false ; fi)"

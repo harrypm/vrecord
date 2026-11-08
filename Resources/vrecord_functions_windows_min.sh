@@ -84,7 +84,15 @@ _stop_video_preview(){
 _start_file_playback(){ :; }
 _stop_file_playback(){ :; }
 _pause_file_playback(){ :; }
-_toggle_transport_play(){ :; }
+_toggle_transport_play(){
+    # swap the transport button icon (play <-> pause); the 500ms refresh-only
+    # timer picks the new image up without any bash on the GUI thread
+    if [[ -f "${VRECORD_FILEPLAY_ICON_TMP}" ]] && cmp -s "${VRECORD_FILEPLAY_ICON_TMP}" "${RESOURCE_PATH}/transport-play.png" 2>/dev/null ; then
+        cp "${RESOURCE_PATH}/transport-pause.png" "${VRECORD_FILEPLAY_ICON_TMP}" 2>/dev/null
+    else
+        cp "${RESOURCE_PATH}/transport-play.png" "${VRECORD_FILEPLAY_ICON_TMP}" 2>/dev/null
+    fi
+}
 _halt_file_playback(){ :; }
 _apply_relay_state(){ :; }
 _start_test_signal(){ :; }
