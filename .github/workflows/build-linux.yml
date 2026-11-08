@@ -37,8 +37,10 @@ jobs:
           /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew tap amiaopensource/amiaos
           brew tap mediaarea/mediaarea
           # CI brew sets HOMEBREW_REQUIRE_TAP_TRUST; trust the taps we pull formulas from
+          brew trust --tap amiaopensource/amiaos
           brew trust --tap mediaarea/mediaarea
           # tap-new commits the tap skeleton, so the runner needs an identity
           git config --global user.email "ci@vrecord.invalid"
@@ -65,11 +67,20 @@ jobs:
           VDIR="$(brew --repo harrypm/vendored)/Formula"
           grep -q "^class " "$VDIR/gtk+.rb" || { echo "::error::vendored gtk+ formula is empty or invalid"; exit 1; }
           grep -q "^class " "$VDIR/gtkdialog.rb" || { echo "::error::vendored gtkdialog formula is empty or invalid"; exit 1; }
-          # (dvrescue/dvpackager were never in the linux packages - the old
-          # vrecord formula's dvrescue dependency is conditional and did not
-          # apply here; its source build fails on superenv-scrubbed
-          # pkg-config paths anyway - the collectors skip absent binaries)
-          brew install ffmpeg-ma cowsay harrypm/vendored/gtkdialog
+          # deckcontrol builds against the amiaos decklinksdk (BMD API
+          # headers only - no deprecated chain)
+          brew install ffmpeg-ma cowsay amiaopensource/amiaos/deckcontrol harrypm/vendored/gtkdialog
+          # dvrescue + dvpackager: built OUTSIDE brew (brew's superenv
+          # scrubs pkg-config and hides the system libavc1394 the build
+          # needs; outside, the apt -dev libs are visible). Installs the
+          # dvrescue binary and the dvpackager script to /usr/local/bin.
+          curl -fsSL https://mediaarea.net/download/binary/dvrescue/24.07/dvrescue_CLI_24.07_GNU_FromSource.tar.xz | tar -xJ
+          cd dvrescue_CLI_GNU_FromSource/dvrescue
+          ./configure --prefix=/usr/local
+          make -j"$(nproc)"
+          sudo make install
+          sudo install -m755 Source/GUI/dvrescue/dvrescue/dvpackager /usr/local/bin/dvpackager
+          cd "$GITHUB_WORKSPACE"
 
       - name: Build .deb package
         run: |

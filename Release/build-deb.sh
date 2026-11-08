@@ -53,7 +53,10 @@ while [ "$CHANGED" = 1 ]; do
         [ -f "$BIN" ] || continue
         for LIB in $(ldd "$BIN" 2>/dev/null | awk '/=> \// { print $3 }'); do
             case "$LIB" in
-                *linuxbrew*|*opt/homebrew*)
+                *linuxbrew*|*opt/homebrew*|*libavc1394*|*libraw1394*|*libiec61883*|*librom1394*)
+                    # brew libs are only on the build machine, and the dv/1394
+                    # libs are runtime deps of the bundled dvrescue that the
+                    # target system may not have
                     DEST="$PREFIX/lib/vrecord/lib/$(basename "$LIB")"
                     if [ ! -f "$DEST" ]; then
                         cp "$LIB" "$DEST"
