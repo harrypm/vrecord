@@ -54,7 +54,7 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/amiaopensource/homebrew-amiaos/master/gtkdialog.rb \
             | sed 's|depends_on "gtk+"$|depends_on "harrypm/vendored/gtk+"|' \
             > "$(brew --repo harrypm/vendored)/Formula/gtkdialog.rb"
-          brew install ffmpeg-ma dvrescue dvpackager cowsay harrypm/vendored/gtkdialog
+          brew install ffmpeg-ma dvrescue cowsay harrypm/vendored/gtkdialog
 
       - name: Build .deb package
         run: |
