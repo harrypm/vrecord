@@ -2234,10 +2234,11 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     # The disabled="true" attribute only makes timers insensitive - instrumented
     # builds show their actions STILL fire (the original freeze root cause).
     MAIN_DIALOG="$(printf '%s\n' "${MAIN_DIALOG}" | awk '/<timer/{buf=$0; cap=1; next} cap { buf=buf "\n" $0; if (/<\/timer>/) { cap=0; next } ; next } !cap { print }')"
-    # BISECTION: window icon attr disabled - gdb shows the freeze is a
-    # sent-message (WM_GETTEXT/UxTheme) reentry deadlocking an SRW lock in gdk
+    # WINDOW icon attr DISABLED: setting image-name at runtime triggers a
+    # sent-message reentry deadlock in gdk's Win32 backend (gdb-verified SRW
+    # lock hang). The app icon lives on Vrecord.exe + the desktop shortcut.
     #VRECORD_ICON_WIN="$(_windows_native_path "${RESOURCE_PATH}/vrecord-icon.png")"
-    #MAIN_DIALOG="${MAIN_DIALOG/<window title=\"Welcome to Vrecord!\">/<window title=\"Welcome to Vrecord!\" image-name=\"${VRECORD_ICON_WIN}\">}"
+    #MAIN_DIALOG="${MAIN_DIALOG/<window title=\"Welcome to Vrecord!\">/<window title=\"Vrecord (windows build ${VERSION})\" image-name=\"${VRECORD_ICON_WIN}\">}"
     # THE big image bug: the dialog embeds RESOURCE_PATH as an MSYS path (/c/...)
     # which native GTK cannot open - every icon/logo/pixmap was broken. Rewrite
     # every embedded image path to the native C:/ form.

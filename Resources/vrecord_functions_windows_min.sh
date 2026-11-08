@@ -75,7 +75,7 @@ _start_video_preview(){
     _stop_video_preview
     echo "starting" > "${VRECORD_PREVIEW_STATUS_TMP}"
     "${FFMPEG_BIN}" -nostdin -loglevel error -f decklink -raw_format uyvy422 \
-        -i "${DECKLINK_INPUT_CHOICE}" -an -vf fps=4 \
+        -i "${DECKLINK_INPUT_CHOICE}" -an -vf "fps=4,scale=360:-1" \
         -update 1 -q:v 5 -y "${VRECORD_PREVIEW_TMP}" \
         > "${VRECORD_PREVIEW_LOG_TMP}" 2>&1 &
     echo $! > "${VRECORD_PREVIEW_PID_TMP}"
