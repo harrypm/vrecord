@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for Windows build prerequisites
         id: check
@@ -80,7 +80,7 @@ jobs:
             echo "::warning::NSIS not available - installer skipped"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vrecord-windows
           path: artifacts/
@@ -88,7 +88,7 @@ jobs:
 
       - name: Release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
         env:
