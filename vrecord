@@ -195,6 +195,15 @@ _process_vars_for_gtk(){
         _gather_ffmpeg_vars
         _include_var CAPTURELOGSUFFIX TIMECODELOGSUFFIX BREW_PREFIX FFMPEG_BIN FFPLAY_BIN FFPROBE_BIN
     fi
+    if [[ "${OS_TYPE}" = "windows" ]] ; then
+        # prefer the vrecord-named dialog binary (taskbar shows vrecord,
+        # not gtkdialog) - overrides any stale cached GTKDIALOGBIN
+        local VDIALOG
+        VDIALOG="$(command -v vrecord-dialog.exe 2>/dev/null || command -v vrecord-dialog 2>/dev/null)"
+        if [[ -n "${VDIALOG}" ]] ; then
+            GTKDIALOGBIN="${VDIALOG}"
+        fi
+    fi
 }
 
 _remove_env_vars(){
@@ -322,12 +331,13 @@ _setup_env_variables(){
         echo "Unsupported OS, ${QUERY_OS_TYPE}, detected. Exiting."
         exit 1
     fi
-    # set gtkdialog path
+    # set gtkdialog path (the Windows portable ships it as vrecord-dialog so the
+    # taskbar/app name shows vrecord instead of gtkdialog)
     if [[ -n "${DEPENDENCYDIR}" ]] ; then
-        GTKDIALOGBIN=$(find "${DEPENDENCYDIR}" \( -iname "gtkdialog" -o -iname "gtkdialog.exe" \) 2>/dev/null | head -n1)
+        GTKDIALOGBIN=$(find "${DEPENDENCYDIR}" \( -iname "vrecord-dialog*" -o -iname "gtkdialog" -o -iname "gtkdialog.exe" \) 2>/dev/null | head -n1)
     fi
     if [[ -z "${GTKDIALOGBIN}" ]] ; then
-        GTKDIALOGBIN="$(command -v gtkdialog 2>/dev/null || command -v gtkdialog.exe 2>/dev/null)"
+        GTKDIALOGBIN="$(command -v vrecord-dialog.exe 2>/dev/null || command -v vrecord-dialog 2>/dev/null || command -v gtkdialog 2>/dev/null || command -v gtkdialog.exe 2>/dev/null)"
     fi
 }
 
