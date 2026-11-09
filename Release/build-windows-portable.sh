@@ -12,6 +12,8 @@ RELEASE_DIR="$(pwd)"
 ROOT="$(cd .. && pwd)"
 VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' "$ROOT/vrecord")"
 BUILD_DIR="${VRECORD_BUILD:-$HOME/vrecord-build}"
+ICON_RC="$RELEASE_DIR/appicon.rc"
+ICON_ICO="$RELEASE_DIR/vrecord.ico"
 # On Windows MSYS this is typically /c/Users/.../vrecord-build
 if [[ ! -d "$BUILD_DIR" && -d /c/Users/Harry/vrecord-build ]]; then
   BUILD_DIR=/c/Users/Harry/vrecord-build
@@ -27,6 +29,40 @@ echo "  build dir: $BUILD_DIR"
 cp "$ROOT/vrecord" "$ROOT/vtest" "$ROOT/vplay" "$PKG/" 2>/dev/null || true
 chmod 755 "$PKG/vrecord" "$PKG/vtest" "$PKG/vplay" 2>/dev/null || true
 cp -a "$ROOT/Resources/." "$PKG/Resources/"
+
+# build Qt6 frontend when tooling is available
+QT_BUILD_DIR="$ROOT/qt6/build"
+if [[ -f "$ROOT/qt6/CMakeLists.txt" ]] && command -v cmake >/dev/null 2>&1 ; then
+  rm -rf "$QT_BUILD_DIR"
+  cmake -S "$ROOT/qt6" -B "$QT_BUILD_DIR" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DDECKLINK_INCLUDE_DIR="$BUILD_DIR/decklink-include"
+  cmake --build "$QT_BUILD_DIR" --config Release
+  if [[ -f "$QT_BUILD_DIR/VrecordQt6.exe" ]]; then
+    cp -f "$QT_BUILD_DIR/VrecordQt6.exe" "$PKG/"
+    if [[ -f "$QT_BUILD_DIR/vsignal.exe" ]]; then
+      cp -f "$QT_BUILD_DIR/vsignal.exe" "$PKG/"
+    fi
+    if command -v windeployqt6.exe >/dev/null 2>&1 ; then
+      windeployqt6.exe --no-compiler-runtime --dir "$PKG" "$PKG/VrecordQt6.exe" >/dev/null 2>&1 || true
+    elif command -v windeployqt.exe >/dev/null 2>&1 ; then
+      windeployqt.exe --no-compiler-runtime --dir "$PKG" "$PKG/VrecordQt6.exe" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
+# native Windows launchers
+export PATH="/ucrt64/bin:${PATH}"
+if command -v windres >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1; then
+  if [[ -f "$ICON_ICO" && -f "$ICON_RC" ]]; then
+    windres "$ICON_RC" -O coff -o "$RELEASE_DIR/appicon.res"
+    gcc -O2 -mwindows -o "$PKG/Vrecord.exe" "$RELEASE_DIR/vrecord-launcher.c" "$RELEASE_DIR/appicon.res"
+    rm -f "$RELEASE_DIR/appicon.res"
+  else
+    gcc -O2 -mwindows -o "$PKG/Vrecord.exe" "$RELEASE_DIR/vrecord-launcher.c"
+  fi
+  gcc -O2 -mwindows -o "$PKG/bin/bash.exe" "$RELEASE_DIR/vrecord-bashwrap.c"
+fi
 
 # fonts
 if [[ -d "$BUILD_DIR/dejavu-fonts" ]]; then
@@ -54,14 +90,15 @@ fi
 export PATH="/ucrt64/bin:${PATH}"
 collect_once() {
   local changed=0
-  local bin lib base
-  for bin in "$PKG/bin/"*; do
+  local bin lib base target_dir
+  for bin in "$PKG/"* "$PKG/bin/"*; do
     [[ -f "$bin" ]] || continue
+    target_dir="$(dirname "$bin")"
     while read -r lib; do
       [[ -f "$lib" ]] || continue
       base="$(basename "$lib")"
-      if [[ ! -f "$PKG/bin/$base" ]]; then
-        cp -f "$lib" "$PKG/bin/"
+      if [[ ! -f "$target_dir/$base" ]]; then
+        cp -f "$lib" "$target_dir/"
         changed=1
       fi
     done < <(ldd "$bin" 2>/dev/null | awk '/=> \/ucrt64\// { print $3 }')
@@ -114,6 +151,10 @@ Requirements:
   - MSYS2 bash at C:\\msys64 OR Git Bash
 
 Run:
+  VrecordQt6.exe
+  vsignal start --pattern "SMPTE SD Bars (75%)" --connector HDMI
+  vsignal stop
+  Vrecord.exe
   vrecord.cmd
   vrecord.cmd -e
   vrecord.cmd -s testid
