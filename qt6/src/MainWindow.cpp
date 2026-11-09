@@ -117,6 +117,13 @@ QLineEdit* MainWindow::makeLineEdit() {
 }
 
 void MainWindow::buildUi() {
+    const auto styleIcon = [](QStyle::StandardPixmap pixmap) {
+        return QApplication::style()->standardIcon(pixmap);
+    };
+    const auto logoIcon = [this](const QString& fileName) {
+        return QIcon(QDir(m_backend.packageRoot()).filePath(QStringLiteral("Resources/%1").arg(fileName)));
+    };
+
     auto* central = new QWidget(this);
     auto* root = new QVBoxLayout(central);
 
@@ -398,17 +405,17 @@ void MainWindow::buildUi() {
     m_outputFeedLabel = new QLabel(outputDeviceBox);
     m_outputFeedLabel->setMinimumHeight(240);
     m_outputFeedLabel->setAlignment(Qt::AlignCenter);
-    m_playPauseButton = new QPushButton(QStringLiteral("Play"), outputDeviceBox);
-    auto* btnBack100 = new QPushButton(QStringLiteral("-100"), outputDeviceBox);
-    auto* btnBack1 = new QPushButton(QStringLiteral("-1"), outputDeviceBox);
-    auto* btnFwd1 = new QPushButton(QStringLiteral("+1"), outputDeviceBox);
-    auto* btnFwd100 = new QPushButton(QStringLiteral("+100"), outputDeviceBox);
+    m_playPauseButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Play"), outputDeviceBox);
+    auto* btnBack100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipBackward), QStringLiteral("-100"), outputDeviceBox);
+    auto* btnBack1 = new QPushButton(styleIcon(QStyle::SP_ArrowLeft), QStringLiteral("-1"), outputDeviceBox);
+    auto* btnFwd1 = new QPushButton(styleIcon(QStyle::SP_ArrowRight), QStringLiteral("+1"), outputDeviceBox);
+    auto* btnFwd100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipForward), QStringLiteral("+100"), outputDeviceBox);
     m_seekSlider = new QSlider(Qt::Horizontal, outputDeviceBox);
     m_seekSlider->setRange(0, 10000);
     m_positionLabel = new QLabel(QStringLiteral("00:00:00:00"), outputDeviceBox);
-    m_previewToggleButton = new QPushButton(QStringLiteral("Start Preview"), livePreviewBox);
+    m_previewToggleButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Start Preview"), livePreviewBox);
     livePreviewLayout->addWidget(new QLabel(QStringLiteral("Record: input preview"), livePreviewBox));
-    livePreviewLayout->addWidget(m_livePreviewLabel);
+    livePreviewLayout->addWidget(m_livePreviewLabel, 1);
     livePreviewLayout->addWidget(m_previewToggleButton);
     livePreviewLayout->addWidget(m_previewInfoText);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Hardware video output device"), outputDeviceBox));
@@ -417,7 +424,7 @@ void MainWindow::buildUi() {
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_relayDeviceCombo);
     outputDeviceLayout->addWidget(m_filePlayAutoCheck);
-    outputDeviceLayout->addWidget(m_outputFeedLabel);
+    outputDeviceLayout->addWidget(m_outputFeedLabel, 1);
     auto* transportRow = new QHBoxLayout();
     transportRow->addWidget(btnBack100);
     transportRow->addWidget(btnBack1);
@@ -476,19 +483,19 @@ void MainWindow::buildUi() {
     auto* dirBox = new QGroupBox(QStringLiteral("Select a recording directory"), central);
     auto* dirLayout = new QHBoxLayout(dirBox);
     m_dirEdit = makeLineEdit();
-    auto* dirBrowseButton = new QPushButton(QStringLiteral("Browse..."), dirBox);
+    auto* dirBrowseButton = new QPushButton(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), QStringLiteral("Browse..."), dirBox);
     dirLayout->addWidget(m_dirEdit);
     dirLayout->addWidget(dirBrowseButton);
     auto* logDirBox = new QGroupBox(QStringLiteral("Select a directory for auxiliary files"), central);
     auto* logDirLayout = new QHBoxLayout(logDirBox);
     m_logDirEdit = makeLineEdit();
-    auto* logDirBrowseButton = new QPushButton(QStringLiteral("Browse..."), logDirBox);
+    auto* logDirBrowseButton = new QPushButton(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), QStringLiteral("Browse..."), logDirBox);
     logDirLayout->addWidget(m_logDirEdit);
     logDirLayout->addWidget(logDirBrowseButton);
     auto* playFileBox = new QGroupBox(QStringLiteral("Select a file to play to the output device"), central);
     auto* playFileLayout = new QHBoxLayout(playFileBox);
     m_playFileEdit = makeLineEdit();
-    auto* playFileBrowseButton = new QPushButton(QStringLiteral("Browse..."), playFileBox);
+    auto* playFileBrowseButton = new QPushButton(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), QStringLiteral("Browse..."), playFileBox);
     playFileLayout->addWidget(m_playFileEdit);
     playFileLayout->addWidget(playFileBrowseButton);
     directoryRow->addWidget(dirBox);
@@ -548,14 +555,14 @@ void MainWindow::buildUi() {
     inputModeLayout->addStretch();
 
     auto* actionBar = new QHBoxLayout();
-    auto* refreshDevicesButton = new QPushButton(QStringLiteral("Refresh Devices"), central);
-    auto* saveButton = new QPushButton(QStringLiteral("Save Settings"), central);
-    auto* recordButton = new QPushButton(QStringLiteral("Record"), central);
-    auto* passthroughButton = new QPushButton(QStringLiteral("Passthrough"), central);
-    auto* audioButton = new QPushButton(QStringLiteral("Audio Check"), central);
-    auto* fileOutputButton = new QPushButton(QStringLiteral("Play File to Output"), central);
-    auto* stopOutputButton = new QPushButton(QStringLiteral("Stop Output"), central);
-    auto* legacyButton = new QPushButton(QStringLiteral("Open Legacy UI"), central);
+    auto* refreshDevicesButton = new QPushButton(styleIcon(QStyle::SP_BrowserReload), QStringLiteral("Refresh Devices"), central);
+    auto* saveButton = new QPushButton(styleIcon(QStyle::SP_DialogSaveButton), QStringLiteral("Save Settings"), central);
+    auto* recordButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo.png")), QStringLiteral("Record"), central);
+    auto* passthroughButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_playback.png")), QStringLiteral("Passthrough"), central);
+    auto* audioButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_audio.png")), QStringLiteral("Audio Check"), central);
+    auto* fileOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Play File to Output"), central);
+    auto* stopOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaStop), QStringLiteral("Stop Output"), central);
+    auto* legacyButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_edit.png")), QStringLiteral("Open Legacy UI"), central);
 
     actionBar->addWidget(refreshDevicesButton);
     actionBar->addWidget(saveButton);
@@ -970,6 +977,7 @@ void MainWindow::togglePreview() {
     if (m_backend.isVideoPreviewActive()) {
         m_backend.stopVideoPreview();
         m_previewToggleButton->setText(QStringLiteral("Start Preview"));
+        m_previewToggleButton->setIcon(QApplication::style()->standardIcon(QStyle::SP_MediaPlay));
         m_livePreviewLabel->clear();
         statusBar()->showMessage(QStringLiteral("Live preview stopped"), 3000);
         return;
@@ -980,6 +988,7 @@ void MainWindow::togglePreview() {
         return;
     }
     m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
+    m_previewToggleButton->setIcon(QApplication::style()->standardIcon(QStyle::SP_MediaStop));
     statusBar()->showMessage(QStringLiteral("Live input preview running"), 3000);
 }
 
@@ -1034,6 +1043,7 @@ void MainWindow::updateTransportUi() {
     const bool active = m_backend.isFileOutputActive();
     const bool paused = m_backend.isFileOutputPaused();
     m_playPauseButton->setText(active && !paused ? QStringLiteral("Pause") : QStringLiteral("Play"));
+    m_playPauseButton->setIcon(QApplication::style()->standardIcon(active && !paused ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
     const double duration = m_backend.fileOutputDurationSeconds();
     const double position = m_backend.fileOutputPositionSeconds();
     const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;

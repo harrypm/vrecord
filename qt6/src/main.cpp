@@ -73,6 +73,11 @@ int main(int argc, char* argv[]) {
         window.showNormal();
         window.raise();
         window.activateWindow();
+        if (const QScreen* screen = QGuiApplication::primaryScreen()) {
+            const QRect available = screen->availableGeometry();
+            const QRect frame = window.frameGeometry();
+            window.move(available.center() - frame.center());
+        }
         writeLog(QStringLiteral("window_shown"));
     });
     writeLog(QStringLiteral("enter_event_loop"));
