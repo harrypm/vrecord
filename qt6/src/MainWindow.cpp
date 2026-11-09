@@ -14,13 +14,16 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPixmap>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSlider>
 #include <QStyleFactory>
 #include <QStyleHints>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTextStream>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -90,6 +93,14 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
     refreshDeckLinkDevices();
     m_selfTestResults = runSelfTest();
     updateDerivedState();
+    // legacy parity: the live input preview starts automatically with the window
+    QString previewError;
+    if (m_backend.startVideoPreview(m_config, &previewError)) {
+        m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
+    } else {
+        m_selfTestResults << QStringLiteral("NOTE: auto preview did not start: %1").arg(previewError);
+        updateDerivedState();
+    }
 }
 QComboBox* MainWindow::makeCombo(const QStringList& items) {
     auto* combo = new QComboBox(this);
@@ -373,21 +384,49 @@ void MainWindow::buildUi() {
     m_filePlayAutoCheck = makeCheckBox(QStringLiteral("Auto-detect file format (play natively)"));
     m_previewInfoText = new QPlainTextEdit(this);
     m_previewInfoText->setReadOnly(true);
+    m_feedTimer = new QTimer(this);
+    m_feedTimer->setInterval(250);
     auto* previewTab = new QWidget(this);
     auto* previewRoot = new QHBoxLayout(previewTab);
     auto* livePreviewBox = new QGroupBox(QStringLiteral("Live input preview"), previewTab);
     auto* livePreviewLayout = new QVBoxLayout(livePreviewBox);
-    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Record: input preview"), livePreviewBox));
-    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Preview surface is still backend-managed; use the legacy UI when active live thumbnails are required."), livePreviewBox));
-    livePreviewLayout->addStretch();
     auto* outputDeviceBox = new QGroupBox(QStringLiteral("Output device feed"), previewTab);
     auto* outputDeviceLayout = new QVBoxLayout(outputDeviceBox);
+    m_livePreviewLabel = new QLabel(livePreviewBox);
+    m_livePreviewLabel->setMinimumHeight(240);
+    m_livePreviewLabel->setAlignment(Qt::AlignCenter);
+    m_outputFeedLabel = new QLabel(outputDeviceBox);
+    m_outputFeedLabel->setMinimumHeight(240);
+    m_outputFeedLabel->setAlignment(Qt::AlignCenter);
+    m_playPauseButton = new QPushButton(QStringLiteral("Play"), outputDeviceBox);
+    auto* btnBack100 = new QPushButton(QStringLiteral("-100"), outputDeviceBox);
+    auto* btnBack1 = new QPushButton(QStringLiteral("-1"), outputDeviceBox);
+    auto* btnFwd1 = new QPushButton(QStringLiteral("+1"), outputDeviceBox);
+    auto* btnFwd100 = new QPushButton(QStringLiteral("+100"), outputDeviceBox);
+    m_seekSlider = new QSlider(Qt::Horizontal, outputDeviceBox);
+    m_seekSlider->setRange(0, 10000);
+    m_positionLabel = new QLabel(QStringLiteral("00:00:00:00"), outputDeviceBox);
+    m_previewToggleButton = new QPushButton(QStringLiteral("Start Preview"), livePreviewBox);
+    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Record: input preview"), livePreviewBox));
+    livePreviewLayout->addWidget(m_livePreviewLabel);
+    livePreviewLayout->addWidget(m_previewToggleButton);
+    livePreviewLayout->addWidget(m_previewInfoText);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Hardware video output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_videoOutputDeviceCombo);
     outputDeviceLayout->addWidget(m_previewRelayCheck);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_relayDeviceCombo);
     outputDeviceLayout->addWidget(m_filePlayAutoCheck);
+    outputDeviceLayout->addWidget(m_outputFeedLabel);
+    auto* transportRow = new QHBoxLayout();
+    transportRow->addWidget(btnBack100);
+    transportRow->addWidget(btnBack1);
+    transportRow->addWidget(m_playPauseButton);
+    transportRow->addWidget(btnFwd1);
+    transportRow->addWidget(btnFwd100);
+    outputDeviceLayout->addLayout(transportRow);
+    outputDeviceLayout->addWidget(m_seekSlider);
+    outputDeviceLayout->addWidget(m_positionLabel);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Preview / playout notes"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_previewInfoText);
     previewRoot->addWidget(livePreviewBox, 2);
@@ -660,6 +699,16 @@ void MainWindow::buildUi() {
         applyVideoOutputConnection();
         restartTestSignalIfRunning();
     });
+    connect(m_previewToggleButton, &QPushButton::clicked, this, &MainWindow::togglePreview);
+    connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::togglePlayPause);
+    connect(btnBack100, &QPushButton::clicked, this, [this] { stepPlayback(-100); });
+    connect(btnBack1, &QPushButton::clicked, this, [this] { stepPlayback(-1); });
+    connect(btnFwd1, &QPushButton::clicked, this, [this] { stepPlayback(1); });
+    connect(btnFwd100, &QPushButton::clicked, this, [this] { stepPlayback(100); });
+    connect(m_seekSlider, &QSlider::sliderPressed, this, [this] { m_sliderDragging = true; });
+    connect(m_seekSlider, &QSlider::sliderReleased, this, &MainWindow::seekToSlider);
+    connect(m_feedTimer, &QTimer::timeout, this, &MainWindow::refreshFeeds);
+    m_feedTimer->start();
 
     syncConfigFromUi();
     outputNameLabel->setText(m_config.outputFilename());
@@ -849,6 +898,10 @@ void MainWindow::saveConfig() {
 
 void MainWindow::startRecord() {
     syncConfigFromUi();
+    // the recorder needs the card input: drop the live preview first
+    m_backend.stopVideoPreview();
+    m_previewToggleButton->setText(QStringLiteral("Start Preview"));
+    m_livePreviewLabel->clear();
     QString errorMessage;
     if (!m_backend.startRecord(m_config, &errorMessage)) {
         showError(errorMessage);
@@ -877,7 +930,7 @@ void MainWindow::startFileOutput() {
         showError(errorMessage);
         return;
     }
-    statusBar()->showMessage(QStringLiteral("Started file playout to hardware output"), 3000);
+    statusBar()->showMessage(QStringLiteral("Playing %1 to the hardware output").arg(m_playFileEdit->text().trimmed()), 3000);
 }
 
 void MainWindow::stopAllOutputs() {
@@ -890,6 +943,7 @@ void MainWindow::stopAllOutputs() {
     if (m_testSignalOutputCheck->isChecked()) {
         m_testSignalOutputCheck->setChecked(false);
     }
+    m_outputFeedLabel->clear();
     statusBar()->showMessage(QStringLiteral("Stopped all hardware output"), 3000);
 }
 
@@ -909,6 +963,98 @@ void MainWindow::setTestSignalOutput() {
                                  ? QStringLiteral("Started test signal output")
                                  : QStringLiteral("Stopped test signal output"),
                              3000);
+}
+
+void MainWindow::togglePreview() {
+    QString errorMessage;
+    if (m_backend.isVideoPreviewActive()) {
+        m_backend.stopVideoPreview();
+        m_previewToggleButton->setText(QStringLiteral("Start Preview"));
+        m_livePreviewLabel->clear();
+        statusBar()->showMessage(QStringLiteral("Live preview stopped"), 3000);
+        return;
+    }
+    syncConfigFromUi();
+    if (!m_backend.startVideoPreview(m_config, &errorMessage)) {
+        showError(errorMessage);
+        return;
+    }
+    m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
+    statusBar()->showMessage(QStringLiteral("Live input preview running"), 3000);
+}
+
+void MainWindow::togglePlayPause() {
+    if (!m_backend.isFileOutputActive()) {
+        startFileOutput();
+        return;
+    }
+    if (!m_backend.togglePauseFileOutput()) {
+        showError(QStringLiteral("Could not toggle the playout pause state."));
+        return;
+    }
+    updateTransportUi();
+}
+
+void MainWindow::stepPlayback(int frames) {
+    QString errorMessage;
+    if (!m_backend.stepFileOutput(frames, &errorMessage)) {
+        showError(errorMessage);
+        return;
+    }
+    updateTransportUi();
+}
+
+void MainWindow::seekToSlider() {
+    m_sliderDragging = false;
+    const double duration = m_backend.fileOutputDurationSeconds();
+    if (duration <= 0) {
+        return;
+    }
+    QString errorMessage;
+    if (!m_backend.seekFileOutput(m_seekSlider->value() / 10000.0 * duration, &errorMessage)) {
+        showError(errorMessage);
+        return;
+    }
+    updateTransportUi();
+}
+
+void MainWindow::refreshFeeds() {
+    const QPixmap preview(m_backend.previewImagePath());
+    if (!preview.isNull()) {
+        m_livePreviewLabel->setPixmap(preview.scaled(m_livePreviewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    const QPixmap feed(m_backend.outputFeedImagePath());
+    if (!feed.isNull()) {
+        m_outputFeedLabel->setPixmap(feed.scaled(m_outputFeedLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    updateTransportUi();
+}
+
+void MainWindow::updateTransportUi() {
+    const bool active = m_backend.isFileOutputActive();
+    const bool paused = m_backend.isFileOutputPaused();
+    m_playPauseButton->setText(active && !paused ? QStringLiteral("Pause") : QStringLiteral("Play"));
+    const double duration = m_backend.fileOutputDurationSeconds();
+    const double position = m_backend.fileOutputPositionSeconds();
+    const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;
+    const qint64 framesPerSecond = qRound64(fps);
+    const qint64 totalFrames = qRound64(position * fps);
+    const qint64 secondsTotal = framesPerSecond > 0 ? totalFrames / framesPerSecond : 0;
+    const qint64 framePart = framesPerSecond > 0 ? totalFrames % framesPerSecond : 0;
+    const auto formatHms = [](qint64 total) {
+        return QStringLiteral("%1:%2:%3").arg(total / 3600, 2, 10, QLatin1Char('0'))
+            .arg((total / 60) % 60, 2, 10, QLatin1Char('0'))
+            .arg(total % 60, 2, 10, QLatin1Char('0'));
+    };
+    m_positionLabel->setText(QStringLiteral("%1:%2 / %3").arg(formatHms(secondsTotal))
+                                 .arg(framePart, 2, 10, QLatin1Char('0'))
+                                 .arg(formatHms(qRound64(duration))));
+    m_seekSlider->setEnabled(duration > 0);
+    if (!m_sliderDragging && duration > 0) {
+        m_seekSlider->blockSignals(true);
+        m_seekSlider->setValue(qRound(10000.0 * position / duration));
+        m_seekSlider->blockSignals(false);
+    }
 }
 
 void MainWindow::applyVideoOutputConnection() {
@@ -974,6 +1120,17 @@ QStringList MainWindow::runSelfTest() {
               && filePlayCapture.contains(QStringLiteral("selftest-play.mkv"))
               && filePlayCapture.contains(QStringLiteral("decklink")));
     QFile::remove(tempPlayFile);
+
+    BackendController::clearCaptured();
+    m_backend.stepFileOutput(100, nullptr);
+    check(QStringLiteral("Player step control seeks the playout"),
+          BackendController::capturedAnyContaining(QStringLiteral(" -ss ")));
+
+    m_backend.togglePauseFileOutput();
+    check(QStringLiteral("Pause toggle holds the playout"), m_backend.isFileOutputPaused());
+    m_backend.togglePauseFileOutput();
+    check(QStringLiteral("Resume returns the playout to playing"),
+          m_backend.isFileOutputActive() && !m_backend.isFileOutputPaused());
 
     BackendController::clearCaptured();
     stopAllOutputs();

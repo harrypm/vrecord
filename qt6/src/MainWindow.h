@@ -12,11 +12,14 @@
 class QButtonGroup;
 class QCheckBox;
 class QGroupBox;
+class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QRadioButton;
+class QSlider;
 class QTabWidget;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -50,6 +53,12 @@ private:
     QString currentRadioValue() const;
     void applySelectedTheme();
     void showError(const QString& message);
+    void togglePreview();
+    void togglePlayPause();
+    void stepPlayback(int frames);
+    void seekToSlider();
+    void refreshFeeds();
+    void updateTransportUi();
 
     VrecordConfig m_config;
     BackendController m_backend;
@@ -127,4 +136,12 @@ private:
     QPlainTextEdit* m_validationText = nullptr;
     QMap<QString, QRadioButton*> m_inputChoiceRadios;
     QStringList m_selfTestResults;
+    QLabel* m_livePreviewLabel = nullptr;
+    QLabel* m_outputFeedLabel = nullptr;
+    QLabel* m_positionLabel = nullptr;
+    QSlider* m_seekSlider = nullptr;
+    QPushButton* m_playPauseButton = nullptr;
+    QPushButton* m_previewToggleButton = nullptr;
+    QTimer* m_feedTimer = nullptr;
+    bool m_sliderDragging = false;
 };

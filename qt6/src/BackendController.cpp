@@ -7,8 +7,11 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTextStream>
 #include <QTimer>
+
+#include <windows.h>
 
 namespace {
 bool s_testMode = false;
@@ -157,6 +160,28 @@ QString toBashPath(QString value) {
     return value;
 }
 
+// QProcess::suspend()/resume() are Unix-only - use the ntdll process
+// primitives to hold the DeckLink playout on the exact frame
+using NtProcessControlFunc = LONG(WINAPI*)(HANDLE);
+
+bool suspendProcessById(qint64 pid, bool suspend) {
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) {
+        return false;
+    }
+    const auto control = reinterpret_cast<NtProcessControlFunc>(GetProcAddress(ntdll, suspend ? "NtSuspendProcess" : "NtResumeProcess"));
+    if (!control) {
+        return false;
+    }
+    const HANDLE handle = OpenProcess(PROCESS_SUSPEND_RESUME, FALSE, static_cast<DWORD>(pid));
+    if (!handle) {
+        return false;
+    }
+    const LONG status = control(handle);
+    CloseHandle(handle);
+    return status == 0;
+}
+
 QString findBashExecutable() {
     const QString msysBash = QStringLiteral("C:/msys64/usr/bin/bash.exe");
     if (QFileInfo::exists(msysBash)) {
@@ -208,7 +233,7 @@ bool BackendController::startAudioCheck(const VrecordConfig& config, QString* er
     }
     return startProcess({QStringLiteral("-a"), QStringLiteral("-c"), config.configPath}, errorMessage);
 }
-bool BackendController::startFileOutput(const VrecordConfig& config, QString* errorMessage) const {
+bool BackendController::startFileOutput(const VrecordConfig& config, QString* errorMessage) {
     if (!saveConfig(config, errorMessage)) {
         return false;
     }
@@ -249,45 +274,385 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
         return false;
     }
 
-    QStringList arguments{
-        QStringLiteral("-nostdin"),
-        QStringLiteral("-loglevel"), QStringLiteral("error"),
-        QStringLiteral("-stream_loop"), QStringLiteral("-1"),
-        QStringLiteral("-i"), playFile,
-        QStringLiteral("-c:v"), QStringLiteral("v210"),
-        QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"),
-        QStringLiteral("-ar"), QStringLiteral("48000"),
-        QStringLiteral("-ac"), QStringLiteral("2"),
-        QStringLiteral("-f"), QStringLiteral("decklink"),
-        outputDevice
-    };
+    if (s_testMode) {
+        s_captured << (ffmpegPath + QLatin1Char(' ') + QStringLiteral("-stream_loop -1 -i %1 -f decklink %2")
+                           .arg(playFile, outputDevice));
+        m_playbackFile = playFile;
+        m_playbackDevice = outputDevice;
+        m_playbackDuration = 60.0;
+        m_playbackFps = 25.0;
+        m_playbackBaseSeconds = 0.0;
+        m_playbackPaused = false;
+        m_playbackClockRunning = true;
+        return true;
+    }
+
+    // the test signal and the file playout share the card output
+    stopTrackedProcess(testSignalPidPath(), nullptr);
+    // and on this card the input cannot run while the output is open
+    stopVideoPreview();
+
+    double duration = 0.0;
+    double fps = 25.0;
+    if (!probeMediaFile(playFile, &duration, &fps, errorMessage)) {
+        return false;
+    }
     if (!applyVideoOutputConnection(config, errorMessage)) {
         return false;
     }
-    stopTrackedProcess(filePlayPidPath(), nullptr);
-    qint64 pid = 0;
-    if (!startDetachedProgramWithLog(ffmpegPath, arguments, filePlayLogPath(), &pid, errorMessage)) {
-        return false;
-    }
-    QFile pidFile(filePlayPidPath());
-    if (pidFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        QTextStream out(&pidFile);
-        out << pid << '\n';
-    }
-    return true;
+
+    m_playbackFile = playFile;
+    m_playbackDevice = outputDevice;
+    m_playbackDuration = duration;
+    m_playbackFps = fps > 0 ? fps : 25.0;
+    m_playbackPaused = false;
+    return launchFileOutputProcess(0.0, errorMessage) && startOutputFeed(config, errorMessage);
 }
 
-bool BackendController::stopFileOutput(const VrecordConfig& config, QString* errorMessage) const {
+bool BackendController::stopFileOutput(const VrecordConfig& config, QString* errorMessage) {
     Q_UNUSED(config);
-    return stopTrackedProcess(filePlayPidPath(), errorMessage);
+    return stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
 }
 
-bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* errorMessage) const {
+bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* errorMessage) {
     Q_UNUSED(config);
     if (!stopTrackedProcess(testSignalPidPath(), errorMessage)) {
         return false;
     }
-    return stopTrackedProcess(filePlayPidPath(), errorMessage);
+    return stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+}
+
+bool BackendController::probeMediaFile(const QString& file, double* durationSeconds, double* fps, QString* errorMessage) const {
+    const QString ffprobePath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffprobe-ma.exe"));
+    if (!QFileInfo::exists(ffprobePath)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not find ffprobe backend at %1").arg(QDir::toNativeSeparators(ffprobePath));
+        }
+        return false;
+    }
+    QProcess probe;
+    probe.start(ffprobePath,
+                {QStringLiteral("-v"), QStringLiteral("error"),
+                 QStringLiteral("-show_entries"), QStringLiteral("format=duration:stream=r_frame_rate"),
+                 QStringLiteral("-of"), QStringLiteral("json"), file});
+    if (!probe.waitForFinished(10000)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("ffprobe timed out on %1").arg(QDir::toNativeSeparators(file));
+        }
+        return false;
+    }
+    const QString out = QString::fromUtf8(probe.readAllStandardOutput());
+    bool ok = false;
+    const QRegularExpression durationRe(QStringLiteral("\"duration\"\\s*:\\s*\"?([0-9.]+)"));
+    const auto durationMatch = durationRe.match(out);
+    if (durationMatch.hasMatch()) {
+        *durationSeconds = durationMatch.captured(1).toDouble();
+        ok = true;
+    }
+    const QRegularExpression rateRe(QStringLiteral("\"r_frame_rate\"\\s*:\\s*\"?([0-9]+)/([0-9]+)"));
+    const auto rateMatch = rateRe.match(out);
+    if (rateMatch.hasMatch()) {
+        const double numerator = rateMatch.captured(1).toDouble();
+        const double denominator = rateMatch.captured(2).toDouble();
+        if (numerator > 0 && denominator > 0) {
+            *fps = numerator / denominator;
+        }
+    }
+    if (!ok && errorMessage) {
+        *errorMessage = QStringLiteral("Could not probe the playout file duration: %1").arg(QDir::toNativeSeparators(file));
+    }
+    return ok;
+}
+
+bool BackendController::launchFileOutputProcess(double atSeconds, QString* errorMessage) {
+    if (s_testMode) {
+        s_captured << (QStringLiteral("ffmpeg-ma -stream_loop -1 -ss %1 -i %2 -f decklink %3")
+                           .arg(QString::number(atSeconds, 'f', 3), m_playbackFile, m_playbackDevice));
+        return true;
+    }
+    if (m_fileOutputProcess) {
+        m_fileOutputProcess->kill();
+        m_fileOutputProcess->waitForFinished(3000);
+        m_fileOutputProcess->deleteLater();
+        m_fileOutputProcess = nullptr;
+    }
+    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    QStringList arguments{
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-loglevel"), QStringLiteral("error"),
+        QStringLiteral("-re"),
+        QStringLiteral("-stream_loop"), QStringLiteral("-1")};
+    if (atSeconds > 0.05) {
+        arguments << QStringLiteral("-ss") << QString::number(atSeconds, 'f', 3);
+    }
+    arguments << QStringLiteral("-i") << m_playbackFile
+              << QStringLiteral("-c:v") << QStringLiteral("v210")
+              << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le")
+              << QStringLiteral("-ar") << QStringLiteral("48000")
+              << QStringLiteral("-ac") << QStringLiteral("2")
+              << QStringLiteral("-f") << QStringLiteral("decklink")
+              << m_playbackDevice;
+    m_fileOutputProcess = new QProcess(this);
+    m_fileOutputProcess->start(ffmpegPath, arguments);
+    if (!m_fileOutputProcess->waitForStarted(5000)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Failed to start the playout process.");
+        }
+        m_fileOutputProcess->deleteLater();
+        m_fileOutputProcess = nullptr;
+        return false;
+    }
+    m_playbackBaseSeconds = atSeconds;
+    m_playbackClock.restart();
+    m_playbackClockRunning = !m_playbackPaused;
+    if (m_playbackPaused) {
+        suspendProcessById(m_fileOutputProcess->processId(), true);
+    }
+    // keep the output feed following the transport position
+    if (m_outputFeedProcess) {
+        stopOutputFeed();
+        startOutputFeedProcess();
+    }
+    return true;
+}
+
+bool BackendController::stopManagedFileOutputInternal(QString* errorMessage) {
+    Q_UNUSED(errorMessage);
+    if (m_fileOutputProcess) {
+        m_fileOutputProcess->kill();
+        m_fileOutputProcess->waitForFinished(3000);
+        m_fileOutputProcess->deleteLater();
+        m_fileOutputProcess = nullptr;
+    }
+    m_playbackPaused = false;
+    m_playbackClockRunning = false;
+    m_playbackBaseSeconds = 0.0;
+    return true;
+}
+
+bool BackendController::togglePauseFileOutput() {
+    if (s_testMode) {
+        m_playbackPaused = !m_playbackPaused;
+        return true;
+    }
+    if (!m_fileOutputProcess || m_fileOutputProcess->state() != QProcess::Running) {
+        return false;
+    }
+    const qint64 playbackPid = m_fileOutputProcess->processId();
+    const qint64 feedPid = m_outputFeedProcess ? m_outputFeedProcess->processId() : 0;
+    if (m_playbackPaused) {
+        suspendProcessById(playbackPid, false);
+        if (feedPid > 0) {
+            suspendProcessById(feedPid, false);
+        }
+        m_playbackClock.restart();
+        m_playbackClockRunning = true;
+        m_playbackPaused = false;
+    } else {
+        if (m_playbackClockRunning) {
+            m_playbackBaseSeconds += m_playbackClock.elapsed() / 1000.0;
+        }
+        suspendProcessById(playbackPid, true);
+        if (feedPid > 0) {
+            suspendProcessById(feedPid, true);
+        }
+        m_playbackClockRunning = false;
+        m_playbackPaused = true;
+    }
+    return true;
+}
+
+bool BackendController::isFileOutputActive() const {
+    return s_testMode ? (m_playbackClockRunning || m_playbackPaused)
+                      : (m_fileOutputProcess != nullptr && m_fileOutputProcess->state() == QProcess::Running);
+}
+
+bool BackendController::isFileOutputPaused() const {
+    return isFileOutputActive() && m_playbackPaused;
+}
+
+double BackendController::fileOutputPositionSeconds() const {
+    double position = m_playbackBaseSeconds;
+    if (m_playbackClockRunning) {
+        position += m_playbackClock.elapsed() / 1000.0;
+    }
+    if (m_playbackDuration > 0) {
+        position = qMin(position, m_playbackDuration);
+    }
+    return qMax(position, 0.0);
+}
+
+double BackendController::fileOutputDurationSeconds() const {
+    return m_playbackDuration;
+}
+
+double BackendController::fileOutputFps() const {
+    return m_playbackFps;
+}
+
+bool BackendController::stepFileOutput(int frames, QString* errorMessage) {
+    if (frames == 0) {
+        return true;
+    }
+    const double delta = frames / (m_playbackFps > 0 ? m_playbackFps : 25.0);
+    return seekFileOutput(fileOutputPositionSeconds() + delta, errorMessage);
+}
+
+bool BackendController::seekFileOutput(double seconds, QString* errorMessage) {
+    if (!isFileOutputActive() && !s_testMode) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Start a file playout first.");
+        }
+        return false;
+    }
+    double target = seconds;
+    if (m_playbackDuration > 0) {
+        target = qMin(target, m_playbackDuration);
+    }
+    target = qMax(target, 0.0);
+    m_playbackBaseSeconds = target;
+    if (s_testMode) {
+        s_captured << (QStringLiteral("ffmpeg-ma -stream_loop -1 -ss %1 -i %2 -f decklink %3")
+                           .arg(QString::number(target, 'f', 3), m_playbackFile, m_playbackDevice));
+        return true;
+    }
+    // relaunch at the new position; relaunching while paused holds the frame
+    return launchFileOutputProcess(target, errorMessage);
+}
+
+bool BackendController::startVideoPreview(const VrecordConfig& config, QString* errorMessage) {
+    if (isVideoPreviewActive()) {
+        return true;
+    }
+    if (s_testMode) {
+        s_captured << QStringLiteral("ffmpeg-ma -f decklink -i preview");
+        return true;
+    }
+    // the input and the output cannot be open at the same time on this card
+    stopManagedFileOutputInternal(nullptr);
+    stopOutputFeed();
+    stopTrackedProcess(testSignalPidPath(), nullptr);
+
+    QString outputDevice = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
+    if (outputDevice.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Select a DeckLink device first.");
+        }
+        return false;
+    }
+    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    QStringList arguments{
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-loglevel"), QStringLiteral("error"),
+        QStringLiteral("-f"), QStringLiteral("decklink"),
+        QStringLiteral("-format_code"), formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed()),
+        QStringLiteral("-raw_format"), QStringLiteral("uyvy422"),
+        QStringLiteral("-i"), outputDevice,
+        QStringLiteral("-an"),
+        QStringLiteral("-vf"), QStringLiteral("fps=4,scale=480:-1,format=yuv420p"),
+        QStringLiteral("-c:v"), QStringLiteral("mjpeg"),
+        QStringLiteral("-q:v"), QStringLiteral("5"),
+        QStringLiteral("-update"), QStringLiteral("1"),
+        QStringLiteral("-f"), QStringLiteral("image2"),
+        QStringLiteral("-y"), previewImagePath()};
+    m_previewProcess = new QProcess(this);
+    m_previewProcess->start(ffmpegPath, arguments);
+    if (!m_previewProcess->waitForStarted(5000)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Failed to start the live preview.");
+        }
+        m_previewProcess->deleteLater();
+        m_previewProcess = nullptr;
+        return false;
+    }
+    return true;
+}
+
+bool BackendController::stopVideoPreview() {
+    if (m_previewProcess) {
+        m_previewProcess->kill();
+        m_previewProcess->waitForFinished(3000);
+        m_previewProcess->deleteLater();
+        m_previewProcess = nullptr;
+        QFile::remove(previewImagePath());
+    }
+    return true;
+}
+
+bool BackendController::isVideoPreviewActive() const {
+    return m_previewProcess != nullptr && m_previewProcess->state() == QProcess::Running;
+}
+
+bool BackendController::startOutputFeed(const VrecordConfig& config, QString* errorMessage) {
+    Q_UNUSED(config);
+    if (startOutputFeedProcess()) {
+        return true;
+    }
+    if (errorMessage) {
+        *errorMessage = QStringLiteral("Failed to start the output feed.");
+    }
+    return false;
+}
+
+bool BackendController::startOutputFeedProcess() {
+    if (s_testMode || m_playbackFile.isEmpty()) {
+        return true;
+    }
+    stopOutputFeed();
+    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    QStringList arguments{
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-loglevel"), QStringLiteral("error"),
+        QStringLiteral("-stream_loop"), QStringLiteral("-1")};
+    if (m_playbackBaseSeconds > 0.05) {
+        arguments << QStringLiteral("-ss") << QString::number(m_playbackBaseSeconds, 'f', 3);
+    }
+    arguments << QStringLiteral("-i") << m_playbackFile
+              << QStringLiteral("-vf") << QStringLiteral("fps=4,scale=480:-1,format=yuv420p")
+              << QStringLiteral("-c:v") << QStringLiteral("mjpeg")
+              << QStringLiteral("-q:v") << QStringLiteral("5")
+              << QStringLiteral("-update") << QStringLiteral("1")
+              << QStringLiteral("-f") << QStringLiteral("image2")
+              << QStringLiteral("-y") << outputFeedImagePath();
+    m_outputFeedProcess = new QProcess(this);
+    m_outputFeedProcess->start(ffmpegPath, arguments);
+    if (!m_outputFeedProcess->waitForStarted(5000)) {
+        m_outputFeedProcess->deleteLater();
+        m_outputFeedProcess = nullptr;
+        return false;
+    }
+    if (m_playbackPaused) {
+        suspendProcessById(m_outputFeedProcess->processId(), true);
+    }
+    return true;
+}
+
+bool BackendController::stopOutputFeed() {
+    if (m_outputFeedProcess) {
+        m_outputFeedProcess->kill();
+        m_outputFeedProcess->waitForFinished(3000);
+        m_outputFeedProcess->deleteLater();
+        m_outputFeedProcess = nullptr;
+        QFile::remove(outputFeedImagePath());
+    }
+    return true;
+}
+
+QString BackendController::previewImagePath() const {
+    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-preview.jpg"));
+}
+
+QString BackendController::outputFeedImagePath() const {
+    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-outputfeed.jpg"));
+}
+
+QString BackendController::formatCodeForStandard(const QString& standardChoice) const {
+    if (standardChoice == QStringLiteral("NTSC")) return QStringLiteral("ntsc");
+    if (standardChoice == QStringLiteral("PAL")) return QStringLiteral("pal");
+    if (standardChoice.startsWith(QStringLiteral("4k")) || standardChoice.startsWith(QStringLiteral("2d")) || standardChoice.startsWith(QStringLiteral("4d"))) {
+        return standardChoice.left(4);
+    }
+    return standardChoice.left(4);
 }
 
 bool BackendController::applyVideoOutputConnection(const VrecordConfig& config, QString* errorMessage) const {
@@ -311,7 +676,7 @@ bool BackendController::applyVideoOutputConnection(const VrecordConfig& config, 
     return DeckLinkDiscovery::applyOutputConnection(outputDevice, connection, errorMessage);
 }
 
-bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage) const {
+bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage) {
     if (!saveConfig(config, errorMessage)) {
         return false;
     }
@@ -354,6 +719,10 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
 
+    // the test signal owns the card output exclusively
+    stopManagedFileOutputInternal(nullptr);
+    stopOutputFeed();
+    stopVideoPreview();
     stopTrackedProcess(pidPath, nullptr);
 
     QStringList arguments;
@@ -508,13 +877,6 @@ QString BackendController::testSignalPidPath() const {
     return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.pid"));
 }
 
-QString BackendController::filePlayPidPath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-fileplay.pid"));
-}
-
-QString BackendController::filePlayLogPath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-fileplay.log"));
-}
 QString BackendController::testSignalLogPath() const {
     return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.log"));
 }

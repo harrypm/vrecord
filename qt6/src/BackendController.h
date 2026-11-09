@@ -2,7 +2,9 @@
 
 #include "VrecordConfig.h"
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QProcess>
 #include <QString>
 
 class BackendController : public QObject {
@@ -23,12 +25,31 @@ public slots:
     bool startRecord(const VrecordConfig& config, QString* errorMessage = nullptr) const;
     bool startPassthrough(const VrecordConfig& config, QString* errorMessage = nullptr) const;
     bool startAudioCheck(const VrecordConfig& config, QString* errorMessage = nullptr) const;
-    bool startFileOutput(const VrecordConfig& config, QString* errorMessage = nullptr) const;
-    bool stopFileOutput(const VrecordConfig& config, QString* errorMessage = nullptr) const;
-    bool stopAllOutputs(const VrecordConfig& config, QString* errorMessage = nullptr) const;
-    bool setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage = nullptr) const;
+    bool startFileOutput(const VrecordConfig& config, QString* errorMessage = nullptr);
+    bool stopFileOutput(const VrecordConfig& config, QString* errorMessage = nullptr);
+    bool stopAllOutputs(const VrecordConfig& config, QString* errorMessage = nullptr);
+    bool setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage = nullptr);
     bool applyVideoOutputConnection(const VrecordConfig& config, QString* errorMessage = nullptr) const;
     bool openLegacyUi(QString* errorMessage = nullptr) const;
+
+    // managed file playout transport (pause holds the card on the exact frame)
+    bool togglePauseFileOutput();
+    bool stepFileOutput(int frames, QString* errorMessage = nullptr);
+    bool seekFileOutput(double seconds, QString* errorMessage = nullptr);
+    bool isFileOutputActive() const;
+    bool isFileOutputPaused() const;
+    double fileOutputPositionSeconds() const;
+    double fileOutputDurationSeconds() const;
+    double fileOutputFps() const;
+
+    // preview feeds
+    bool startVideoPreview(const VrecordConfig& config, QString* errorMessage = nullptr);
+    bool stopVideoPreview();
+    bool isVideoPreviewActive() const;
+    bool startOutputFeed(const VrecordConfig& config, QString* errorMessage = nullptr);
+    bool stopOutputFeed();
+    QString previewImagePath() const;
+    QString outputFeedImagePath() const;
 
 private:
     bool startProcess(const QStringList& arguments, QString* errorMessage) const;
@@ -36,9 +57,23 @@ private:
     bool startDetachedProgramWithLog(const QString& program, const QStringList& arguments, const QString& logPath, qint64* pid, QString* errorMessage) const;
     QString testSignalPidPath() const;
     QString testSignalLogPath() const;
-    QString filePlayPidPath() const;
-    QString filePlayLogPath() const;
     bool stopTrackedProcess(const QString& pidFilePath, QString* errorMessage) const;
+    bool launchFileOutputProcess(double atSeconds, QString* errorMessage);
+    bool stopManagedFileOutputInternal(QString* errorMessage);
+    bool probeMediaFile(const QString& file, double* durationSeconds, double* fps, QString* errorMessage) const;
+    bool startOutputFeedProcess();
+    QString formatCodeForStandard(const QString& standardChoice) const;
 
     QString m_packageRoot;
+    QProcess* m_fileOutputProcess = nullptr;
+    QProcess* m_previewProcess = nullptr;
+    QProcess* m_outputFeedProcess = nullptr;
+    double m_playbackBaseSeconds = 0.0;
+    double m_playbackDuration = 0.0;
+    double m_playbackFps = 25.0;
+    bool m_playbackPaused = false;
+    bool m_playbackClockRunning = false;
+    QElapsedTimer m_playbackClock;
+    QString m_playbackFile;
+    QString m_playbackDevice;
 };
