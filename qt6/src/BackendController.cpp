@@ -683,31 +683,12 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         }
     }
 
-    // prefer the mode the incoming signal is actually using (the user may be
-    // feeding any format over HDMI/SDI); fall back to the selected standard.
-    // a NO-LOCK report is surfaced as a real error: the card receives nothing,
-    // so the pane would stay dead (HDCP sources never lock on this card)
-    QString detectionError;
-    QString formatCode = DeckLinkDiscovery::detectInputFormatCode(outputDevice, &detectionError);
-    QString detectedNote;
-    if (formatCode.isEmpty()) {
-        if (detectionError.contains(QStringLiteral("No input signal"))) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("No input signal detected on %1 (%2) - check the source is powered and outputting, the cable is in the card's HDMI/SDI IN, and that the source is not HDCP-protected (protected sources never lock on this card).")
-                                    .arg(outputDevice, config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed());
-            }
-            return false;
-        }
-        formatCode = formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
-    } else {
-        detectedNote = QStringLiteral(" (input mode %1)").arg(formatCode);
-    }
     const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
-    QStringList arguments{
+    const QStringList baseArguments{
         QStringLiteral("-nostdin"),
         QStringLiteral("-loglevel"), QStringLiteral("error"),
+        QStringLiteral("-signal_loss_action"), QStringLiteral("none"),
         QStringLiteral("-f"), QStringLiteral("decklink"),
-        QStringLiteral("-format_code"), formatCode,
         QStringLiteral("-raw_format"), QStringLiteral("uyvy422"),
         QStringLiteral("-i"), outputDevice,
         QStringLiteral("-an"),
@@ -717,6 +698,32 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         QStringLiteral("-update"), QStringLiteral("1"),
         QStringLiteral("-f"), QStringLiteral("image2"),
         QStringLiteral("-y"), previewImagePath()};
+
+    // pass 1: input autodetect (no format_code) - the macOS/Linux shell
+    // preview runs exactly this way. a passive lock-status read is useless
+    // here: the driver only reports lock while a capture is running.
+    // an autodetect failure exits within seconds; a live capture does not.
+    m_previewProcess = new QProcess(this);
+    connect(m_previewProcess, &QProcess::readyReadStandardError, m_previewProcess, &QProcess::readAllStandardError);
+    m_previewProcess->start(ffmpegPath, baseArguments);
+    if (m_previewProcess->waitForStarted(5000)) {
+        if (!m_previewProcess->waitForFinished(6000)) {
+            // still running after 6s: the capture locked and is streaming
+            return true;
+        }
+        // autodetect failed (no lock or unsupported): fall through to the
+        // explicit format from the selected standard
+        m_previewProcess->deleteLater();
+        m_previewProcess = nullptr;
+    } else {
+        m_previewProcess->deleteLater();
+        m_previewProcess = nullptr;
+    }
+
+    // pass 2: explicit format_code derived from the selected standard
+    QStringList arguments = baseArguments;
+    arguments.insert(5, QStringLiteral("-format_code"));
+    arguments.insert(6, formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed()));
     m_previewProcess = new QProcess(this);
     connect(m_previewProcess, &QProcess::readyReadStandardError, m_previewProcess, &QProcess::readAllStandardError);
     m_previewProcess->start(ffmpegPath, arguments);
@@ -727,10 +734,6 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         m_previewProcess->deleteLater();
         m_previewProcess = nullptr;
         return false;
-    }
-    if (errorMessage) {
-        // success path: carry the detected input mode back to the caller
-        *errorMessage = detectedNote;
     }
     return true;
 }
