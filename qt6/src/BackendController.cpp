@@ -684,10 +684,20 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
     }
 
     // prefer the mode the incoming signal is actually using (the user may be
-    // feeding any format over HDMI/SDI); fall back to the selected standard
-    QString formatCode = DeckLinkDiscovery::detectInputFormatCode(outputDevice, nullptr);
+    // feeding any format over HDMI/SDI); fall back to the selected standard.
+    // a NO-LOCK report is surfaced as a real error: the card receives nothing,
+    // so the pane would stay dead (HDCP sources never lock on this card)
+    QString detectionError;
+    QString formatCode = DeckLinkDiscovery::detectInputFormatCode(outputDevice, &detectionError);
     QString detectedNote;
     if (formatCode.isEmpty()) {
+        if (detectionError.contains(QStringLiteral("No input signal"))) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("No input signal detected on %1 (%2) - check the source is powered and outputting, the cable is in the card's HDMI/SDI IN, and that the source is not HDCP-protected (protected sources never lock on this card).")
+                                    .arg(outputDevice, config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed());
+            }
+            return false;
+        }
         formatCode = formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
     } else {
         detectedNote = QStringLiteral(" (input mode %1)").arg(formatCode);
