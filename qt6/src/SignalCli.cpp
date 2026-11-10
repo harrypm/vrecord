@@ -127,6 +127,11 @@ int runProbe() {
             } else {
                 std::cout << "  configured output connection: <unreadable>" << std::endl;
             }
+            if (configuration->GetInt(bmdDeckLinkConfigVideoInputConnection, &connection) == S_OK) {
+                std::cout << "  configured input connection: " << describeConnection(connection).toStdString() << std::endl;
+            } else {
+                std::cout << "  configured input connection: <unreadable>" << std::endl;
+            }
             configuration->Release();
         }
 
@@ -143,6 +148,10 @@ int runProbe() {
             }
             if (attributes->GetInt(BMDDeckLinkVideoOutputConnections, &outputConnections) == S_OK) {
                 std::cout << "  supported output connections: 0x" << std::hex << outputConnections << std::dec << std::endl;
+            }
+            LONGLONG inputConnections = 0;
+            if (attributes->GetInt(BMDDeckLinkVideoInputConnections, &inputConnections) == S_OK) {
+                std::cout << "  supported input connections: 0x" << std::hex << inputConnections << std::dec << std::endl;
             }
             attributes->Release();
         }
@@ -162,6 +171,21 @@ int runProbe() {
             }
             if (status->GetInt(bmdDeckLinkStatusBusy, &busy) == S_OK) {
                 std::cout << "  device busy state: " << busy << std::endl;
+            }
+            LONGLONG inputLocked = 0;
+            LONGLONG detectedInputMode = 0;
+            if (status->GetInt(bmdDeckLinkStatusVideoInputSignalLocked, &inputLocked) == S_OK) {
+                std::cout << "  input signal locked: " << (inputLocked != 0 ? "YES" : "NO") << std::endl;
+            }
+            if (status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &detectedInputMode) == S_OK && detectedInputMode != 0) {
+                QString modeCode;
+                for (int shift = 24; shift >= 0; shift -= 8) {
+                    const char character = static_cast<char>((detectedInputMode >> shift) & 0xFF);
+                    if (character != ' ') {
+                        modeCode += QLatin1Char(character);
+                    }
+                }
+                std::cout << "  detected input mode: " << modeCode.toStdString() << std::endl;
             }
             status->Release();
         }
