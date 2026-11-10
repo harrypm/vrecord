@@ -27,10 +27,12 @@ int main(int argc, char* argv[]) {
     writeLog(QStringLiteral("startup"));
     writeLog(QStringLiteral("appDir=%1").arg(QDir::toNativeSeparators(appDir)));
     QString packageRoot = appDir;
-    if (QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("vrecord.cmd")))
-        || QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("vrecord.sh")))) {
+    // the package root holds the vrecord shell backend and bin/ffmpeg-ma.exe
+    if (QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("vrecord")))
+        || QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("vrecord.cmd")))) {
         packageRoot = appDir;
-    } else if (QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("../vrecord.cmd")))) {
+    } else if (QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("../vrecord")))
+               || QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("../vrecord.cmd")))) {
         packageRoot = QFileInfo(QDir(appDir).filePath(QStringLiteral(".."))).absoluteFilePath();
     }
     writeLog(QStringLiteral("packageRoot=%1").arg(QDir::toNativeSeparators(packageRoot)));

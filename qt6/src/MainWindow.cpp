@@ -1,6 +1,11 @@
 #include "MainWindow.h"
 
+#include "DeckLinkDiscovery.h"
+#include "VideoView.h"
+#include "VrecordOptions.h"
+
 #include <QApplication>
+#include <QCloseEvent>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -14,9 +19,11 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPair>
 #include <QPixmap>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScopeGuard>
 #include <QSlider>
 #include <QSplitter>
 #include <QStyleFactory>
@@ -24,6 +31,7 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTextStream>
+#include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -88,22 +96,82 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
     : QMainWindow(parent)
     , m_config(VrecordConfig::load(QStringLiteral("vrecord")))
     , m_backend(packageRoot, this) {
+    m_backend.setManagedOutputs(true);
     buildUi();
     populateFromConfig();
     applySelectedTheme();
     refreshDeckLinkDevices();
-    m_selfTestResults = runSelfTest();
+    // (the self-test runs only with --self-test: it drives every action and
+    // would stop the live preview and stomp the user's fields on each launch)
     updateDerivedState();
-    // legacy parity: the live input preview starts automatically with the window
-    QString previewError;
-    if (m_backend.startVideoPreview(m_config, &previewError)) {
-        m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
-        if (!previewError.isEmpty()) {
-            statusBar()->showMessage(QStringLiteral("Live input preview running%1").arg(previewError), 5000);
+
+    // frames arrive as fast as the card delivers them; each one repaints its pane
+    connect(&m_backend, &BackendController::inputFrame, m_inputView, &VideoView::setFrame);
+    connect(&m_backend, &BackendController::outputFrame, m_outputView, &VideoView::setFrame);
+    connect(&m_backend, &BackendController::inputStatus, this, [this](const QString& message) {
+        m_inputView->setCaption(message.startsWith(QStringLiteral("streaming")) ? message.mid(11).chopped(1) : QString());
+        if (!message.startsWith(QStringLiteral("streaming"))) {
+            if (!message.startsWith(QStringLiteral("starting")) && !message.contains(QStringLiteral("failed"))) {
+                m_inputView->clearFrame(QStringLiteral("Input preview %1").arg(message));
+                updatePreviewButton();
+            } else {
+                m_inputView->setMessage(QStringLiteral("Input preview %1").arg(message));
+            }
         }
-    } else {
-        m_selfTestResults << QStringLiteral("NOTE: auto preview did not start: %1").arg(previewError);
-        updateDerivedState();
+        appendActivity(QStringLiteral("input: %1").arg(message));
+    });
+    connect(&m_backend, &BackendController::outputStatus, this, [this](const QString& message) {
+        if (message.startsWith(QStringLiteral("playing")) || message.startsWith(QStringLiteral("test signal"))) {
+            m_outputView->setCaption(message);
+        } else if (message.startsWith(QStringLiteral("stopped")) || message.startsWith(QStringLiteral("could not"))) {
+            m_outputView->clearFrame(QStringLiteral("Output %1").arg(message));
+        }
+        appendActivity(QStringLiteral("output: %1").arg(message));
+    });
+    connect(&m_backend, &BackendController::shellStarted, this, [this](const QString& mode) {
+        m_inputView->clearFrame(mode == QStringLiteral("record")
+                                    ? QStringLiteral("Recording - monitor in the player window.\nClose that window (or press Stop Recording) to finish.")
+                                    : QStringLiteral("%1 running in the player window").arg(mode));
+        m_recordButton->setText(mode == QStringLiteral("record") ? QStringLiteral("Stop Recording") : QStringLiteral("Stop %1").arg(mode));
+        updatePreviewButton();
+        appendActivity(QStringLiteral("backend: %1 started").arg(mode));
+    });
+    connect(&m_backend, &BackendController::shellFinished, this, [this](const QString& mode, int exitCode, const QString& message) {
+        m_recordButton->setText(QStringLiteral("Record"));
+        appendActivity(QStringLiteral("backend: %1 finished (exit %2)").arg(mode).arg(exitCode));
+        if (exitCode != 0) {
+            showError(QStringLiteral("The %1 session ended with exit code %2.\n\n%3\n\nFull log: %4")
+                          .arg(mode).arg(exitCode).arg(message, QDir::toNativeSeparators(m_backend.shellLogPath())));
+        } else {
+            statusBar()->showMessage(QStringLiteral("%1 finished").arg(mode), 5000);
+        }
+        // back to the live preview, as the window started
+        startPreviewQuietly();
+    });
+
+    // legacy parity: the live input preview starts automatically with the window
+    startPreviewQuietly();
+}
+
+void MainWindow::startPreviewQuietly() {
+    syncConfigFromUi();
+    QString previewError;
+    if (!m_backend.startVideoPreview(m_config, &previewError)) {
+        m_inputView->clearFrame(QStringLiteral("Live preview not running: %1").arg(previewError));
+    }
+    updatePreviewButton();
+}
+
+void MainWindow::updatePreviewButton() {
+    const bool active = m_backend.isVideoPreviewActive();
+    m_previewToggleButton->setText(active ? QStringLiteral("Stop Preview") : QStringLiteral("Start Preview"));
+    m_previewToggleButton->setIcon(QApplication::style()->standardIcon(active ? QStyle::SP_MediaStop : QStyle::SP_MediaPlay));
+    m_previewToggleButton->setEnabled(!m_backend.isShellRunning());
+}
+
+void MainWindow::appendActivity(const QString& line) {
+    if (m_activityText) {
+        m_activityText->appendPlainText(QStringLiteral("%1  %2").arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")), line));
     }
 }
 QComboBox* MainWindow::makeCombo(const QStringList& items) {
@@ -134,70 +202,27 @@ void MainWindow::buildUi() {
     m_tabs = new QTabWidget(central);
 
     m_deckLinkCombo = new QComboBox(this);
-    m_videoInputCombo = new QComboBox(this);
-    for (const auto& entry : {std::pair<QString, QString>{QStringLiteral("SDI"), QStringLiteral("sdi")},
-                              std::pair<QString, QString>{QStringLiteral("HDMI"), QStringLiteral("hdmi")},
-                              std::pair<QString, QString>{QStringLiteral("Component"), QStringLiteral("component")},
-                              std::pair<QString, QString>{QStringLiteral("Composite"), QStringLiteral("composite")},
-                              std::pair<QString, QString>{QStringLiteral("S-Video"), QStringLiteral("s-video")}}) {
-        m_videoInputCombo->addItem(entry.first, entry.second);
-    }
-    m_audioInputCombo = makeCombo({QStringLiteral("embedded"), QStringLiteral("aesebu"), QStringLiteral("analog"), QStringLiteral("hdmi")});
-    m_audioMappingCombo = makeCombo({QStringLiteral("2 channels"), QStringLiteral("4 channels"), QStringLiteral("8 channels"), QStringLiteral("16 channels")});
-    m_standardCombo = makeCombo({QStringLiteral("NTSC"),
-                                 QStringLiteral("PAL"),
-                                 QStringLiteral("23ps - 1080p23.98"),
-                                 QStringLiteral("24ps - 1080p24"),
-                                 QStringLiteral("Hp25 - 1080p25"),
-                                 QStringLiteral("Hp29 - 1080p29.97"),
-                                 QStringLiteral("Hp30 - 1080p30"),
-                                 QStringLiteral("Hi50 - 1080i50"),
-                                 QStringLiteral("Hi59 - 1080i59.94"),
-                                 QStringLiteral("Hi60 - 1080i60"),
-                                 QStringLiteral("hp50 - 720p50"),
-                                 QStringLiteral("hp59 - 720p59.94"),
-                                 QStringLiteral("hp60 - 720p60"),
-                                 QStringLiteral("Hp50 - 1080p50"),
-                                 QStringLiteral("Hp59 - 1080p59.94"),
-                                 QStringLiteral("Hp60 - 1080p60"),
-                                 QStringLiteral("2d23 - 2048p23.98"),
-                                 QStringLiteral("2d24 - 2048p24"),
-                                 QStringLiteral("2d25 - 2048p25"),
-                                 QStringLiteral("2d29 - 2048p29.97"),
-                                 QStringLiteral("2d30 - 2048p30"),
-                                 QStringLiteral("2d50 - 2048p50"),
-                                 QStringLiteral("2d59 - 2048p59.94"),
-                                 QStringLiteral("2d60 - 2048p60"),
-                                 QStringLiteral("4k23 - UHD 23.98"),
-                                 QStringLiteral("4k24 - UHD 24"),
-                                 QStringLiteral("4k25 - UHD 25"),
-                                 QStringLiteral("4k29 - UHD 29.97"),
-                                 QStringLiteral("4k30 - UHD 30"),
-                                 QStringLiteral("4k50 - UHD 50"),
-                                 QStringLiteral("4k59 - UHD 59.94"),
-                                 QStringLiteral("4k60 - UHD 60"),
-                                 QStringLiteral("4d23 - 4K DCI 23.98"),
-                                 QStringLiteral("4d24 - 4K DCI 24"),
-                                 QStringLiteral("4d25 - 4K DCI 25"),
-                                 QStringLiteral("4d29 - 4K DCI 29.97"),
-                                 QStringLiteral("4d30 - 4K DCI 30"),
-                                 QStringLiteral("4d50 - 4K DCI 50"),
-                                 QStringLiteral("4d59 - 4K DCI 59.94"),
-                                 QStringLiteral("4d60 - 4K DCI 60")});
+    // every *_CHOICE combo offers exactly the shell backend's option values
+    // (VrecordOptions.h): anything else makes `vrecord -r` abort in
+    // _review_option before the capture starts
+    m_videoInputCombo = makeCombo(VrecordOptions::videoInputs());
+    m_audioInputCombo = makeCombo(VrecordOptions::audioInputs());
+    m_audioMappingCombo = makeCombo(VrecordOptions::channelMappings());
+    m_standardCombo = makeCombo(VrecordOptions::standards());
     m_videoOutputConnectionCombo = makeCombo({QStringLiteral("Auto"),
                                               QStringLiteral("SDI"),
                                               QStringLiteral("HDMI"),
                                               QStringLiteral("Component"),
                                               QStringLiteral("Composite"),
                                               QStringLiteral("S-Video")});
-    m_bitDepthCombo = makeCombo({QStringLiteral("8 bit"), QStringLiteral("10 bit")});
-    m_aspectRatioCombo = makeCombo({QStringLiteral("4/3"), QStringLiteral("16/9")});
-    m_embedLogsCombo = makeCombo({QStringLiteral("yes"), QStringLiteral("no")});
-    m_containerCombo = makeCombo({QStringLiteral("Matroska"), QStringLiteral("QuickTime"), QStringLiteral("AVI"), QStringLiteral("MXF"), QStringLiteral("MP4")});
-    m_videoCodecCombo = makeCombo({QStringLiteral("FFV1 version 3"), QStringLiteral("ProRes"), QStringLiteral("ProRes (HQ)"), QStringLiteral("JPEG2000"), QStringLiteral("h264")});
-    m_audioCodecCombo = makeCombo({QStringLiteral("24-bit PCM"), QStringLiteral("24-bit FLAC")});
-    m_playbackViewCombo = makeCombo({QStringLiteral("none"), QStringLiteral("mpv"), QStringLiteral("ffplay"), QStringLiteral("system")});
-    m_playbackPassCombo = makeCombo({QStringLiteral("none"), QStringLiteral("mpv"), QStringLiteral("ffplay"), QStringLiteral("system")});
+    m_bitDepthCombo = makeCombo(VrecordOptions::bitDepths());
+    m_aspectRatioCombo = makeCombo(VrecordOptions::aspectRatios());
+    m_embedLogsCombo = makeCombo(VrecordOptions::embedLogs());
+    m_containerCombo = makeCombo(VrecordOptions::containers());
+    m_videoCodecCombo = makeCombo(VrecordOptions::videoCodecs());
+    m_audioCodecCombo = makeCombo(VrecordOptions::audioCodecs());
+    m_playbackViewCombo = makeCombo(VrecordOptions::playbackViews());
+    m_playbackPassCombo = makeCombo(VrecordOptions::playbackViews());
     m_mp4Check = makeCheckBox(QStringLiteral("Access MP4"));
     m_frameMd5Check = makeCheckBox(QStringLiteral("FrameMD5s"));
     m_timecodeVttCheck = makeCheckBox(QStringLiteral("Timecode VTT"));
@@ -260,7 +285,7 @@ void MainWindow::buildUi() {
     m_tabs->addTab(deckTab, QStringLiteral("Decklink"));
 
     m_dvDeviceCombo = makeCombo({QStringLiteral("auto"), QStringLiteral("device 0")});
-    m_dvContainerCombo = makeCombo({QStringLiteral("dv"), QStringLiteral("mov"), QStringLiteral("mkv")});
+    m_dvContainerCombo = makeCombo(VrecordOptions::dvContainers());
     m_dvOptionSCheck = makeCheckBox(QStringLiteral("recording start flags"));
     m_dvOptionDCheck = makeCheckBox(QStringLiteral("recording timestamps jumps"));
     m_dvOptionTCheck = makeCheckBox(QStringLiteral("timecode jumps"));
@@ -293,9 +318,9 @@ void MainWindow::buildUi() {
     m_tabs->addTab(dvTab, QStringLiteral("DV"));
 
     m_audioDeviceCombo = makeCombo({QStringLiteral("default"), QStringLiteral("Blackmagic"), QStringLiteral("Line In"), QStringLiteral("Microphone")});
-    m_audioModeCodecCombo = makeCombo({QStringLiteral("24-bit PCM"), QStringLiteral("24-bit FLAC")});
-    m_audioChannelsCombo = makeCombo({QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("4"), QStringLiteral("8")});
-    m_audioSampleRateCombo = makeCombo({QStringLiteral("32000"), QStringLiteral("44100"), QStringLiteral("48000"), QStringLiteral("96000")});
+    m_audioModeCodecCombo = makeCombo(VrecordOptions::audioCodecs());
+    m_audioChannelsCombo = makeCombo(VrecordOptions::audioChannels());
+    m_audioSampleRateCombo = makeCombo(VrecordOptions::audioSampleRates());
     auto* audioTab = new QWidget(this);
     auto* audioRoot = new QVBoxLayout(audioTab);
     auto* audioBox = new QGroupBox(QStringLiteral("Audio input options"), audioTab);
@@ -312,21 +337,21 @@ void MainWindow::buildUi() {
     audioRoot->addStretch();
     m_tabs->addTab(audioTab, QStringLiteral("Audio"));
 
-    m_waveformScaleCombo = makeCombo({QStringLiteral("IRE"), QStringLiteral("mV"), QStringLiteral("Digital")});
-    m_signalViewCombo = makeCombo({QStringLiteral("Color"), QStringLiteral("Luma"), QStringLiteral("Waveform"), QStringLiteral("Vectorscope")});
-    m_signalIntCombo = makeCombo({QStringLiteral("Auto"), QStringLiteral("Interlaced"), QStringLiteral("Progressive")});
-    m_monitorAudioCombo = makeCombo({QStringLiteral("yes"), QStringLiteral("no")});
-    m_ntsc43SarCombo = makeCombo({QStringLiteral("8:9"), QStringLiteral("10:11")});
-    m_ntsc169SarCombo = makeCombo({QStringLiteral("32:27"), QStringLiteral("40:33")});
-    m_pal43SarCombo = makeCombo({QStringLiteral("16:15"), QStringLiteral("12:11")});
-    m_pal169SarCombo = makeCombo({QStringLiteral("64:45"), QStringLiteral("16:11")});
+    m_waveformScaleCombo = makeCombo(VrecordOptions::waveformScales());
+    m_signalViewCombo = makeCombo(VrecordOptions::signalViews());
+    m_signalIntCombo = makeCombo(VrecordOptions::signalInterlacements());
+    m_monitorAudioCombo = makeCombo(VrecordOptions::monitorAudio());
+    m_ntsc43SarCombo = makeCombo(VrecordOptions::ntsc43Sars());
+    m_ntsc169SarCombo = makeCombo(VrecordOptions::ntsc169Sars());
+    m_pal43SarCombo = makeCombo(VrecordOptions::pal43Sars());
+    m_pal169SarCombo = makeCombo(VrecordOptions::pal169Sars());
     m_ccVttCheck = makeCheckBox(QStringLiteral("Make a webVTT"));
     m_ccSrtCheck = makeCheckBox(QStringLiteral("Make an SRT"));
     m_capToMp4Check = makeCheckBox(QStringLiteral("Wrap captions into Access MP4 file"));
     m_mediaIdTypeEdit = makeLineEdit();
     m_webVttExtraEdit = makeLineEdit();
     m_colorSafeCheck = makeCheckBox(QStringLiteral("Enable color free alerts"));
-    m_themeCombo = makeCombo({QStringLiteral("Dark"), QStringLiteral("Light"), QStringLiteral("System")});
+    m_themeCombo = makeCombo(VrecordOptions::themes());
     m_invertPhase2Check = makeCheckBox(QStringLiteral("Invert channel 2"));
     m_invertPhase4Check = makeCheckBox(QStringLiteral("Invert channel 4"));
     m_ffmpegStatusText = new QPlainTextEdit(this);
@@ -403,19 +428,16 @@ void MainWindow::buildUi() {
     m_previewInfoText = new QPlainTextEdit(this);
     m_previewInfoText->setReadOnly(true);
     m_feedTimer = new QTimer(this);
-    m_feedTimer->setInterval(250);
+    m_feedTimer->setInterval(100);
     auto* previewTab = new QWidget(this);
     auto* previewRoot = new QHBoxLayout(previewTab);
     auto* livePreviewBox = new QGroupBox(QStringLiteral("Live input preview"), previewTab);
     auto* livePreviewLayout = new QVBoxLayout(livePreviewBox);
     auto* outputDeviceBox = new QGroupBox(QStringLiteral("Output device feed"), previewTab);
     auto* outputDeviceLayout = new QVBoxLayout(outputDeviceBox);
-    m_livePreviewLabel = new QLabel(livePreviewBox);
-    m_livePreviewLabel->setMinimumHeight(240);
-    m_livePreviewLabel->setAlignment(Qt::AlignCenter);
-    m_outputFeedLabel = new QLabel(outputDeviceBox);
-    m_outputFeedLabel->setMinimumHeight(240);
-    m_outputFeedLabel->setAlignment(Qt::AlignCenter);
+    m_inputView = new VideoView(livePreviewBox);
+    m_outputView = new VideoView(outputDeviceBox);
+    m_outputView->clearFrame(QStringLiteral("No hardware output running"));
     const QSize transportIconSize(28, 28);
     const QSize transportButtonSize(56, 40);
     m_playPauseButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QString(), outputDeviceBox);
@@ -443,17 +465,22 @@ void MainWindow::buildUi() {
     m_positionLabel = new QLabel(QStringLiteral("00:00:00:00"), outputDeviceBox);
     m_previewToggleButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Start Preview"), livePreviewBox);
     m_previewToggleButton->setIconSize(QSize(20, 20));
-    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Record: input preview"), livePreviewBox));
-    livePreviewLayout->addWidget(m_livePreviewLabel, 1);
+    m_activityText = new QPlainTextEdit(livePreviewBox);
+    m_activityText->setReadOnly(true);
+    m_activityText->setMaximumBlockCount(400);
+    m_activityText->setMaximumHeight(110);
+    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Input preview (native frame rate, straight from the capture)"), livePreviewBox));
+    livePreviewLayout->addWidget(m_inputView, 1);
     livePreviewLayout->addWidget(m_previewToggleButton);
-    livePreviewLayout->addWidget(m_previewInfoText);
+    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Activity"), livePreviewBox));
+    livePreviewLayout->addWidget(m_activityText);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Hardware video output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_videoOutputDeviceCombo);
     outputDeviceLayout->addWidget(m_previewRelayCheck);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_relayDeviceCombo);
     outputDeviceLayout->addWidget(m_filePlayAutoCheck);
-    outputDeviceLayout->addWidget(m_outputFeedLabel, 1);
+    outputDeviceLayout->addWidget(m_outputView, 1);
     auto* transportRow = new QHBoxLayout();
     transportRow->addWidget(btnBack100);
     transportRow->addWidget(btnBack1);
@@ -465,7 +492,7 @@ void MainWindow::buildUi() {
     outputDeviceLayout->addWidget(m_positionLabel);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Preview / playout notes"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_previewInfoText);
-    previewRoot->addWidget(livePreviewBox, 2);
+    previewRoot->addWidget(livePreviewBox, 1);
     previewRoot->addWidget(outputDeviceBox, 1);
     m_tabs->addTab(previewTab, QStringLiteral("Video Preview"));
 
@@ -590,6 +617,7 @@ void MainWindow::buildUi() {
     auto* refreshDevicesButton = new QPushButton(styleIcon(QStyle::SP_BrowserReload), QStringLiteral("Refresh Devices"), central);
     auto* saveButton = new QPushButton(styleIcon(QStyle::SP_DialogSaveButton), QStringLiteral("Save Settings"), central);
     auto* recordButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo.png")), QStringLiteral("Record"), central);
+    m_recordButton = recordButton;
     auto* passthroughButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_playback.png")), QStringLiteral("Passthrough"), central);
     auto* audioButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_audio.png")), QStringLiteral("Audio Check"), central);
     auto* fileOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Play File to Output"), central);
@@ -666,22 +694,37 @@ void MainWindow::buildUi() {
         connect(radio, &QRadioButton::toggled, this, updateSlots);
     }
     connect(m_idEdit, &QLineEdit::textChanged, this, [outputNameLabel, this] {
+        if (m_populating) {
+            return;
+        }
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
     connect(m_prefixEdit, &QLineEdit::textChanged, this, [outputNameLabel, this] {
+        if (m_populating) {
+            return;
+        }
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
     connect(m_suffixEdit, &QLineEdit::textChanged, this, [outputNameLabel, this] {
+        if (m_populating) {
+            return;
+        }
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
     connect(m_enableSuffixCheck, &QCheckBox::checkStateChanged, this, [outputNameLabel, this] {
+        if (m_populating) {
+            return;
+        }
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
     connect(m_dirEdit, &QLineEdit::textChanged, this, [outputNameLabel, this] {
+        if (m_populating) {
+            return;
+        }
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
@@ -749,25 +792,45 @@ void MainWindow::buildUi() {
         applyVideoOutputConnection();
         restartTestSignalIfRunning();
     });
-    connect(m_deckLinkCombo, &QComboBox::activated, this, [this](int) {
-        rebuildConnectorCombos();
+    // input-side selections take effect on the running preview right away
+    // (ffmpeg's -video_input selects the connector, -format_code the mode)
+    const auto restartPreviewIfRunning = [this] {
+        // take the new choice into the config BEFORE relaunching, otherwise
+        // the preview restarts with the previous settings
         updateDerivedState();
-    });
-    connect(m_videoInputCombo, &QComboBox::activated, this, [this](int) {
-        QString errorMessage;
-        if (!m_backend.applyVideoInputConnection(m_config, &errorMessage)) {
-            showError(errorMessage);
-            return;
-        }
         if (m_backend.isVideoPreviewActive()) {
             m_backend.stopVideoPreview();
-            QString restartError;
-            if (m_backend.startVideoPreview(m_config, &restartError)) {
-                statusBar()->showMessage(QStringLiteral("Live input preview restarted on %1").arg(m_videoInputCombo->currentText()), 5000);
-            }
+            startPreviewQuietly();
         }
+    };
+    // the relay is part of the preview process: toggling it (or its device /
+    // the audio feeding it) relaunches the preview, starting it if needed
+    const auto restartPreviewForRelay = [this] {
         updateDerivedState();
+        if (m_backend.isShellRunning() || m_backend.isFileOutputActive() || m_backend.isTestSignalActive()) {
+            return;   // the card output is busy; the relay applies on the next preview start
+        }
+        m_backend.stopVideoPreview();
+        startPreviewQuietly();
+    };
+    connect(m_previewRelayCheck, &QCheckBox::clicked, this, [restartPreviewForRelay](bool) { restartPreviewForRelay(); });
+    connect(m_relayDeviceCombo, &QComboBox::activated, this, [this, restartPreviewForRelay](int) {
+        if (m_previewRelayCheck->isChecked()) {
+            restartPreviewForRelay();
+        }
     });
+    connect(m_audioInputCombo, &QComboBox::activated, this, [this, restartPreviewIfRunning](int) {
+        if (m_previewRelayCheck->isChecked()) {
+            restartPreviewIfRunning();
+        }
+    });
+    connect(m_deckLinkCombo, &QComboBox::activated, this, [this, restartPreviewIfRunning](int) {
+        rebuildConnectorCombos();
+        restartPreviewIfRunning();
+    });
+    connect(m_videoInputCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
+    connect(m_standardCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
+    connect(m_aspectRatioCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
     connect(m_previewToggleButton, &QPushButton::clicked, this, &MainWindow::togglePreview);
     connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::togglePlayPause);
     connect(btnBack100, &QPushButton::clicked, this, [this] { stepPlayback(-100); });
@@ -778,12 +841,17 @@ void MainWindow::buildUi() {
     connect(m_seekSlider, &QSlider::sliderReleased, this, &MainWindow::seekToSlider);
     connect(m_feedTimer, &QTimer::timeout, this, &MainWindow::refreshFeeds);
     m_feedTimer->start();
-
-    syncConfigFromUi();
-    outputNameLabel->setText(m_config.outputFilename());
+    m_outputNameLabel = outputNameLabel;
 }
 
 void MainWindow::populateFromConfig() {
+    m_populating = true;
+    const auto done = qScopeGuard([this] {
+        m_populating = false;
+        if (m_outputNameLabel) {
+            m_outputNameLabel->setText(m_config.outputFilename());
+        }
+    });
     m_idEdit->setText(m_config.value(QStringLiteral("ID")));
     m_dirEdit->setText(m_config.value(QStringLiteral("DIR")));
     m_logDirEdit->setText(m_config.value(QStringLiteral("LOGDIR")));
@@ -796,33 +864,33 @@ void MainWindow::populateFromConfig() {
     m_suffixEdit->setText(m_config.value(QStringLiteral("USER_SUFFIX")));
     m_enableSuffixCheck->setChecked(m_config.value(QStringLiteral("YES_SUFFIX")) == QStringLiteral("true"));
     setRadioValue(m_config.value(QStringLiteral("DEVICE_INPUT_CHOICE"), QStringLiteral("0")));
-    setComboValue(m_videoInputCombo, m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE"), QStringLiteral("sdi")));
-    setComboValue(m_audioInputCombo, m_config.value(QStringLiteral("AUDIO_INPUT_CHOICE"), QStringLiteral("embedded")));
-    setComboValue(m_audioMappingCombo, m_config.value(QStringLiteral("AUDIO_MAPPING_CHOICE"), QStringLiteral("2 channels")));
-    setComboValue(m_standardCombo, m_config.value(QStringLiteral("STANDARD_CHOICE"), QStringLiteral("NTSC")));
-    setComboValue(m_embedLogsCombo, m_config.value(QStringLiteral("EMBED_LOGS_CHOICE"), QStringLiteral("yes")));
-    setComboValue(m_containerCombo, m_config.value(QStringLiteral("CONTAINER_CHOICE"), QStringLiteral("Matroska")));
-    setComboValue(m_videoCodecCombo, m_config.value(QStringLiteral("VIDEO_CODEC_CHOICE"), QStringLiteral("FFV1 version 3")));
-    setComboValue(m_audioCodecCombo, m_config.value(QStringLiteral("AUDIO_CODEC_CHOICE"), QStringLiteral("24-bit PCM")));
-    setComboValue(m_playbackViewCombo, m_config.value(QStringLiteral("PLAYBACKVIEW_CHOICE"), QStringLiteral("none")));
-    setComboValue(m_playbackPassCombo, m_config.value(QStringLiteral("PLAYBACKVIEW_CHOICE_PASS"), QStringLiteral("none")));
-    setComboValue(m_bitDepthCombo, m_config.value(QStringLiteral("VIDEO_BIT_DEPTH_CHOICE"), QStringLiteral("10 bit")));
-    setComboValue(m_aspectRatioCombo, m_config.value(QStringLiteral("ASPECT_RATIO_CHOICE"), QStringLiteral("4/3")));
+    setChoice(m_videoInputCombo, m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE")), QStringLiteral("SDI"));
+    setChoice(m_audioInputCombo, m_config.value(QStringLiteral("AUDIO_INPUT_CHOICE")), QStringLiteral("SDI Embedded Audio"));
+    setChoice(m_audioMappingCombo, m_config.value(QStringLiteral("AUDIO_MAPPING_CHOICE")), QStringLiteral("1 Stereo Track (From Channels 1 & 2)"));
+    setChoice(m_standardCombo, m_config.value(QStringLiteral("STANDARD_CHOICE")), QStringLiteral("NTSC"));
+    setChoice(m_embedLogsCombo, m_config.value(QStringLiteral("EMBED_LOGS_CHOICE")), QStringLiteral("Yes"));
+    setChoice(m_containerCombo, m_config.value(QStringLiteral("CONTAINER_CHOICE")), QStringLiteral("Matroska"));
+    setChoice(m_videoCodecCombo, m_config.value(QStringLiteral("VIDEO_CODEC_CHOICE")), QStringLiteral("FFV1 version 3"));
+    setChoice(m_audioCodecCombo, m_config.value(QStringLiteral("AUDIO_CODEC_CHOICE")), QStringLiteral("24-bit PCM"));
+    setChoice(m_playbackViewCombo, m_config.value(QStringLiteral("PLAYBACKVIEW_CHOICE")), QStringLiteral("Visual"));
+    setChoice(m_playbackPassCombo, m_config.value(QStringLiteral("PLAYBACKVIEW_CHOICE_PASS")), QStringLiteral("Visual"));
+    setChoice(m_bitDepthCombo, m_config.value(QStringLiteral("VIDEO_BIT_DEPTH_CHOICE")), QStringLiteral("10 bit"));
+    setChoice(m_aspectRatioCombo, m_config.value(QStringLiteral("ASPECT_RATIO_CHOICE")), QStringLiteral("4/3"));
     setComboValue(m_dvDeviceCombo, m_config.value(QStringLiteral("DVRESCUE_INPUT_CHOICE"), QStringLiteral("auto")));
-    setComboValue(m_dvContainerCombo, m_config.value(QStringLiteral("DV_CONTAINER_CHOICE"), QStringLiteral("dv")));
+    setChoice(m_dvContainerCombo, m_config.value(QStringLiteral("DV_CONTAINER_CHOICE")), QStringLiteral("DV"));
     setComboValue(m_audioDeviceCombo, m_config.value(QStringLiteral("AUDIO_DEV_CHOICE"), QStringLiteral("default")));
-    setComboValue(m_audioModeCodecCombo, m_config.value(QStringLiteral("AUDIO_MODE_CODEC_CHOICE"), QStringLiteral("24-bit PCM")));
-    setComboValue(m_audioChannelsCombo, m_config.value(QStringLiteral("AUDIO_CHANNEL_CHOICE"), QStringLiteral("2")));
-    setComboValue(m_audioSampleRateCombo, m_config.value(QStringLiteral("AUDIO_MODE_SR_CHOICE"), QStringLiteral("48000")));
-    setComboValue(m_waveformScaleCombo, m_config.value(QStringLiteral("WAVEFORM_SCALE_CHOICE"), QStringLiteral("IRE")));
-    setComboValue(m_signalViewCombo, m_config.value(QStringLiteral("SIGNAL_VIEW_CHOICE"), QStringLiteral("Color")));
-    setComboValue(m_signalIntCombo, m_config.value(QStringLiteral("SIGNAL_INT_CHOICE"), QStringLiteral("Auto")));
-    setComboValue(m_monitorAudioCombo, m_config.value(QStringLiteral("MONITOR_AUDIO_CHOICE"), QStringLiteral("yes")));
-    setComboValue(m_ntsc43SarCombo, m_config.value(QStringLiteral("NTSC_43_SAR_CHOICE"), QStringLiteral("8:9")));
-    setComboValue(m_ntsc169SarCombo, m_config.value(QStringLiteral("NTSC_169_SAR_CHOICE"), QStringLiteral("32:27")));
-    setComboValue(m_pal43SarCombo, m_config.value(QStringLiteral("PAL_43_SAR_CHOICE"), QStringLiteral("16:15")));
-    setComboValue(m_pal169SarCombo, m_config.value(QStringLiteral("PAL_169_SAR_CHOICE"), QStringLiteral("64:45")));
-    setComboValue(m_themeCombo, m_config.value(QStringLiteral("THEME_CHOICE"), QStringLiteral("Dark")));
+    setChoice(m_audioModeCodecCombo, m_config.value(QStringLiteral("AUDIO_MODE_CODEC_CHOICE")), QStringLiteral("24-bit PCM"));
+    setChoice(m_audioChannelsCombo, m_config.value(QStringLiteral("AUDIO_CHANNEL_CHOICE")), QStringLiteral("Stereo"));
+    setChoice(m_audioSampleRateCombo, m_config.value(QStringLiteral("AUDIO_MODE_SR_CHOICE")), QStringLiteral("48 kHz"));
+    setChoice(m_waveformScaleCombo, m_config.value(QStringLiteral("WAVEFORM_SCALE_CHOICE")), QStringLiteral("digital"));
+    setChoice(m_signalViewCombo, m_config.value(QStringLiteral("SIGNAL_VIEW_CHOICE")), QStringLiteral("Broadcast Range"));
+    setChoice(m_signalIntCombo, m_config.value(QStringLiteral("SIGNAL_INT_CHOICE")), QStringLiteral("auto"));
+    setChoice(m_monitorAudioCombo, m_config.value(QStringLiteral("MONITOR_AUDIO_CHOICE")), QStringLiteral("Yes"));
+    setChoice(m_ntsc43SarCombo, m_config.value(QStringLiteral("NTSC_43_SAR_CHOICE")), QStringLiteral("10/11"));
+    setChoice(m_ntsc169SarCombo, m_config.value(QStringLiteral("NTSC_169_SAR_CHOICE")), QStringLiteral("40/33"));
+    setChoice(m_pal43SarCombo, m_config.value(QStringLiteral("PAL_43_SAR_CHOICE")), QStringLiteral("12/11"));
+    setChoice(m_pal169SarCombo, m_config.value(QStringLiteral("PAL_169_SAR_CHOICE")), QStringLiteral("16/11"));
+    setChoice(m_themeCombo, m_config.value(QStringLiteral("THEME_CHOICE")), QStringLiteral("Dark"));
     setComboValue(m_videoOutputDeviceCombo, m_config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")));
     setComboValue(m_videoOutputConnectionCombo, m_config.value(QStringLiteral("VIDEO_OUTPUT_CONNECTION_CHOICE"), QStringLiteral("Auto")));
     setComboValue(m_relayDeviceCombo, m_config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")));
@@ -863,10 +931,7 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("YES_SUFFIX"), m_enableSuffixCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("DEVICE_INPUT_CHOICE"), currentRadioValue());
     m_config.setValue(QStringLiteral("DECKLINK_INPUT_CHOICE"), m_deckLinkCombo->currentData().toString());
-    m_config.setValue(QStringLiteral("VIDEO_INPUT_CHOICE"),
-                      m_videoInputCombo->currentData().toString().isEmpty()
-                          ? m_videoInputCombo->currentText().toLower()
-                          : m_videoInputCombo->currentData().toString());
+    m_config.setValue(QStringLiteral("VIDEO_INPUT_CHOICE"), m_videoInputCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_INPUT_CHOICE"), m_audioInputCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_MAPPING_CHOICE"), m_audioMappingCombo->currentText());
     m_config.setValue(QStringLiteral("STANDARD_CHOICE"), m_standardCombo->currentText());
@@ -924,23 +989,37 @@ void MainWindow::populateDeckLinkCombo(const QVector<DeckLinkDeviceInfo>& device
     m_videoOutputDeviceCombo->clear();
     m_relayDeviceCombo->clear();
     for (const auto& device : devices) {
-        m_deckLinkCombo->addItem(device.displayName, device.modelName);
-        m_videoOutputDeviceCombo->addItem(device.displayName, device.modelName);
-        m_relayDeviceCombo->addItem(device.displayName, device.modelName);
+        // the value is the name ffmpeg's decklink device opens (display name)
+        m_deckLinkCombo->addItem(device.displayName, device.ffmpegName);
+        m_videoOutputDeviceCombo->addItem(device.displayName, device.ffmpegName);
+        m_relayDeviceCombo->addItem(device.displayName, device.ffmpegName);
     }
-    const int idx = m_deckLinkCombo->findData(selectedValue);
+    // configs from older builds stored the model name
+    const auto findDevice = [&devices](QComboBox* combo, const QString& value) {
+        int index = combo->findData(value);
+        if (index < 0) {
+            for (int i = 0; i < devices.size(); ++i) {
+                if (devices.at(i).modelName == value) {
+                    index = i;
+                    break;
+                }
+            }
+        }
+        return index;
+    };
+    const int idx = findDevice(m_deckLinkCombo, selectedValue);
     if (idx >= 0) {
         m_deckLinkCombo->setCurrentIndex(idx);
     } else if (!devices.isEmpty()) {
         m_deckLinkCombo->setCurrentIndex(0);
     }
-    const int outputIdx = m_videoOutputDeviceCombo->findData(m_config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")));
+    const int outputIdx = findDevice(m_videoOutputDeviceCombo, m_config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")));
     if (outputIdx >= 0) {
         m_videoOutputDeviceCombo->setCurrentIndex(outputIdx);
     } else if (!devices.isEmpty()) {
         m_videoOutputDeviceCombo->setCurrentIndex(0);
     }
-    const int relayIdx = m_relayDeviceCombo->findData(m_config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")));
+    const int relayIdx = findDevice(m_relayDeviceCombo, m_config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")));
     if (relayIdx >= 0) {
         m_relayDeviceCombo->setCurrentIndex(relayIdx);
     } else if (!devices.isEmpty()) {
@@ -956,23 +1035,32 @@ void MainWindow::rebuildConnectorCombos() {
     qint64 inputMask = 0;
     qint64 outputMask = 0;
     for (const auto& device : m_devices) {
-        if (device.modelName == selectedDevice) {
+        if (device.ffmpegName == selectedDevice) {
             inputMask = device.videoInputConnections;
             outputMask = device.videoOutputConnections;
             break;
         }
     }
 
-    // input connectors (config stores the lowercase names)
-    const QString currentInput = m_videoInputCombo->currentData().toString();
+    // input connectors the hardware has, in the shell's spelling (optical
+    // SDI is selected through the plain SDI input there)
+    const QString currentInput = m_videoInputCombo->currentText().isEmpty()
+        ? m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))
+        : m_videoInputCombo->currentText();
     m_videoInputCombo->clear();
-    const QStringList inputNames = DeckLinkDiscovery::connectionNamesFromMask(inputMask);
-    for (const QString& name : inputNames) {
-        m_videoInputCombo->addItem(name, name.toLower());
+    QStringList inputNames;
+    for (const QString& name : DeckLinkDiscovery::connectionNamesFromMask(inputMask)) {
+        const QString shellName = name == QStringLiteral("Optical SDI") ? QStringLiteral("SDI") : name;
+        if (VrecordOptions::videoInputs().contains(shellName) && !inputNames.contains(shellName)) {
+            inputNames << shellName;
+        }
     }
-    if (m_videoInputCombo->findData(currentInput) < 0 && m_videoInputCombo->count() > 0) {
-        m_videoInputCombo->setCurrentIndex(0);
+    if (inputNames.isEmpty()) {
+        inputNames = VrecordOptions::videoInputs();
     }
+    m_videoInputCombo->addItems(inputNames);
+    const int inputIndex = m_videoInputCombo->findText(currentInput);
+    m_videoInputCombo->setCurrentIndex(inputIndex >= 0 ? inputIndex : 0);
 
     // output connectors: Auto always allowed, hardware list otherwise
     const QString currentOutput = m_videoOutputConnectionCombo->currentText();
@@ -988,10 +1076,24 @@ void MainWindow::rebuildConnectorCombos() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (m_backend.isShellRunning()) {
+        // the session is a child of this window: closing it would cut the
+        // recording off mid-file
+        const auto answer = QMessageBox::question(this, QStringLiteral("vrecord Qt6"),
+                                                  QStringLiteral("A %1 session is still running. Stop it and quit?").arg(m_backend.shellMode()));
+        if (answer != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+        m_backend.stopShell();
+    }
     // persist the current selections (recording/auxiliary directories, playout
     // file, connector choices) so they are waiting at the next launch
     syncConfigFromUi();
-    m_config.save();
+    m_backend.saveConfig(m_config);
+    m_backend.stopVideoPreview();
+    QString ignored;
+    m_backend.stopAllOutputs(m_config, &ignored);
     QMainWindow::closeEvent(event);
 }
 
@@ -1015,31 +1117,105 @@ void MainWindow::saveConfig() {
     statusBar()->showMessage(QStringLiteral("Settings saved"), 3000);
 }
 
+// The shell captures with -format_code from the Standard choice: a deck sending
+// a different mode is captured as blank frames ("No input signal"), so the
+// recording and its monitor show nothing. Compare against what the card has
+// locked and offer the matching standard. Returns false to cancel the start.
+bool MainWindow::confirmInputStandard() {
+    if (BackendController::testMode() || m_config.value(QStringLiteral("DEVICE_INPUT_CHOICE"), QStringLiteral("0")) != QStringLiteral("0")) {
+        return true;
+    }
+    const QString device = m_config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
+    if (device.isEmpty()) {
+        return true;
+    }
+    const QString detected = DeckLinkDiscovery::detectInputFormatCode(device);
+    if (detected.isEmpty()) {
+        return true;
+    }
+    QString match;
+    for (const QString& standard : VrecordOptions::standards()) {
+        const QString code = standard == QStringLiteral("NTSC") ? QStringLiteral("ntsc")
+                           : standard == QStringLiteral("PAL")  ? QStringLiteral("pal")
+                                                                : standard.left(4);
+        if (code == detected) {
+            match = standard;
+            break;
+        }
+    }
+    const QString current = m_standardCombo->currentText();
+    if (match.isEmpty() || match == current) {
+        return true;
+    }
+    QMessageBox box(QMessageBox::Warning, QStringLiteral("vrecord Qt6"),
+                    QStringLiteral("The card is receiving %1 on %2, but Standard is set to %3.\n\n"
+                                   "Capturing as %3 would record blank frames. Switch Standard to %1?")
+                        .arg(match, m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE")), current),
+                    QMessageBox::NoButton, this);
+    QPushButton* switchButton = box.addButton(QStringLiteral("Switch to %1").arg(match), QMessageBox::AcceptRole);
+    QPushButton* keepButton = box.addButton(QStringLiteral("Keep %1").arg(current), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(switchButton);
+    box.exec();
+    if (box.clickedButton() == switchButton) {
+        m_standardCombo->setCurrentText(match);
+        syncConfigFromUi();
+        return true;
+    }
+    return box.clickedButton() == keepButton;
+}
+
 void MainWindow::startRecord() {
+    if (!BackendController::testMode() && m_backend.isShellRunning()) {
+        // the button doubles as Stop while a session runs
+        m_backend.stopShell();
+        return;
+    }
     syncConfigFromUi();
-    // the recorder needs the card input: drop the live preview first
-    m_backend.stopVideoPreview();
-    m_previewToggleButton->setText(QStringLiteral("Start Preview"));
-    m_livePreviewLabel->clear();
+    if (!confirmInputStandard()) {
+        return;
+    }
     QString errorMessage;
+    // the backend releases the card (preview, playout, test signal) and runs
+    // `vrecord -r`: ffmpeg encodes and ffplay opens as the monitor, exactly
+    // as the GTK frontend does
     if (!m_backend.startRecord(m_config, &errorMessage)) {
         showError(errorMessage);
+        startPreviewQuietly();
+        return;
     }
+    if (m_testSignalOutputCheck->isChecked()) {
+        m_testSignalOutputCheck->setChecked(false);
+    }
+    statusBar()->showMessage(QStringLiteral("Recording %1 - close the player window to stop").arg(m_config.outputFilename()), 8000);
 }
 
 void MainWindow::startPassthrough() {
+    if (!BackendController::testMode() && m_backend.isShellRunning()) {
+        m_backend.stopShell();
+        return;
+    }
     syncConfigFromUi();
+    if (!confirmInputStandard()) {
+        return;
+    }
     QString errorMessage;
     if (!m_backend.startPassthrough(m_config, &errorMessage)) {
         showError(errorMessage);
+        startPreviewQuietly();
     }
 }
 
 void MainWindow::startAudioCheck() {
+    if (!BackendController::testMode() && m_backend.isShellRunning()) {
+        m_backend.stopShell();
+        return;
+    }
     syncConfigFromUi();
     QString errorMessage;
     if (!m_backend.startAudioCheck(m_config, &errorMessage)) {
         showError(errorMessage);
+        startPreviewQuietly();
     }
 }
 void MainWindow::startFileOutput() {
@@ -1049,7 +1225,9 @@ void MainWindow::startFileOutput() {
         showError(errorMessage);
         return;
     }
-    statusBar()->showMessage(QStringLiteral("Playing %1 to the hardware output").arg(m_playFileEdit->text().trimmed()), 3000);
+    updatePreviewButton();
+    statusBar()->showMessage(QStringLiteral("Playing %1 to the hardware output (%2)")
+                                 .arg(m_playFileEdit->text().trimmed(), m_backend.fileOutputDescription()), 5000);
 }
 
 void MainWindow::stopAllOutputs() {
@@ -1062,7 +1240,7 @@ void MainWindow::stopAllOutputs() {
     if (m_testSignalOutputCheck->isChecked()) {
         m_testSignalOutputCheck->setChecked(false);
     }
-    m_outputFeedLabel->clear();
+    m_outputView->clearFrame(QStringLiteral("No hardware output running"));
     statusBar()->showMessage(QStringLiteral("Stopped all hardware output"), 3000);
 }
 
@@ -1078,6 +1256,10 @@ void MainWindow::setTestSignalOutput() {
         showError(errorMessage);
         return;
     }
+    if (!enabled) {
+        m_outputView->clearFrame(QStringLiteral("No hardware output running"));
+    }
+    updatePreviewButton();
     statusBar()->showMessage(enabled
                                  ? QStringLiteral("Started test signal output")
                                  : QStringLiteral("Stopped test signal output"),
@@ -1085,31 +1267,28 @@ void MainWindow::setTestSignalOutput() {
 }
 
 void MainWindow::togglePreview() {
-    QString errorMessage;
     if (m_backend.isVideoPreviewActive()) {
         m_backend.stopVideoPreview();
-        m_previewToggleButton->setText(QStringLiteral("Start Preview"));
-        m_previewToggleButton->setIcon(QApplication::style()->standardIcon(QStyle::SP_MediaPlay));
-        m_livePreviewLabel->clear();
+        m_inputView->clearFrame(QStringLiteral("Live preview stopped"));
+        updatePreviewButton();
         statusBar()->showMessage(QStringLiteral("Live preview stopped"), 3000);
         return;
     }
     syncConfigFromUi();
-    QString inputApplyError;
-    if (!m_backend.applyVideoInputConnection(m_config, &inputApplyError)) {
-        showError(inputApplyError);
-        return;
-    }
+    QString errorMessage;
     if (!m_backend.startVideoPreview(m_config, &errorMessage)) {
         showError(errorMessage);
         return;
     }
-    m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
-    m_previewToggleButton->setIcon(QApplication::style()->standardIcon(QStyle::SP_MediaStop));
-    statusBar()->showMessage(errorMessage.isEmpty()
-                                 ? QStringLiteral("Live input preview running")
-                                 : QStringLiteral("Live input preview running%1").arg(errorMessage),
-                             5000);
+    // the preview takes the card: the output side is now idle
+    if (m_testSignalOutputCheck->isChecked()) {
+        m_testSignalOutputCheck->blockSignals(true);
+        m_testSignalOutputCheck->setChecked(false);
+        m_testSignalOutputCheck->blockSignals(false);
+    }
+    m_outputView->clearFrame(QStringLiteral("No hardware output running"));
+    updatePreviewButton();
+    statusBar()->showMessage(QStringLiteral("Live input preview starting"), 3000);
 }
 
 void MainWindow::togglePlayPause() {
@@ -1148,15 +1327,12 @@ void MainWindow::seekToSlider() {
 }
 
 void MainWindow::refreshFeeds() {
-    const QPixmap preview(m_backend.previewImagePath());
-    if (!preview.isNull()) {
-        m_livePreviewLabel->setPixmap(preview.scaled(m_livePreviewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    }
-    const QPixmap feed(m_backend.outputFeedImagePath());
-    if (!feed.isNull()) {
-        m_outputFeedLabel->setPixmap(feed.scaled(m_outputFeedLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    }
+    // frames are pushed by the feeds; this tick only drives the transport
+    // readout and the button states
     updateTransportUi();
+    if (!m_backend.isVideoPreviewActive() && m_previewToggleButton->text() == QStringLiteral("Stop Preview")) {
+        updatePreviewButton();
+    }
 }
 
 void MainWindow::updateTransportUi() {
@@ -1231,6 +1407,46 @@ QStringList MainWindow::runSelfTest() {
 
     saveConfig();
     check(QStringLiteral("Save Settings writes the config file"), QFileInfo::exists(m_config.configPath), m_config.configPath);
+
+    // the shell's _review_option aborts `vrecord -r` (exit 2, before ffmpeg
+    // or ffplay start) on any value outside its option arrays
+    {
+        const VrecordConfig saved = VrecordConfig::load(QStringLiteral("vrecord"), m_config.configPath);
+        const QList<QPair<QString, QStringList>> shellLists{
+            {QStringLiteral("VIDEO_INPUT_CHOICE"), VrecordOptions::videoInputs()},
+            {QStringLiteral("AUDIO_INPUT_CHOICE"), VrecordOptions::audioInputs()},
+            {QStringLiteral("VIDEO_BIT_DEPTH_CHOICE"), VrecordOptions::bitDepths()},
+            {QStringLiteral("AUDIO_MAPPING_CHOICE"), VrecordOptions::channelMappings()},
+            {QStringLiteral("STANDARD_CHOICE"), VrecordOptions::standards()},
+            {QStringLiteral("ASPECT_RATIO_CHOICE"), VrecordOptions::aspectRatios()},
+            {QStringLiteral("NTSC_43_SAR_CHOICE"), VrecordOptions::ntsc43Sars()},
+            {QStringLiteral("NTSC_169_SAR_CHOICE"), VrecordOptions::ntsc169Sars()},
+            {QStringLiteral("PAL_43_SAR_CHOICE"), VrecordOptions::pal43Sars()},
+            {QStringLiteral("PAL_169_SAR_CHOICE"), VrecordOptions::pal169Sars()},
+            {QStringLiteral("WAVEFORM_SCALE_CHOICE"), VrecordOptions::waveformScales()},
+            {QStringLiteral("SIGNAL_VIEW_CHOICE"), VrecordOptions::signalViews()},
+            {QStringLiteral("SIGNAL_INT_CHOICE"), VrecordOptions::signalInterlacements()},
+            {QStringLiteral("MONITOR_AUDIO_CHOICE"), VrecordOptions::monitorAudio()},
+            {QStringLiteral("PLAYBACKVIEW_CHOICE"), VrecordOptions::playbackViews()},
+            {QStringLiteral("CONTAINER_CHOICE"), VrecordOptions::containers()},
+            {QStringLiteral("VIDEO_CODEC_CHOICE"), VrecordOptions::videoCodecs()},
+            {QStringLiteral("AUDIO_CODEC_CHOICE"), VrecordOptions::audioCodecs()},
+            {QStringLiteral("EMBED_LOGS_CHOICE"), VrecordOptions::embedLogs()},
+        };
+        QStringList rejected;
+        for (const auto& entry : shellLists) {
+            const QString value = saved.value(entry.first);
+            if (!entry.second.contains(value)) {
+                rejected << QStringLiteral("%1=\"%2\"").arg(entry.first, value);
+            }
+        }
+        const bool hdOk = !VrecordOptions::isHdStandard(saved.value(QStringLiteral("STANDARD_CHOICE")))
+            || saved.value(QStringLiteral("HD_CHOICE")) == QStringLiteral("true");
+        if (!hdOk) {
+            rejected << QStringLiteral("HD_CHOICE not true for an HD standard");
+        }
+        check(QStringLiteral("Saved settings pass the shell backend's option review"), rejected.isEmpty(), rejected.join(QStringLiteral(", ")));
+    }
 
     m_idEdit->setText(QStringLiteral("selftest"));
     BackendController::clearCaptured();
@@ -1334,6 +1550,13 @@ QStringList MainWindow::runSelfTest() {
     m_config = originalConfig;
     populateFromConfig();
     syncConfigFromUi();
+    QStringList changed;
+    for (auto it = originalConfig.values.constBegin(); it != originalConfig.values.constEnd(); ++it) {
+        if (m_config.value(it.key()) != it.value()) {
+            changed << QStringLiteral("%1: '%2' -> '%3'").arg(it.key(), it.value(), m_config.value(it.key()));
+        }
+    }
+    check(QStringLiteral("User settings are restored intact after the test"), changed.isEmpty(), changed.join(QStringLiteral("; ")));
     QFile::remove(QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf")));
 
     BackendController::setTestMode(false);
@@ -1370,6 +1593,16 @@ void MainWindow::setComboValue(QComboBox* combo, const QString& value) {
         combo->addItem(value, value);
         combo->setCurrentIndex(combo->count() - 1);
     }
+}
+
+void MainWindow::setChoice(QComboBox* combo, const QString& value, const QString& fallback) {
+    // shell option combos never grow: an unknown value falls back to the
+    // default instead of being written back to the config
+    int index = combo->findText(value);
+    if (index < 0) {
+        index = combo->findText(fallback);
+    }
+    combo->setCurrentIndex(qMax(index, 0));
 }
 
 void MainWindow::setRadioValue(const QString& value) {
@@ -1413,6 +1646,12 @@ void MainWindow::applySelectedTheme() {
 }
 
 void MainWindow::updateDerivedState() {
+    // while populateFromConfig() fills the widgets one by one, every
+    // textChanged lands here: syncing then would copy the not-yet-filled
+    // widgets (stale values) back over the config being loaded
+    if (m_populating) {
+        return;
+    }
     syncConfigFromUi();
     m_summaryText->setPlainText(m_config.summary());
     const QStringList issues = m_config.validate();

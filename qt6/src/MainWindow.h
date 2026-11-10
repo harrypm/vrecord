@@ -21,6 +21,7 @@ class QRadioButton;
 class QSlider;
 class QTabWidget;
 class QTimer;
+class VideoView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -36,6 +37,7 @@ private slots:
     void saveConfig();
     void startRecord();
     void startPassthrough();
+    bool confirmInputStandard();
     void startAudioCheck();
     void startFileOutput();
     void stopAllOutputs();
@@ -54,6 +56,10 @@ private:
     QCheckBox* makeCheckBox(const QString& label);
     QLineEdit* makeLineEdit();
     void setComboValue(QComboBox* combo, const QString& value);
+    void setChoice(QComboBox* combo, const QString& value, const QString& fallback);
+    void startPreviewQuietly();
+    void updatePreviewButton();
+    void appendActivity(const QString& line);
     void setRadioValue(const QString& value);
     QString currentRadioValue() const;
     void applySelectedTheme();
@@ -141,9 +147,13 @@ private:
     QPlainTextEdit* m_validationText = nullptr;
     QMap<QString, QRadioButton*> m_inputChoiceRadios;
     QStringList m_selfTestResults;
-    QLabel* m_livePreviewLabel = nullptr;
-    QLabel* m_outputFeedLabel = nullptr;
+    bool m_populating = false;
+    VideoView* m_inputView = nullptr;
+    VideoView* m_outputView = nullptr;
+    QPlainTextEdit* m_activityText = nullptr;
+    QPushButton* m_recordButton = nullptr;
     QLabel* m_positionLabel = nullptr;
+    QLabel* m_outputNameLabel = nullptr;
     QSlider* m_seekSlider = nullptr;
     QPushButton* m_playPauseButton = nullptr;
     QPushButton* m_previewToggleButton = nullptr;

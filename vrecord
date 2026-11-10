@@ -3331,6 +3331,13 @@ _lookup_choice(){
                 _build_dar_mediaconch_test "4/3"
                 ACCESS_MP4_LEVEL="3.2"
                 ACCESS_MP4_BITRATE="7000k"
+            elif [[ "${STANDARD}" = "Hp50" || "${STANDARD}" = "Hp59" || "${STANDARD}" = "Hp60" ]] ; then
+                # 1080p50/59.94/60 were missing from this table
+                RECORDINGFILTER+=",setdar=4/3"
+                RECORDINGFILTER_MP4+=",setdar=4/3"
+                _build_dar_mediaconch_test "4/3"
+                ACCESS_MP4_LEVEL="4.2"
+                ACCESS_MP4_BITRATE="12000k"
             else
                 _report -w "Error: the standard wasn't set to an expected when it was expected to be."
             fi ;;
@@ -3413,6 +3420,13 @@ _lookup_choice(){
                 _build_dar_mediaconch_test "16/9"
                 ACCESS_MP4_LEVEL="3.2"
                 ACCESS_MP4_BITRATE="7000k"
+            elif [[ "${STANDARD}" = "Hp50" || "${STANDARD}" = "Hp59" || "${STANDARD}" = "Hp60" ]] ; then
+                # 1080p50/59.94/60 were missing from this table
+                RECORDINGFILTER+=",setdar=16/9"
+                RECORDINGFILTER_MP4+=",setdar=16/9"
+                _build_dar_mediaconch_test "16/9"
+                ACCESS_MP4_LEVEL="4.2"
+                ACCESS_MP4_BITRATE="12000k"
             else
                 _report -w "Error: the standard wasn't set to an expected when it was expected to be."
             fi ;;
@@ -3623,7 +3637,8 @@ _frames_to_hhmmss(){
     S="$(echo "scale=3;(${i} - (${H}*60 * 60 * ${DECKLINK_FPS})-($M*60*${DECKLINK_FPS})) / (${DECKLINK_FPS})" | bc)"
     Ss=$(echo "${S}" | cut -d. -f1 | bc)
     Sm=$(echo "${S}" | cut -d. -f2 | bc)
-    printf "%02d:%02d:%02d.%03d\n" "${H}" "${M}" "${Ss}" "${Sm}"
+    # bc prints ".033" (no leading zero) for times under a second: Ss is empty then
+    printf "%02d:%02d:%02d.%03d\n" "${H:-0}" "${M:-0}" "${Ss:-0}" "${Sm:-0}"
 }
 
 _set_up_drawtext(){
@@ -4641,13 +4656,6 @@ _report -d "Close the playback window to stop recording."
 
 # vrecord process!
 _setup_vrecord_process
-# TEMP DEBUG: probe ffmpeg launchability in this exact context
-{
-    echo "FFMPEG_BIN=${FFMPEG_BIN}"
-    echo "PATH=${PATH}"
-    "${FFMPEG_BIN}" -nostdin -version 2>&1 | head -1
-    echo "probe_rc=$?"
-} > /tmp/vrecord-p1probe.txt 2>&1
 if [[ "${VRECORD_STEPS}" = "2" ]] ; then
     _writeingestlog "Record command" "${RECORD_COMMAND[@]}"
     _writeingestlog "Playback command" "${PLAYER_COMMAND[@]}"

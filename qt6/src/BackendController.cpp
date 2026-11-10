@@ -1,16 +1,24 @@
 #include "BackendController.h"
 
 #include "DeckLinkDiscovery.h"
+#include "VrecordOptions.h"
 
+#include <QCoreApplication>
 #include <QDir>
-#include <QEventLoop>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QTextStream>
 #include <QThread>
-#include <QTimer>
+
+#include <cmath>
+#include <cstring>
 
 #include <windows.h>
 
@@ -18,45 +26,9 @@ namespace {
 bool s_testMode = false;
 QStringList s_captured;
 
-struct SignalMode {
-    QString size;
-    QString rate;
-    QString fieldOrder;
-};
-
-QString rateForFamily(const QString& standardChoice) {
-    if (standardChoice.endsWith(QStringLiteral("23.98"))) return QStringLiteral("24000/1001");
-    if (standardChoice.endsWith(QStringLiteral("24"))) return QStringLiteral("24/1");
-    if (standardChoice.endsWith(QStringLiteral("25"))) return QStringLiteral("25/1");
-    if (standardChoice.endsWith(QStringLiteral("29.97"))) return QStringLiteral("30000/1001");
-    if (standardChoice.endsWith(QStringLiteral("30"))) return QStringLiteral("30/1");
-    if (standardChoice.endsWith(QStringLiteral("50"))) return QStringLiteral("50/1");
-    if (standardChoice.endsWith(QStringLiteral("59.94"))) return QStringLiteral("60000/1001");
-    if (standardChoice.endsWith(QStringLiteral("60"))) return QStringLiteral("60/1");
-    return QStringLiteral("25/1");
-}
-
-SignalMode resolveSignalMode(const QString& standardChoice) {
-    if (standardChoice == QStringLiteral("PAL")) return {QStringLiteral("720x576"), QStringLiteral("25/1"), QStringLiteral("tff")};
-    if (standardChoice == QStringLiteral("23ps - 1080p23.98")) return {QStringLiteral("1920x1080"), QStringLiteral("24000/1001"), {}};
-    if (standardChoice == QStringLiteral("24ps - 1080p24")) return {QStringLiteral("1920x1080"), QStringLiteral("24/1"), {}};
-    if (standardChoice == QStringLiteral("Hp25") || standardChoice == QStringLiteral("Hp25 - 1080p25")) return {QStringLiteral("1920x1080"), QStringLiteral("25/1"), {}};
-    if (standardChoice == QStringLiteral("Hp29 - 1080p29.97")) return {QStringLiteral("1920x1080"), QStringLiteral("30000/1001"), {}};
-    if (standardChoice == QStringLiteral("Hp30") || standardChoice == QStringLiteral("Hp30 - 1080p30")) return {QStringLiteral("1920x1080"), QStringLiteral("30/1"), {}};
-    if (standardChoice == QStringLiteral("Hi50 - 1080i50")) return {QStringLiteral("1920x1080"), QStringLiteral("25/1"), QStringLiteral("tff")};
-    if (standardChoice == QStringLiteral("Hi59") || standardChoice == QStringLiteral("Hi59 - 1080i59.94")) return {QStringLiteral("1920x1080"), QStringLiteral("30000/1001"), QStringLiteral("tff")};
-    if (standardChoice == QStringLiteral("Hi60 - 1080i60")) return {QStringLiteral("1920x1080"), QStringLiteral("30/1"), QStringLiteral("tff")};
-    if (standardChoice == QStringLiteral("hp50 - 720p50")) return {QStringLiteral("1280x720"), QStringLiteral("50/1"), {}};
-    if (standardChoice == QStringLiteral("hp59 - 720p59.94")) return {QStringLiteral("1280x720"), QStringLiteral("60000/1001"), {}};
-    if (standardChoice == QStringLiteral("hp60 - 720p60")) return {QStringLiteral("1280x720"), QStringLiteral("60/1"), {}};
-    if (standardChoice == QStringLiteral("Hp50 - 1080p50")) return {QStringLiteral("1920x1080"), QStringLiteral("50/1"), {}};
-    if (standardChoice == QStringLiteral("Hp59 - 1080p59.94")) return {QStringLiteral("1920x1080"), QStringLiteral("60000/1001"), {}};
-    if (standardChoice == QStringLiteral("Hp60 - 1080p60")) return {QStringLiteral("1920x1080"), QStringLiteral("60/1"), {}};
-    if (standardChoice.startsWith(QStringLiteral("2d"))) return {QStringLiteral("2048x1080"), rateForFamily(standardChoice), {}};
-    if (standardChoice.startsWith(QStringLiteral("4k"))) return {QStringLiteral("3840x2160"), rateForFamily(standardChoice), {}};
-    if (standardChoice.startsWith(QStringLiteral("4d"))) return {QStringLiteral("4096x2160"), rateForFamily(standardChoice), {}};
-    return {QStringLiteral("720x486"), QStringLiteral("30000/1001"), QStringLiteral("bff")};
-}
+// ffmpeg decklink outdev default preroll (decklink_enc_c.c: preroll = 0.5 s):
+// the card shows a frame this long after ffmpeg hands it over
+constexpr double kDeckLinkPreroll = 0.5;
 
 QString lockedPatternSize(const QString& pattern) {
     if (pattern.contains(QStringLiteral("UHD"), Qt::CaseInsensitive) || pattern.contains(QStringLiteral("2160p"), Qt::CaseInsensitive)) {
@@ -68,37 +40,34 @@ QString lockedPatternSize(const QString& pattern) {
     return {};
 }
 
-QString testVideoSourceForPattern(const QString& pattern, const SignalMode& mode) {
-    const QString size = lockedPatternSize(pattern).isEmpty() ? mode.size : lockedPatternSize(pattern);
+QString testVideoSourceForPattern(const QString& pattern, const VideoMode& mode) {
+    const QString size = lockedPatternSize(pattern).isEmpty() ? mode.size() : lockedPatternSize(pattern);
+    const QString rate = mode.rate();
     if (pattern.contains(QStringLiteral("black"), Qt::CaseInsensitive)) {
-        return QStringLiteral("color=c=black:size=%1:rate=%2").arg(size, mode.rate);
+        return QStringLiteral("color=c=black:size=%1:rate=%2").arg(size, rate);
     }
     if (pattern.contains(QStringLiteral("white"), Qt::CaseInsensitive)) {
-        return QStringLiteral("color=c=white:size=%1:rate=%2").arg(size, mode.rate);
+        return QStringLiteral("color=c=white:size=%1:rate=%2").arg(size, rate);
     }
     if (pattern.contains(QStringLiteral("grid"), Qt::CaseInsensitive) || pattern.contains(QStringLiteral("test pattern"), Qt::CaseInsensitive)) {
-        return QStringLiteral("testsrc2=size=%1:rate=%2").arg(size, mode.rate);
+        return QStringLiteral("testsrc2=size=%1:rate=%2").arg(size, rate);
     }
-    if (pattern.contains(QStringLiteral("pluge"), Qt::CaseInsensitive)) {
-        return QStringLiteral("testsrc=size=%1:rate=%2").arg(size, mode.rate);
+    if (pattern.contains(QStringLiteral("pluge"), Qt::CaseInsensitive) || pattern.contains(QStringLiteral("ffmpeg"), Qt::CaseInsensitive)) {
+        return QStringLiteral("testsrc=size=%1:rate=%2").arg(size, rate);
     }
     if (pattern.contains(QStringLiteral("rgb"), Qt::CaseInsensitive)) {
-        return QStringLiteral("rgbtestsrc=size=%1:rate=%2").arg(size, mode.rate);
+        return QStringLiteral("rgbtestsrc=size=%1:rate=%2").arg(size, rate);
     }
     if (pattern.contains(QStringLiteral("yuv"), Qt::CaseInsensitive)) {
-        return QStringLiteral("yuvtestsrc=size=%1:rate=%2").arg(size, mode.rate);
+        return QStringLiteral("yuvtestsrc=size=%1:rate=%2").arg(size, rate);
     }
-    if (pattern.contains(QStringLiteral("ffmpeg"), Qt::CaseInsensitive)) {
-        return QStringLiteral("testsrc=size=%1:rate=%2").arg(size, mode.rate);
+    if (pattern.contains(QStringLiteral("HD"), Qt::CaseInsensitive) || pattern.contains(QStringLiteral("BT.2111"), Qt::CaseInsensitive)) {
+        return QStringLiteral("smptehdbars=size=%1:rate=%2").arg(size, rate);
     }
-    if (pattern.contains(QStringLiteral("HD"), Qt::CaseInsensitive) || pattern.contains(QStringLiteral("UHD"), Qt::CaseInsensitive)
-        || pattern.contains(QStringLiteral("BT.2111"), Qt::CaseInsensitive)) {
-        return QStringLiteral("smptehdbars=size=%1:rate=%2").arg(size, mode.rate);
-    }
-    return QStringLiteral("smptebars=size=%1:rate=%2").arg(size, mode.rate);
+    return QStringLiteral("smptebars=size=%1:rate=%2").arg(size, rate);
 }
 
-QStringList videoFilterChainForPattern(const QString& pattern, const SignalMode& mode) {
+QStringList videoFilterChainForPattern(const QString& pattern, const VideoMode& mode) {
     QStringList filters;
     // locked HD/UHD patterns output progressive at their specified raster:
     // the shell backend forces TS_FIELD empty for them, so must we
@@ -115,6 +84,57 @@ QStringList videoFilterChainForPattern(const QString& pattern, const SignalMode&
     return filters;
 }
 
+QString testAudioSource(const QString& audioChoice) {
+    if (audioChoice.contains(QStringLiteral("silence"), Qt::CaseInsensitive)) {
+        return QStringLiteral("anullsrc=channel_layout=stereo:sample_rate=48000");
+    }
+    if (audioChoice.contains(QStringLiteral("stereo"), Qt::CaseInsensitive) || audioChoice.contains(QStringLiteral("440"), Qt::CaseInsensitive)) {
+        return QStringLiteral("aevalsrc=sin(1000*2*PI*t)|cos(440*2*PI*t):channel_layout=stereo:sample_rate=48000");
+    }
+    return QStringLiteral("aevalsrc=sin(1000*2*PI*t)|sin(1000*2*PI*t):channel_layout=stereo:sample_rate=48000");
+}
+
+// raw BGRA frames on stdout for a FrameFeed
+QStringList previewPipeOutput(const QString& filterPrefix, int width, int height) {
+    QString chain = filterPrefix;
+    if (!chain.isEmpty()) {
+        chain += QLatin1Char(',');
+    }
+    chain += QStringLiteral("scale=%1:%2:flags=fast_bilinear,format=bgra").arg(width).arg(height);
+    return {QStringLiteral("-map"), QStringLiteral("0:v:0"),
+            QStringLiteral("-vf"), chain,
+            QStringLiteral("-an"),
+            QStringLiteral("-f"), QStringLiteral("rawvideo"),
+            QStringLiteral("-flush_packets"), QStringLiteral("1"),
+            QStringLiteral("pipe:1")};
+}
+
+// The live input follows whatever the deck sends (autodetect can switch the
+// raster mid-stream), so the pipe raster cannot be derived from the selected
+// standard: fit any input into a fixed 16:9 box at its display aspect - HD/UHD
+// arrive square-pixel, SD (<= 576 lines) uses the Display Aspect Ratio choice -
+// and letterbox the rest. scale re-evaluates these on every input change.
+constexpr int kInputBoxWidth = 960;
+constexpr int kInputBoxHeight = 540;
+
+QString boxedPreviewChain(double sdAspect) {
+    const QString dar = QStringLiteral("if(lte(ih,576),%1,iw/ih)").arg(sdAspect, 0, 'f', 6);
+    return QStringLiteral("scale=w='2*trunc(min(%1,%2*%3)/2)':h='2*trunc(min(%2,%1/%3)/2)':flags=fast_bilinear,"
+                          "pad=%1:%2:(ow-iw)/2:(oh-ih)/2,setsar=1,format=bgra")
+        .arg(kInputBoxWidth)
+        .arg(kInputBoxHeight)
+        .arg(dar);
+}
+
+QString describeMode(const QString& code) {
+    const VideoMode mode = VideoModes::forCode(code);
+    if (!mode.isValid()) {
+        return code;
+    }
+    return QStringLiteral("%1 %2%3 @ %4").arg(code, mode.size(), mode.fieldOrder.isEmpty() ? QStringLiteral("p") : QStringLiteral("i"),
+                                                QString::number(mode.fps(), 'f', mode.rateDen == 1 ? 0 : 2));
+}
+
 // tasklist prints "INFO: No tasks are running..." when nothing matches.
 bool pidAlive(qint64 pid) {
     if (pid <= 0) {
@@ -128,23 +148,26 @@ bool pidAlive(qint64 pid) {
     return !out.contains(QStringLiteral("INFO:"));
 }
 
-QString lastLogFileLine(const QString& logPath) {
+QString lastLogLines(const QString& logPath, int count) {
     QFile logFile(logPath);
     if (!logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return {};
     }
-    const QStringList lines = QString::fromUtf8(logFile.readAll()).trimmed().split('\n');
-    return lines.isEmpty() ? QString() : lines.last().trimmed();
-}
-
-QString testAudioSource(const QString& audioChoice) {
-    if (audioChoice.contains(QStringLiteral("silence"), Qt::CaseInsensitive)) {
-        return QStringLiteral("anullsrc=channel_layout=stereo:sample_rate=48000");
+    QStringList lines = QString::fromUtf8(logFile.readAll()).split(QRegularExpression(QStringLiteral("[\r\n]+")), Qt::SkipEmptyParts);
+    // drop ANSI colour codes the shell's _report uses
+    static const QRegularExpression ansi(QStringLiteral("\x1b\\[[0-9;]*[A-Za-z]"));
+    QStringList kept;
+    for (auto it = lines.crbegin(); it != lines.crend() && kept.size() < count; ++it) {
+        QString line = *it;
+        line.remove(ansi);
+        line = line.trimmed();
+        // skip ffmpeg progress and ffplay's per-frame status ("1.23 A-V: ... aq=")
+        if (!line.isEmpty() && !line.startsWith(QStringLiteral("frame=")) && !line.contains(QStringLiteral(" aq="))
+            && !line.contains(QStringLiteral("A-V:"))) {
+            kept.prepend(line);
+        }
     }
-    if (audioChoice.contains(QStringLiteral("stereo"), Qt::CaseInsensitive) || audioChoice.contains(QStringLiteral("440"), Qt::CaseInsensitive)) {
-        return QStringLiteral("aevalsrc=sin(1000*2*PI*t)|cos(440*2*PI*t):channel_layout=stereo:sample_rate=48000");
-    }
-    return QStringLiteral("aevalsrc=sin(1000*2*PI*t)|sin(1000*2*PI*t):channel_layout=stereo:sample_rate=48000");
+    return kept.join(QLatin1Char('\n'));
 }
 
 QString quoteForBash(QString value) {
@@ -181,6 +204,9 @@ void sweepOrphanedTestStreams() {
 using NtProcessControlFunc = LONG(WINAPI*)(HANDLE);
 
 bool suspendProcessById(qint64 pid, bool suspend) {
+    if (pid <= 0) {
+        return false;
+    }
     const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (!ntdll) {
         return false;
@@ -198,16 +224,62 @@ bool suspendProcessById(qint64 pid, bool suspend) {
     return status == 0;
 }
 
+// the shell names its player window "mode:record - ..." / "mode:passthrough
+// - ..." (WINDOW_NAME in _setup_vrecord_process); post WM_CLOSE to each
+int closePlayerWindows() {
+    int count = 0;
+    EnumWindows([](HWND hwnd, LPARAM param) -> BOOL {
+        wchar_t title[64] = {};
+        if (IsWindowVisible(hwnd) && GetWindowTextW(hwnd, title, 64) > 0 && wcsncmp(title, L"mode:", 5) == 0) {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            ++*reinterpret_cast<int*>(param);
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&count));
+    return count;
+}
+
 QString findBashExecutable() {
     const QString msysBash = QStringLiteral("C:/msys64/usr/bin/bash.exe");
     if (QFileInfo::exists(msysBash)) {
         return msysBash;
     }
-    const QString gitBash = QDir::toNativeSeparators(QStringLiteral("%1/Git/bin/bash.exe").arg(qEnvironmentVariable("ProgramFiles")));
+    const QString gitBash = QStringLiteral("%1/Git/bin/bash.exe").arg(QDir::fromNativeSeparators(qEnvironmentVariable("ProgramFiles")));
     if (QFileInfo::exists(gitBash)) {
         return gitBash;
     }
     return {};
+}
+
+// the POSIX tools directory that belongs to that bash (sed, awk, grep, ...)
+QString posixToolsDir(const QString& bash) {
+    const QString dir = QFileInfo(bash).absolutePath();
+    if (dir.endsWith(QStringLiteral("/Git/bin"), Qt::CaseInsensitive)) {
+        return QDir(dir).filePath(QStringLiteral("../usr/bin"));
+    }
+    return dir;
+}
+
+void hideConsole(QProcess* process) {
+    process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+        args->flags |= CREATE_NO_WINDOW;
+    });
+}
+
+int parseRational(const QString& text, int* num, int* den) {
+    const QStringList parts = text.split(QLatin1Char('/'));
+    if (parts.size() == 2) {
+        *num = parts.at(0).toInt();
+        *den = qMax(1, parts.at(1).toInt());
+        return *num;
+    }
+    if (parts.size() == 1 && text.contains(QLatin1Char(':'))) {
+        const QStringList colon = text.split(QLatin1Char(':'));
+        *num = colon.at(0).toInt();
+        *den = qMax(1, colon.value(1).toInt());
+        return *num;
+    }
+    return 0;
 }
 }
 
@@ -215,12 +287,38 @@ BackendController::BackendController(const QString& packageRoot, QObject* parent
     : QObject(parent)
     , m_packageRoot(packageRoot) {}
 
+BackendController::~BackendController() {
+    stopFeed(m_previewFeed);
+    stopFeed(m_playoutFeed);
+    stopFeed(m_testSignalFeed);
+}
+
 QString BackendController::packageRoot() const {
     return m_packageRoot;
 }
 
+QString BackendController::ffmpegPath() const {
+    return QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+}
+
+QString BackendController::ffprobePath() const {
+    return QDir(m_packageRoot).filePath(QStringLiteral("bin/ffprobe-ma.exe"));
+}
+
+QString BackendController::deviceForOutput(const VrecordConfig& config) {
+    for (const QString& key : {QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE"), QStringLiteral("PREVIEW_RELAY_DEV_CHOICE"), QStringLiteral("DECKLINK_INPUT_CHOICE")}) {
+        const QString device = config.value(key).trimmed();
+        if (!device.isEmpty()) {
+            return device;
+        }
+    }
+    return {};
+}
+
 bool BackendController::saveConfig(const VrecordConfig& config, QString* errorMessage) const {
-    if (config.save()) {
+    VrecordConfig prepared = config;
+    prepared.prepareForBackend();
+    if (prepared.save()) {
         return true;
     }
     if (errorMessage) {
@@ -229,26 +327,368 @@ bool BackendController::saveConfig(const VrecordConfig& config, QString* errorMe
     return false;
 }
 
-bool BackendController::startRecord(const VrecordConfig& config, QString* errorMessage) const {
-    if (!saveConfig(config, errorMessage)) {
-        return false;
-    }
-    return startProcess({QStringLiteral("-r"), QStringLiteral("-c"), config.configPath, config.value(QStringLiteral("ID"))}, errorMessage);
+// ---------------------------------------------------------------- feeds
+
+FrameFeed* BackendController::startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames) {
+    auto* feed = new FrameFeed(ffmpegPath(), attempts, width, height, this);
+    feed->setDisplayDelayFrames(delayFrames);
+    feed->setLogPath(QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-feeds.log")));
+    const bool isInput = kind == QStringLiteral("input");
+    // feed as the context object: queued frames of a feed that has been
+    // replaced are dropped together with it
+    connect(feed, &FrameFeed::frameReady, feed, [this, feed, isInput] {
+        const QImage frame = feed->takeFrame();
+        if (isInput) {
+            emit inputFrame(frame);
+        } else {
+            emit outputFrame(frame);
+        }
+    });
+    connect(feed, &FrameFeed::streaming, feed, [this, isInput](const QString& label) {
+        QString message = QStringLiteral("streaming (%1)").arg(label);
+        if (isInput) {
+            // the capture has the input enabled now, so the driver's
+            // detection status is live: report what the card actually locked
+            const QString detected = DeckLinkDiscovery::detectInputFormatCode(m_previewDevice);
+            message = QStringLiteral("streaming (%1)").arg(detected.isEmpty() ? QStringLiteral("%1 - no signal lock").arg(label) : describeMode(detected));
+            emit inputStatus(message);
+        } else {
+            emit outputStatus(message);
+        }
+    });
+    connect(feed, &FrameFeed::attemptFailed, feed, [this, isInput](const QString& label, const QString& message) {
+        const QString text = QStringLiteral("%1 failed: %2").arg(label, message);
+        if (isInput) {
+            emit inputStatus(text);
+        } else {
+            emit outputStatus(text);
+        }
+    });
+    connect(feed, &FrameFeed::ended, feed, [this, isInput](bool hadFrames, const QString& message) {
+        const QString text = hadFrames ? QStringLiteral("stopped: %1").arg(message) : QStringLiteral("could not start: %1").arg(message);
+        if (isInput) {
+            emit inputStatus(text);
+        } else {
+            emit outputStatus(text);
+        }
+    });
+    feed->start();
+    return feed;
 }
 
-bool BackendController::startPassthrough(const VrecordConfig& config, QString* errorMessage) const {
-    if (!saveConfig(config, errorMessage)) {
-        return false;
+void BackendController::stopFeed(QPointer<FrameFeed>& feed) {
+    if (feed) {
+        feed->stop();
+        feed->deleteLater();
     }
-    return startProcess({QStringLiteral("-p"), QStringLiteral("-c"), config.configPath}, errorMessage);
+    feed = nullptr;
 }
 
-bool BackendController::startAudioCheck(const VrecordConfig& config, QString* errorMessage) const {
+void BackendController::releaseDeckLink() {
+    // the card's input and output are exclusive between processes: nothing of
+    // ours may hold it while a shell session or another feed takes over
+    stopVideoPreview();
+    stopManagedFileOutputInternal(nullptr);
+    stopTestSignalInternal(nullptr);
+}
+
+// ---------------------------------------------------------------- shell sessions
+
+bool BackendController::startRecord(const VrecordConfig& config, QString* errorMessage) {
+    if (config.value(QStringLiteral("ID")).trimmed().isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Enter a Name of Recording first.");
+        }
+        return false;
+    }
+    if (config.value(QStringLiteral("DEVICE_INPUT_CHOICE"), QStringLiteral("0")) == QStringLiteral("0")
+        && config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed().isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Select a DeckLink device first.");
+        }
+        return false;
+    }
+    return startShellSession(QStringLiteral("record"), {QStringLiteral("-r")}, config, errorMessage);
+}
+
+bool BackendController::startPassthrough(const VrecordConfig& config, QString* errorMessage) {
+    return startShellSession(QStringLiteral("passthrough"), {QStringLiteral("-p")}, config, errorMessage);
+}
+
+bool BackendController::startAudioCheck(const VrecordConfig& config, QString* errorMessage) {
+    return startShellSession(QStringLiteral("audio check"), {QStringLiteral("-a")}, config, errorMessage);
+}
+
+QString BackendController::shellLogPath() const {
+    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-backend.log"));
+}
+
+bool BackendController::isShellRunning() const {
+    return m_shellProcess && m_shellProcess->state() != QProcess::NotRunning;
+}
+
+bool BackendController::startShellSession(const QString& mode, const QStringList& arguments, const VrecordConfig& config, QString* errorMessage) {
+    if (isShellRunning()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("A %1 session is already running - close its player window first.").arg(m_shellMode);
+        }
+        return false;
+    }
     if (!saveConfig(config, errorMessage)) {
         return false;
     }
-    return startProcess({QStringLiteral("-a"), QStringLiteral("-c"), config.configPath}, errorMessage);
+    const QString script = QDir(m_packageRoot).filePath(QStringLiteral("vrecord"));
+    QStringList shellArgs{toBashPath(script)};
+    shellArgs << arguments << QStringLiteral("-c") << QDir::fromNativeSeparators(config.configPath);
+
+    if (s_testMode) {
+        s_captured << (QStringLiteral("bash ") + shellArgs.join(QLatin1Char(' ')) + QLatin1Char(' '));
+        return true;
+    }
+
+    const QString bash = findBashExecutable();
+    if (bash.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not find MSYS2 (C:\\msys64) or Git Bash to run the vrecord backend.");
+        }
+        return false;
+    }
+    if (!QFileInfo::exists(script)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not find the vrecord backend script at %1").arg(QDir::toNativeSeparators(script));
+        }
+        return false;
+    }
+
+    releaseDeckLink();
+
+    // same environment the native Vrecord.exe launcher gives the GTK
+    // frontend: package bin first, the POSIX tools, HOME = the real profile
+    // (so ~/.vrecord.conf is the file this frontend writes), resources in MSYS
+    // form, and no MSYS argument mangling of the filter graphs
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString nativeRoot = QDir::toNativeSeparators(m_packageRoot);
+    env.insert(QStringLiteral("PATH"), QStringLiteral("%1\\bin;%2;%3")
+                                           .arg(nativeRoot, QDir::toNativeSeparators(posixToolsDir(bash)), env.value(QStringLiteral("PATH"))));
+    env.insert(QStringLiteral("VRECORD_RESOURCES"), toBashPath(QDir(m_packageRoot).filePath(QStringLiteral("Resources"))));
+    const QString profile = env.value(QStringLiteral("USERPROFILE"));
+    if (!profile.isEmpty()) {
+        env.insert(QStringLiteral("HOME"), profile);
+    }
+    env.insert(QStringLiteral("MSYS2_ARG_CONV_EXCL"), QStringLiteral("*"));
+    env.insert(QStringLiteral("MSYS_NO_PATHCONV"), QStringLiteral("1"));
+
+    auto* process = new QProcess(this);
+    hideConsole(process);
+    process->setProcessEnvironment(env);
+    process->setWorkingDirectory(m_packageRoot);
+    process->setProcessChannelMode(QProcess::MergedChannels);
+    process->setStandardOutputFile(shellLogPath(), QIODevice::Truncate);
+    // EOF instead of a hang if the shell ever falls back to a prompt
+    process->setStandardInputFile(QProcess::nullDevice());
+    connect(process, &QProcess::finished, this, [this, process, mode](int exitCode, QProcess::ExitStatus status) {
+        QString message = lastLogLines(shellLogPath(), 6);
+        if (status == QProcess::CrashExit && message.isEmpty()) {
+            message = QStringLiteral("the backend was terminated");
+        }
+        if (m_shellProcess == process) {
+            m_shellProcess = nullptr;
+            m_shellMode.clear();
+        }
+        process->deleteLater();
+        emit shellFinished(mode, status == QProcess::CrashExit ? -1 : exitCode, message);
+    });
+    process->start(bash, shellArgs);
+    if (!process->waitForStarted(5000)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Failed to start the vrecord backend (%1).").arg(process->errorString());
+        }
+        process->deleteLater();
+        return false;
+    }
+    m_shellProcess = process;
+    m_shellMode = mode;
+    emit shellStarted(mode);
+    return true;
 }
+
+bool BackendController::stopShell() {
+    if (!isShellRunning()) {
+        return true;
+    }
+    // end it the way the user would: close the player window (WM_CLOSE, not a
+    // kill) so the tee muxer finishes and the recording gets its trailer.
+    // (taskkill's WINDOWTITLE filter does not match these titles reliably.)
+    const int closed = closePlayerWindows();
+    if (closed > 0 && m_shellProcess && m_shellProcess->waitForFinished(20000)) {
+        return true;
+    }
+    if (m_shellProcess) {
+        QProcess killer;
+        killer.start(QStringLiteral("taskkill.exe"),
+                     {QStringLiteral("/PID"), QString::number(m_shellProcess->processId()), QStringLiteral("/T"), QStringLiteral("/F")});
+        killer.waitForFinished(5000);
+    }
+    return true;
+}
+
+bool BackendController::openLegacyUi(QString* errorMessage) const {
+    const QString launcher = QDir(m_packageRoot).filePath(QStringLiteral("Vrecord.exe"));
+    if (s_testMode) {
+        s_captured << (launcher + QStringLiteral(" -e"));
+        return true;
+    }
+    if (!QFileInfo::exists(launcher)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not find the GTK launcher at %1").arg(QDir::toNativeSeparators(launcher));
+        }
+        return false;
+    }
+    return QProcess::startDetached(launcher, {QStringLiteral("-e")}, m_packageRoot);
+}
+
+// ---------------------------------------------------------------- live input preview
+
+bool BackendController::startVideoPreview(const VrecordConfig& config, QString* errorMessage) {
+    if (isVideoPreviewActive()) {
+        return true;
+    }
+    if (s_testMode) {
+        s_captured << QStringLiteral("ffmpeg-ma -f decklink -i preview");
+        return true;
+    }
+    if (isShellRunning()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("The %1 session is using the card.").arg(m_shellMode);
+        }
+        return false;
+    }
+    const QString device = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
+    if (device.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Select a DeckLink device first.");
+        }
+        return false;
+    }
+    if (!QFileInfo::exists(ffmpegPath())) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not find ffmpeg backend at %1").arg(QDir::toNativeSeparators(ffmpegPath()));
+        }
+        return false;
+    }
+
+    // the input and the output cannot be open at the same time on half-duplex
+    // cards: drop our outputs first
+    stopManagedFileOutputInternal(nullptr);
+    stopTestSignalInternal(nullptr);
+    stopFeed(m_previewFeed);
+
+    const VideoMode mode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    const int width = kInputBoxWidth;
+    const int height = kInputBoxHeight;
+    const double sdAspect = config.value(QStringLiteral("ASPECT_RATIO_CHOICE")) == QStringLiteral("16/9") ? 16.0 / 9.0 : 4.0 / 3.0;
+
+    bool autodetect = true;
+    bool relayPossible = false;
+    QString relayDevice = config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")).trimmed();
+    if (relayDevice.isEmpty()) {
+        relayDevice = device;
+    }
+    for (const auto& info : DeckLinkDiscovery::enumerateDevices()) {
+        if (info.ffmpegName == device || info.modelName == device) {
+            autodetect = info.supportsInputFormatDetection;
+            // relaying the input back out of the same card needs full duplex
+            relayPossible = (relayDevice != info.ffmpegName && relayDevice != info.modelName) || info.supportsFullDuplex;
+        }
+    }
+    const bool relay = config.value(QStringLiteral("PREVIEW_RELAY_CHOICE")) == QStringLiteral("true") && relayPossible;
+
+    // capture straight to a raw pipe: every captured frame is forwarded (no
+    // fps filter), probing is cut to the minimum so the first frame arrives
+    // as soon as the card locks, and the pipe is flushed per frame
+    const QStringList inputHead{QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
+                                QStringLiteral("-loglevel"), QStringLiteral("error"),
+                                QStringLiteral("-fflags"), QStringLiteral("nobuffer"),
+                                QStringLiteral("-probesize"), QStringLiteral("32"),
+                                QStringLiteral("-analyzeduration"), QStringLiteral("0")};
+    QStringList deviceOptions{QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
+                              QStringLiteral("-raw_format"), QStringLiteral("uyvy422")};
+    // relay: capture the card's native 10-bit 4:2:2 (raw_format yuv422p10 =
+    // v210 on the wire) and re-pack it as v210 for the output - no colour or
+    // bit-depth conversion, the output carries the input frames at the input rate
+    QStringList relayDeviceOptions{QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
+                                   QStringLiteral("-raw_format"), QStringLiteral("yuv422p10"),
+                                   QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE")))};
+    const QStringList pipeOut{QStringLiteral("-map"), QStringLiteral("0:v:0"),
+                              QStringLiteral("-vf"), boxedPreviewChain(sdAspect),
+                              QStringLiteral("-an"),
+                              QStringLiteral("-f"), QStringLiteral("rawvideo"),
+                              QStringLiteral("-flush_packets"), QStringLiteral("1"),
+                              QStringLiteral("pipe:1")};
+    const QStringList relayOut{QStringLiteral("-map"), QStringLiteral("0:v:0"), QStringLiteral("-map"), QStringLiteral("0:a:0"),
+                               // re-pack rather than -c:v copy: a copied stream keeps the capture's
+                               // 1/1000000 time base and the muxer then cannot derive the mode
+                               QStringLiteral("-c:v"), QStringLiteral("v210"), QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"),
+                               QStringLiteral("-ar"), QStringLiteral("48000"), QStringLiteral("-ac"), QStringLiteral("2"),
+                               QStringLiteral("-f"), QStringLiteral("decklink"), relayDevice};
+
+    const auto makeAttempt = [&](bool detect, bool withRelay) {
+        FrameFeed::Attempt attempt;
+        attempt.label = detect ? QStringLiteral("input autodetect") : QStringLiteral("format %1").arg(mode.formatCode);
+        if (withRelay) {
+            attempt.label += QStringLiteral(" + relay to %1").arg(relayDevice);
+        }
+        attempt.arguments = inputHead;
+        if (!detect && !mode.formatCode.isEmpty()) {
+            attempt.arguments << QStringLiteral("-format_code") << mode.formatCode;
+        }
+        attempt.arguments << (withRelay ? relayDeviceOptions : deviceOptions)
+                          << QStringLiteral("-f") << QStringLiteral("decklink") << QStringLiteral("-i") << device
+                          << pipeOut;
+        if (withRelay) {
+            attempt.arguments << relayOut;
+        }
+        return attempt;
+    };
+
+    // autodetect first (follows whatever the deck sends, like the macOS/Linux
+    // preview), then the selected standard's format code; a relay variant
+    // that cannot open the output falls back to the plain preview
+    QList<FrameFeed::Attempt> attempts;
+    for (const bool withRelay : relay ? QList<bool>{true, false} : QList<bool>{false}) {
+        if (autodetect) {
+            attempts << makeAttempt(true, withRelay);
+        }
+        if (!mode.formatCode.isEmpty()) {
+            attempts << makeAttempt(false, withRelay);
+        }
+    }
+    if (attempts.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Select a standard on the Decklink tab first.");
+        }
+        return false;
+    }
+    m_previewFeed = startFeed(QStringLiteral("input"), attempts, width, height, 0);
+    m_previewDevice = device;
+    emit inputStatus(QStringLiteral("starting (%1)").arg(attempts.first().label));
+    return true;
+}
+
+bool BackendController::stopVideoPreview() {
+    if (m_previewFeed) {
+        stopFeed(m_previewFeed);
+        emit inputStatus(QStringLiteral("stopped"));
+    }
+    return true;
+}
+
+bool BackendController::isVideoPreviewActive() const {
+    return m_previewFeed && m_previewFeed->isRunning();
+}
+
+// ---------------------------------------------------------------- file playout
+
 bool BackendController::startFileOutput(const VrecordConfig& config, QString* errorMessage) {
     if (!saveConfig(config, errorMessage)) {
         return false;
@@ -267,32 +707,22 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
         }
         return false;
     }
-
-    QString outputDevice = config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")).trimmed();
-    if (outputDevice.isEmpty()) {
-        outputDevice = config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")).trimmed();
-    }
-    if (outputDevice.isEmpty()) {
-        outputDevice = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
-    }
+    const QString outputDevice = deviceForOutput(config);
     if (outputDevice.isEmpty()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("Select a hardware video output device first.");
         }
         return false;
     }
-
-    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
-    if (!QFileInfo::exists(ffmpegPath)) {
+    if (!QFileInfo::exists(ffmpegPath())) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find ffmpeg backend at %1").arg(QDir::toNativeSeparators(ffmpegPath));
+            *errorMessage = QStringLiteral("Could not find ffmpeg backend at %1").arg(QDir::toNativeSeparators(ffmpegPath()));
         }
         return false;
     }
 
     if (s_testMode) {
-        s_captured << (ffmpegPath + QLatin1Char(' ') + QStringLiteral("-stream_loop -1 -i %1 -f decklink %2")
-                           .arg(playFile, outputDevice));
+        s_captured << (ffmpegPath() + QLatin1Char(' ') + QStringLiteral("-stream_loop -1 -i %1 -f decklink %2").arg(playFile, outputDevice));
         m_playbackFile = playFile;
         m_playbackDevice = outputDevice;
         m_playbackDuration = 60.0;
@@ -303,17 +733,70 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
         m_testPlaybackActive = true;
         return true;
     }
-
-    // the test signal and the file playout share the card output
-    stopTrackedProcess(testSignalPidPath(), nullptr);
-    // and on this card the input cannot run while the output is open
-    stopVideoPreview();
-
-    double duration = 0.0;
-    double fps = 25.0;
-    if (!probeMediaFile(playFile, &duration, &fps, errorMessage)) {
+    if (isShellRunning()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("The %1 session is using the card.").arg(m_shellMode);
+        }
         return false;
     }
+
+    MediaInfo media;
+    if (!probeMediaFile(playFile, &media, errorMessage)) {
+        return false;
+    }
+
+    // conform to a mode the card accepts (mirrors _start_file_playback):
+    // broadcast size/rate combinations play natively when auto-detect is on,
+    // everything else is converted to the selected standard
+    VideoMode target;
+    QString filter;
+    QString description;
+    QString nativeNote;
+    if (config.value(QStringLiteral("FILEPLAY_AUTO_CHOICE"), QStringLiteral("true")) != QStringLiteral("false")) {
+        target = nativePlayoutMode(media, outputDevice, &nativeNote);
+    }
+    const QString fileRate = QString::number(media.rateDen > 0 ? double(media.rateNum) / media.rateDen : 0.0, 'f', media.rateDen == 1 ? 0 : 2);
+    if (target.isValid()) {
+        QStringList chain;
+        if (target.width != media.width || target.height != media.height) {
+            const bool sdTarget = target.formatCode == QStringLiteral("ntsc") || target.formatCode == QStringLiteral("pal");
+            if (sdTarget || target.height == media.height) {
+                chain << QStringLiteral("scale=%1:%2").arg(target.width).arg(target.height);
+            } else {
+                // downscale into the card's raster at the picture's own aspect
+                chain << QStringLiteral("scale=%1:%2:force_original_aspect_ratio=decrease,pad=%1:%2:(ow-iw)/2:(oh-ih)/2,setsar=1")
+                             .arg(target.width).arg(target.height);
+            }
+        }
+        if (!target.fieldOrder.isEmpty()) {
+            chain << QStringLiteral("setfield=%1").arg(target.fieldOrder);
+        }
+        filter = chain.join(QLatin1Char(','));
+        description = QStringLiteral("native %1x%2 @ %3 -> %4").arg(media.width).arg(media.height).arg(fileRate, describeMode(target.formatCode));
+        if (!nativeNote.isEmpty()) {
+            description += QStringLiteral(" (%1)").arg(nativeNote);
+        }
+    } else {
+        const QString standard = config.value(QStringLiteral("STANDARD_CHOICE")).trimmed();
+        target = VideoModes::forStandard(standard);
+        if (!target.isValid()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Select a standard on the Decklink tab first (the file is converted to it).");
+            }
+            return false;
+        }
+        filter = QStringLiteral("scale=%1:%2,fps=%3").arg(target.width).arg(target.height).arg(target.rate());
+        if (!target.fieldOrder.isEmpty()) {
+            filter += QStringLiteral(",setfield=%1").arg(target.fieldOrder);
+        }
+        description = QStringLiteral("%1x%2 @ %3 converted to %4").arg(media.width).arg(media.height)
+                          .arg(QStringLiteral("%1/%2").arg(media.rateNum).arg(media.rateDen), standard);
+    }
+
+    // the file playout owns the card output; on half-duplex cards the input
+    // cannot run alongside it either
+    stopTestSignalInternal(nullptr);
+    stopVideoPreview();
     // tear the previous playout down BEFORE applying the connector (teardown
     // race: SetInt silently fails while the driver is still stopping a stream)
     stopManagedFileOutputInternal(nullptr);
@@ -322,76 +805,161 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
         return false;
     }
 
+    // the pane shows the file at its display aspect
+    double aspect = target.height > 0 ? double(target.width) / target.height : 16.0 / 9.0;
+    if (media.width > 0 && media.height > 0 && media.sarNum > 0 && media.sarDen > 0) {
+        aspect = double(media.width) * media.sarNum / (double(media.height) * media.sarDen);
+    }
+    if (target.formatCode == QStringLiteral("ntsc") || target.formatCode == QStringLiteral("pal")) {
+        if (media.sarNum == media.sarDen) {
+            aspect = VideoModes::displayAspect(target, config.value(QStringLiteral("ASPECT_RATIO_CHOICE")));
+        }
+    }
+    VideoModes::previewSize(target.height, aspect, &m_previewWidth, &m_previewHeight);
+
+    m_playbackMedia = media;
+    m_playbackMode = target;
+    m_playbackFilter = filter;
+    m_playbackDescription = description;
     m_playbackFile = playFile;
     m_playbackDevice = outputDevice;
-    m_playbackDuration = duration;
-    m_playbackFps = fps > 0 ? fps : 25.0;
+    m_playbackDuration = media.duration;
+    m_playbackFps = target.fps() > 0 ? target.fps() : 25.0;
+    m_playbackDelayFrames = qRound(kDeckLinkPreroll * m_playbackFps);
     m_playbackConfig = config;
     m_playbackFrozen = false;
     m_playbackJogged = false;
     // a cued position survives a stop: toggle Play resumes from it
-    const double resumeAt = (m_playbackCueSeconds > 0.05 && m_playbackCueSeconds < duration) ? m_playbackCueSeconds : 0.0;
-    return launchFileOutputProcess(resumeAt, errorMessage) && startOutputFeed(config, errorMessage);
+    const double resumeAt = (m_playbackCueSeconds > 0.05 && m_playbackCueSeconds < media.duration) ? m_playbackCueSeconds : 0.0;
+    return launchFileOutputProcess(resumeAt, errorMessage);
 }
 
 bool BackendController::stopFileOutput(const VrecordConfig& config, QString* errorMessage) {
     Q_UNUSED(config);
-    const bool ok = stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+    const bool ok = stopManagedFileOutputInternal(errorMessage);
     m_playbackCueSeconds = 0.0;
     return ok;
 }
 
 bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* errorMessage) {
     Q_UNUSED(config);
-    if (!stopTrackedProcess(testSignalPidPath(), errorMessage)) {
+    if (!stopTestSignalInternal(errorMessage)) {
         return false;
     }
-    sweepOrphanedTestStreams();
-    const bool ok = stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+    const bool ok = stopManagedFileOutputInternal(errorMessage);
     m_playbackCueSeconds = 0.0;
     return ok;
 }
 
-bool BackendController::probeMediaFile(const QString& file, double* durationSeconds, double* fps, QString* errorMessage) const {
-    const QString ffprobePath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffprobe-ma.exe"));
-    if (!QFileInfo::exists(ffprobePath)) {
+bool BackendController::probeMediaFile(const QString& file, MediaInfo* info, QString* errorMessage) const {
+    if (!QFileInfo::exists(ffprobePath())) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find ffprobe backend at %1").arg(QDir::toNativeSeparators(ffprobePath));
+            *errorMessage = QStringLiteral("Could not find ffprobe backend at %1").arg(QDir::toNativeSeparators(ffprobePath()));
         }
         return false;
     }
     QProcess probe;
-    probe.start(ffprobePath,
+    hideConsole(&probe);
+    probe.start(ffprobePath(),
                 {QStringLiteral("-v"), QStringLiteral("error"),
-                 QStringLiteral("-show_entries"), QStringLiteral("format=duration:stream=r_frame_rate"),
+                 QStringLiteral("-show_entries"),
+                 QStringLiteral("format=duration:stream=codec_type,width,height,r_frame_rate,sample_aspect_ratio,field_order"),
                  QStringLiteral("-of"), QStringLiteral("json"), file});
-    if (!probe.waitForFinished(10000)) {
+    if (!probe.waitForFinished(15000)) {
+        probe.kill();
         if (errorMessage) {
             *errorMessage = QStringLiteral("ffprobe timed out on %1").arg(QDir::toNativeSeparators(file));
         }
         return false;
     }
-    const QString out = QString::fromUtf8(probe.readAllStandardOutput());
-    bool ok = false;
-    const QRegularExpression durationRe(QStringLiteral("\"duration\"\\s*:\\s*\"?([0-9.]+)"));
-    const auto durationMatch = durationRe.match(out);
-    if (durationMatch.hasMatch()) {
-        *durationSeconds = durationMatch.captured(1).toDouble();
-        ok = true;
-    }
-    const QRegularExpression rateRe(QStringLiteral("\"r_frame_rate\"\\s*:\\s*\"?([0-9]+)/([0-9]+)"));
-    const auto rateMatch = rateRe.match(out);
-    if (rateMatch.hasMatch()) {
-        const double numerator = rateMatch.captured(1).toDouble();
-        const double denominator = rateMatch.captured(2).toDouble();
-        if (numerator > 0 && denominator > 0) {
-            *fps = numerator / denominator;
+    const QJsonObject root = QJsonDocument::fromJson(probe.readAllStandardOutput()).object();
+    info->duration = root.value(QStringLiteral("format")).toObject().value(QStringLiteral("duration")).toString().toDouble();
+    bool haveVideo = false;
+    for (const QJsonValue& value : root.value(QStringLiteral("streams")).toArray()) {
+        const QJsonObject stream = value.toObject();
+        const QString type = stream.value(QStringLiteral("codec_type")).toString();
+        if (type == QStringLiteral("audio")) {
+            info->hasAudio = true;
+        } else if (type == QStringLiteral("video") && !haveVideo) {
+            haveVideo = true;
+            info->width = stream.value(QStringLiteral("width")).toInt();
+            info->height = stream.value(QStringLiteral("height")).toInt();
+            parseRational(stream.value(QStringLiteral("r_frame_rate")).toString(), &info->rateNum, &info->rateDen);
+            int sarNum = 1;
+            int sarDen = 1;
+            if (parseRational(stream.value(QStringLiteral("sample_aspect_ratio")).toString(), &sarNum, &sarDen) > 0) {
+                info->sarNum = sarNum;
+                info->sarDen = sarDen;
+            }
+            // ffprobe reports tt/tb (top coded first) and bb/bt as well as
+            // tff/bff: all are interlaced
+            const QString field = stream.value(QStringLiteral("field_order")).toString().toLower();
+            if (field == QStringLiteral("tt") || field == QStringLiteral("tb") || field == QStringLiteral("tff")) {
+                info->fieldOrder = QStringLiteral("tff");
+            } else if (field == QStringLiteral("bb") || field == QStringLiteral("bt") || field == QStringLiteral("bff")) {
+                info->fieldOrder = QStringLiteral("bff");
+            }
         }
     }
-    if (!ok && errorMessage) {
-        *errorMessage = QStringLiteral("Could not probe the playout file duration: %1").arg(QDir::toNativeSeparators(file));
+    if (!haveVideo || info->width <= 0 || info->height <= 0) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not read a video stream from %1").arg(QDir::toNativeSeparators(file));
+        }
+        return false;
     }
-    return ok;
+    // an unknown duration is still playable; the scrub bar just stays off
+    info->duration = qMax(info->duration, 0.0);
+    return true;
+}
+
+VideoMode BackendController::nativePlayoutMode(const MediaInfo& media, const QString& device, QString* note) const {
+    const QStringList supported = DeckLinkDiscovery::outputModeCodes(device);
+    const VideoMode exact = VideoModes::forNative(media.width, media.height, media.rateNum, media.rateDen, media.fieldOrder);
+    // no mode list (driver query failed): trust the broadcast table as before
+    if (exact.isValid() && (supported.isEmpty() || supported.contains(exact.formatCode))) {
+        return exact;
+    }
+    if (media.rateNum <= 0 || media.rateDen <= 0) {
+        return {};
+    }
+    // keep the file's frame rate (no frame-rate conversion, the motion stays
+    // native): the tallest raster the card offers that is not an upscale, or
+    // failing that the smallest upscale
+    const bool interlaced = !media.fieldOrder.isEmpty();
+    const double fileAspect = media.height > 0 ? double(media.width) / media.height : 16.0 / 9.0;
+    const auto shapeError = [&](const VideoMode& m) { return std::abs(double(m.width) / m.height - fileAspect); };
+    const auto better = [&](const VideoMode& a, const VideoMode& b) {
+        if (!b.isValid()) {
+            return true;
+        }
+        const bool aFits = a.height <= media.height;
+        const bool bFits = b.height <= media.height;
+        if (aFits != bFits) {
+            return aFits;
+        }
+        if (a.height != b.height) {
+            return aFits ? a.height > b.height : a.height < b.height;
+        }
+        return shapeError(a) < shapeError(b);
+    };
+    VideoMode best;
+    for (const QString& code : supported) {
+        const VideoMode mode = VideoModes::forCode(code);
+        if (!mode.isValid() || qint64(mode.rateNum) * media.rateDen != qint64(media.rateNum) * mode.rateDen) {
+            continue;
+        }
+        if (mode.fieldOrder.isEmpty() == interlaced) {
+            continue;
+        }
+        if (better(mode, best)) {
+            best = mode;
+        }
+    }
+    if (best.isValid() && note) {
+        *note = exact.isValid() ? QStringLiteral("%1 is not supported by this card").arg(exact.formatCode)
+                                : QStringLiteral("no broadcast mode at %1x%2").arg(media.width).arg(media.height);
+    }
+    return best;
 }
 
 bool BackendController::launchFileOutputProcess(double atSeconds, QString* errorMessage) {
@@ -400,66 +968,78 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
                            .arg(QString::number(atSeconds, 'f', 3), m_playbackFile, m_playbackDevice));
         return true;
     }
-    if (m_fileOutputProcess) {
-        m_fileOutputProcess->kill();
-        m_fileOutputProcess->waitForFinished(3000);
-        m_fileOutputProcess->deleteLater();
-        m_fileOutputProcess = nullptr;
-    }
-    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
-    QStringList arguments{
-        QStringLiteral("-nostdin"),
-        QStringLiteral("-loglevel"), QStringLiteral("info"),
-        QStringLiteral("-re"),
-        QStringLiteral("-stream_loop"), QStringLiteral("-1")};
+    stopFeed(m_playoutFeed);
+
+    // one process drives the card and the output pane: both outputs come
+    // from the same decoded frames, so the pane cannot drift from the wire
+    // No -re: the DeckLink muxer blocks once the card's buffer is full, so the
+    // card's own clock paces the playout. -re adds a second (file) clock that
+    // fights it - a 4K50 HEVC file then only reached ~34 fps on the wire
+    // instead of 50.
+    QStringList arguments{QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
+                          QStringLiteral("-loglevel"), QStringLiteral("error"),
+                          QStringLiteral("-stream_loop"), QStringLiteral("-1")};
     if (atSeconds > 0.05) {
         arguments << QStringLiteral("-ss") << QString::number(atSeconds, 'f', 3);
     }
-    arguments << QStringLiteral("-i") << m_playbackFile
+    arguments << QStringLiteral("-i") << m_playbackFile;
+    // card: conform once, straight into the card's 10-bit 4:2:2 (v210) in one
+    // swscale pass, then split - the pane is scaled from that same frame. Field
+    // marking is frame-level via setfield; no explicit format_code (the muxer
+    // would then validate the container field order and reject the output).
+    QString cardChain = m_playbackFilter;
+    cardChain += (cardChain.isEmpty() ? QString() : QStringLiteral(",")) + QStringLiteral("format=yuv422p10le");
+    const QString graph = QStringLiteral("[0:v:0]%1,split=2[card][pane];[pane]scale=%2:%3:flags=fast_bilinear,format=bgra[view]")
+                              .arg(cardChain).arg(m_previewWidth).arg(m_previewHeight);
+    arguments << QStringLiteral("-filter_complex") << graph
+              << QStringLiteral("-map") << QStringLiteral("[card]") << QStringLiteral("-map") << QStringLiteral("0:a:0?")
               << QStringLiteral("-c:v") << QStringLiteral("v210")
               << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le")
               << QStringLiteral("-ar") << QStringLiteral("48000")
               << QStringLiteral("-ac") << QStringLiteral("2")
-              << QStringLiteral("-f") << QStringLiteral("decklink")
-              << m_playbackDevice;
-    m_fileOutputProcess = new QProcess(this);
-    m_playbackStderrTail.clear();
-    connect(m_fileOutputProcess, &QProcess::readyReadStandardError, this, [this] {
-        m_playbackStderrTail.append(m_fileOutputProcess->readAllStandardError());
-        if (m_playbackStderrTail.size() > 8192) {
-            m_playbackStderrTail = m_playbackStderrTail.right(8192);
-        }
-    });
-    m_fileOutputProcess->start(ffmpegPath, arguments);
-    if (!m_fileOutputProcess->waitForStarted(5000)) {
+              << QStringLiteral("-f") << QStringLiteral("decklink") << m_playbackDevice
+              << QStringLiteral("-map") << QStringLiteral("[view]")
+              << QStringLiteral("-an")
+              << QStringLiteral("-f") << QStringLiteral("rawvideo")
+              << QStringLiteral("-flush_packets") << QStringLiteral("1")
+              << QStringLiteral("pipe:1");
+
+    FrameFeed::Attempt attempt;
+    attempt.label = QStringLiteral("playout %1").arg(m_playbackMode.formatCode);
+    attempt.arguments = arguments;
+    m_playoutFeed = startFeed(QStringLiteral("output"), {attempt}, m_previewWidth, m_previewHeight, m_playbackDelayFrames);
+
+    // the card refuses a mode within the first second; report it instead of
+    // leaving a dead transport
+    QElapsedTimer startup;
+    startup.start();
+    while (startup.elapsed() < 1500 && m_playoutFeed && m_playoutFeed->isRunning() && !m_playoutFeed->isStreaming()) {
+        QThread::msleep(25);
+    }
+    if (!m_playoutFeed || !m_playoutFeed->isRunning()) {
+        const QString tail = m_playoutFeed ? m_playoutFeed->stderrTail().trimmed() : QString();
+        stopFeed(m_playoutFeed);
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to start the playout process.");
+            *errorMessage = tail.isEmpty() ? QStringLiteral("The playout exited immediately.")
+                                           : QStringLiteral("The playout failed: %1").arg(tail.section(QLatin1Char('\n'), -3));
         }
-        m_fileOutputProcess->deleteLater();
-        m_fileOutputProcess = nullptr;
         return false;
     }
-    // remember the seek offset: ffmpeg rebases its time= counter after -ss
+    // remember the seek offset: positions are counted from it
     m_playbackSeekOffset = atSeconds;
     m_playbackFrozen = false;
     m_playbackJogged = false;
-    // keep the output feed following the transport position
-    if (m_outputFeedProcess) {
-        stopOutputFeed();
-        startOutputFeedProcess();
-    }
+    emit outputStatus(QStringLiteral("playing %1 (%2)").arg(QFileInfo(m_playbackFile).fileName(), m_playbackDescription));
     return true;
 }
 
 bool BackendController::stopManagedFileOutputInternal(QString* errorMessage) {
     Q_UNUSED(errorMessage);
-    if (m_fileOutputProcess) {
-        // thaw a frozen playout first so pending signals are handled promptly
-        suspendProcessById(m_fileOutputProcess->processId(), false);
-        m_fileOutputProcess->kill();
-        m_fileOutputProcess->waitForFinished(3000);
-        m_fileOutputProcess->deleteLater();
-        m_fileOutputProcess = nullptr;
+    if (m_playoutFeed) {
+        // thaw a frozen playout first so it can be torn down promptly
+        suspendProcessById(m_playoutFeed->processId(), false);
+        stopFeed(m_playoutFeed);
+        emit outputStatus(QStringLiteral("stopped"));
     }
     m_playbackFrozen = false;
     m_playbackJogged = false;
@@ -468,56 +1048,48 @@ bool BackendController::stopManagedFileOutputInternal(QString* errorMessage) {
     return true;
 }
 
-double BackendController::parsePlaybackLogSeconds() const {
-    // the managed playout writes its stats (time=...) to stderr; the tail is
-    // drained continuously so the pipe never fills and stalls the process
-    const QByteArray tail = m_playbackStderrTail.right(4096);
-    QRegularExpression timeRe(QStringLiteral("time=([0-9]+):([0-9]+):([0-9.]+)"));
-    QRegularExpressionMatchIterator matches = timeRe.globalMatch(QString::fromUtf8(tail));
-    QRegularExpressionMatch last;
-    while (matches.hasNext()) {
-        last = matches.next();
-    }
-    if (!last.hasMatch()) {
-        return -1.0;
-    }
-    return last.captured(1).toDouble() * 3600.0 + last.captured(2).toDouble() * 60.0 + last.captured(3).toDouble();
-}
-
 double BackendController::currentPlaybackSeconds() const {
     if (m_playbackFrozen) {
         return m_playbackFreezeSeconds;
     }
-    if (m_fileOutputProcess && m_fileOutputProcess->state() == QProcess::Running) {
-        const double statsSeconds = parsePlaybackLogSeconds();
-        if (statsSeconds >= 0) {
-            return statsSeconds + m_playbackSeekOffset;
+    if (m_playoutFeed && m_playoutFeed->isRunning()) {
+        // frames on screen = frames delivered to the pane (the pane is held
+        // back by the card preroll, so this is the frame on the wire)
+        double seconds = m_playbackSeekOffset + m_playoutFeed->framesDelivered() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
+        if (m_playbackDuration > 0) {
+            seconds = std::fmod(seconds, m_playbackDuration);
         }
+        return seconds;
     }
     return m_playbackCueSeconds;
 }
 
 bool BackendController::showPlayFrame(double seconds, QString* errorMessage) {
-    if (s_testMode || m_playbackFile.isEmpty()) {
+    if (s_testMode || m_playbackFile.isEmpty() || m_previewWidth <= 0 || m_previewHeight <= 0) {
         return true;
     }
-    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    QStringList arguments{QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
+                          QStringLiteral("-loglevel"), QStringLiteral("error"),
+                          QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+                          QStringLiteral("-i"), m_playbackFile,
+                          QStringLiteral("-frames:v"), QStringLiteral("1")};
+    arguments << previewPipeOutput(m_playbackFilter, m_previewWidth, m_previewHeight);
     QProcess extractor;
-    extractor.start(ffmpegPath,
-                    {QStringLiteral("-nostdin"),
-                     QStringLiteral("-loglevel"), QStringLiteral("error"),
-                     QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
-                     QStringLiteral("-i"), m_playbackFile,
-                     QStringLiteral("-frames:v"), QStringLiteral("1"),
-                     QStringLiteral("-update"), QStringLiteral("1"),
-                     QStringLiteral("-f"), QStringLiteral("image2"),
-                     QStringLiteral("-y"), outputFeedImagePath()});
+    hideConsole(&extractor);
+    extractor.start(ffmpegPath(), arguments);
     if (!extractor.waitForFinished(10000)) {
         extractor.kill();
         if (errorMessage) {
             *errorMessage = QStringLiteral("Could not render the frame at %1s.").arg(QString::number(seconds, 'f', 2));
         }
         return false;
+    }
+    const QByteArray data = extractor.readAllStandardOutput();
+    const qsizetype frameBytes = qsizetype(m_previewWidth) * m_previewHeight * 4;
+    if (data.size() >= frameBytes) {
+        QImage frame(m_previewWidth, m_previewHeight, QImage::Format_RGB32);
+        std::memcpy(frame.bits(), data.constData(), size_t(frameBytes));
+        emit outputFrame(frame);
     }
     return true;
 }
@@ -532,44 +1104,40 @@ bool BackendController::togglePauseFileOutput() {
         VrecordConfig config = m_playbackConfig;
         return startFileOutput(config, nullptr);
     }
-    const qint64 playbackPid = m_fileOutputProcess->processId();
-    const qint64 feedPid = m_outputFeedProcess ? m_outputFeedProcess->processId() : 0;
+    const qint64 playbackPid = m_playoutFeed->processId();
     if (!m_playbackFrozen) {
-        // freeze: capture the exact frame from the freshest stats line, then
-        // suspend the process so the device holds that exact frame (no reload)
-        const double statsSeconds = parsePlaybackLogSeconds();
-        m_playbackFreezeSeconds = statsSeconds >= 0 ? statsSeconds + m_playbackSeekOffset : currentPlaybackSeconds();
-        if (m_playbackDuration > 0) {
-            m_playbackFreezeSeconds = qBound(0.0, m_playbackFreezeSeconds, m_playbackDuration);
-        }
-        m_playbackCueSeconds = m_playbackFreezeSeconds;
+        // freeze: suspend the process so the card holds the last scheduled
+        // frame (no reload); the pane jumps to that same frame
         suspendProcessById(playbackPid, true);
-        if (feedPid > 0) {
-            suspendProcessById(feedPid, true);
+        m_playoutFeed->flushDelay();
+        double seconds = m_playbackSeekOffset + m_playoutFeed->framesReceived() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
+        if (m_playbackDuration > 0) {
+            seconds = std::fmod(seconds, m_playbackDuration);
         }
+        m_playbackFreezeSeconds = seconds;
+        m_playbackCueSeconds = seconds;
         m_playbackFrozen = true;
-        showPlayFrame(m_playbackFreezeSeconds, nullptr);
+        emit outputStatus(QStringLiteral("frozen"));
     } else if (m_playbackJogged) {
-        // the cue was jogged elsewhere while frozen: restart at the new position
+        // the cue was jogged while frozen: restart at the new position
         const double cue = m_playbackFreezeSeconds;
         stopManagedFileOutputInternal(nullptr);
         m_playbackCueSeconds = cue;
         launchFileOutputProcess(cue, nullptr);
     } else {
-        // plain resume from the frozen frame, no reload
+        // plain resume from the frozen frame, no reload; frames delivered so
+        // far are re-based so the position keeps counting from the freeze
         suspendProcessById(playbackPid, false);
-        if (feedPid > 0) {
-            suspendProcessById(feedPid, false);
-        }
+        m_playbackSeekOffset = m_playbackFreezeSeconds - m_playoutFeed->framesDelivered() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
         m_playbackFrozen = false;
         m_playbackCueSeconds = m_playbackFreezeSeconds;
+        emit outputStatus(QStringLiteral("playing %1 (%2)").arg(QFileInfo(m_playbackFile).fileName(), m_playbackDescription));
     }
     return true;
 }
 
 bool BackendController::isFileOutputActive() const {
-    return s_testMode ? m_testPlaybackActive
-                      : (m_fileOutputProcess != nullptr && m_fileOutputProcess->state() == QProcess::Running);
+    return s_testMode ? m_testPlaybackActive : (m_playoutFeed && m_playoutFeed->isRunning());
 }
 
 bool BackendController::isFileOutputPaused() const {
@@ -645,199 +1213,20 @@ bool BackendController::seekFileOutput(double seconds, QString* errorMessage) {
     }
     // restart at the new position (a frozen playout resumes playing, as on
     // macOS/Linux with the scrub bar release)
+    if (m_playoutFeed) {
+        suspendProcessById(m_playoutFeed->processId(), false);
+    }
     return launchFileOutputProcess(target, errorMessage);
 }
 
-bool BackendController::startVideoPreview(const VrecordConfig& config, QString* errorMessage) {
-    if (isVideoPreviewActive()) {
-        return true;
-    }
-    if (s_testMode) {
-        s_captured << QStringLiteral("ffmpeg-ma -f decklink -i preview");
-        return true;
-    }
-    // the input and the output cannot be open at the same time on this card
-    stopManagedFileOutputInternal(nullptr);
-    stopOutputFeed();
-    stopTrackedProcess(testSignalPidPath(), nullptr);
-
-    QString outputDevice = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
-    if (outputDevice.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Select a DeckLink device first.");
-        }
-        return false;
-    }
-    // route the card's input to the connector the user selected before
-    // sampling it (sdi/hdmi/component/... from the Video Input combo)
-    const QString inputConnection = config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed();
-    if (!inputConnection.isEmpty()) {
-        QString inputConnectionName;
-        if (inputConnection == QStringLiteral("sdi")) inputConnectionName = QStringLiteral("SDI");
-        else if (inputConnection == QStringLiteral("hdmi")) inputConnectionName = QStringLiteral("HDMI");
-        else if (inputConnection == QStringLiteral("component")) inputConnectionName = QStringLiteral("Component");
-        else if (inputConnection == QStringLiteral("composite")) inputConnectionName = QStringLiteral("Composite");
-        else if (inputConnection == QStringLiteral("s-video")) inputConnectionName = QStringLiteral("S-Video");
-        if (!inputConnectionName.isEmpty()) {
-            DeckLinkDiscovery::applyInputConnection(outputDevice, inputConnectionName, nullptr);
-        }
-    }
-
-    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
-    const QStringList baseArguments{
-        QStringLiteral("-nostdin"),
-        QStringLiteral("-loglevel"), QStringLiteral("error"),
-        QStringLiteral("-signal_loss_action"), QStringLiteral("none"),
-        QStringLiteral("-f"), QStringLiteral("decklink"),
-        QStringLiteral("-raw_format"), QStringLiteral("uyvy422"),
-        QStringLiteral("-i"), outputDevice,
-        QStringLiteral("-an"),
-        QStringLiteral("-vf"), QStringLiteral("fps=4,scale=480:-1,format=yuv420p"),
-        QStringLiteral("-c:v"), QStringLiteral("mjpeg"),
-        QStringLiteral("-q:v"), QStringLiteral("5"),
-        QStringLiteral("-update"), QStringLiteral("1"),
-        QStringLiteral("-f"), QStringLiteral("image2"),
-        QStringLiteral("-y"), previewImagePath()};
-
-    // pass 1: input autodetect (no format_code) - the macOS/Linux shell
-    // preview runs exactly this way. a passive lock-status read is useless
-    // here: the driver only reports lock while a capture is running.
-    // an autodetect failure exits within seconds; a live capture does not.
-    m_previewProcess = new QProcess(this);
-    connect(m_previewProcess, &QProcess::readyReadStandardError, m_previewProcess, &QProcess::readAllStandardError);
-    m_previewProcess->start(ffmpegPath, baseArguments);
-    if (m_previewProcess->waitForStarted(5000)) {
-        if (!m_previewProcess->waitForFinished(6000)) {
-            // still running after 6s: the capture locked and is streaming
-            return true;
-        }
-        // autodetect failed (no lock or unsupported): fall through to the
-        // explicit format from the selected standard
-        m_previewProcess->deleteLater();
-        m_previewProcess = nullptr;
-    } else {
-        m_previewProcess->deleteLater();
-        m_previewProcess = nullptr;
-    }
-
-    // pass 2: explicit format_code derived from the selected standard
-    QStringList arguments = baseArguments;
-    arguments.insert(5, QStringLiteral("-format_code"));
-    arguments.insert(6, formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed()));
-    m_previewProcess = new QProcess(this);
-    connect(m_previewProcess, &QProcess::readyReadStandardError, m_previewProcess, &QProcess::readAllStandardError);
-    m_previewProcess->start(ffmpegPath, arguments);
-    if (!m_previewProcess->waitForStarted(5000)) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to start the live preview.");
-        }
-        m_previewProcess->deleteLater();
-        m_previewProcess = nullptr;
-        return false;
-    }
-    return true;
-}
-
-bool BackendController::stopVideoPreview() {
-    if (m_previewProcess) {
-        m_previewProcess->kill();
-        m_previewProcess->waitForFinished(3000);
-        m_previewProcess->deleteLater();
-        m_previewProcess = nullptr;
-        QFile::remove(previewImagePath());
-    }
-    return true;
-}
-
-bool BackendController::isVideoPreviewActive() const {
-    return m_previewProcess != nullptr && m_previewProcess->state() == QProcess::Running;
-}
-
-bool BackendController::startOutputFeed(const VrecordConfig& config, QString* errorMessage) {
-    Q_UNUSED(config);
-    if (startOutputFeedProcess()) {
-        return true;
-    }
-    if (errorMessage) {
-        *errorMessage = QStringLiteral("Failed to start the output feed.");
-    }
-    return false;
-}
-
-bool BackendController::startOutputFeedProcess() {
-    if (s_testMode || m_playbackFile.isEmpty()) {
-        return true;
-    }
-    stopOutputFeed();
-    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
-    QStringList arguments{
-        QStringLiteral("-nostdin"),
-        QStringLiteral("-loglevel"), QStringLiteral("error"),
-        QStringLiteral("-stream_loop"), QStringLiteral("-1")};
-    if (m_playbackSeekOffset > 0.05) {
-        arguments << QStringLiteral("-ss") << QString::number(m_playbackSeekOffset, 'f', 3);
-    }
-    arguments << QStringLiteral("-i") << m_playbackFile
-              << QStringLiteral("-vf") << QStringLiteral("fps=4,scale=480:-1,format=yuv420p")
-              << QStringLiteral("-c:v") << QStringLiteral("mjpeg")
-              << QStringLiteral("-q:v") << QStringLiteral("5")
-              << QStringLiteral("-update") << QStringLiteral("1")
-              << QStringLiteral("-f") << QStringLiteral("image2")
-              << QStringLiteral("-y") << outputFeedImagePath();
-    m_outputFeedProcess = new QProcess(this);
-    connect(m_outputFeedProcess, &QProcess::readyReadStandardError, m_outputFeedProcess, &QProcess::readAllStandardError);
-    m_outputFeedProcess->start(ffmpegPath, arguments);
-    if (!m_outputFeedProcess->waitForStarted(5000)) {
-        m_outputFeedProcess->deleteLater();
-        m_outputFeedProcess = nullptr;
-        return false;
-    }
-    if (m_playbackFrozen) {
-        suspendProcessById(m_outputFeedProcess->processId(), true);
-    }
-    return true;
-}
-
-bool BackendController::stopOutputFeed() {
-    if (m_outputFeedProcess) {
-        m_outputFeedProcess->kill();
-        m_outputFeedProcess->waitForFinished(3000);
-        m_outputFeedProcess->deleteLater();
-        m_outputFeedProcess = nullptr;
-        QFile::remove(outputFeedImagePath());
-    }
-    return true;
-}
-
-QString BackendController::previewImagePath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-preview.jpg"));
-}
-
-QString BackendController::outputFeedImagePath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-outputfeed.jpg"));
-}
-
-QString BackendController::formatCodeForStandard(const QString& standardChoice) const {
-    if (standardChoice == QStringLiteral("NTSC")) return QStringLiteral("ntsc");
-    if (standardChoice == QStringLiteral("PAL")) return QStringLiteral("pal");
-    if (standardChoice.startsWith(QStringLiteral("4k")) || standardChoice.startsWith(QStringLiteral("2d")) || standardChoice.startsWith(QStringLiteral("4d"))) {
-        return standardChoice.left(4);
-    }
-    return standardChoice.left(4);
-}
+// ---------------------------------------------------------------- connectors
 
 bool BackendController::applyVideoOutputConnection(const VrecordConfig& config, QString* errorMessage) const {
     const QString connection = config.value(QStringLiteral("VIDEO_OUTPUT_CONNECTION_CHOICE")).trimmed();
     if (connection.isEmpty() || connection == QStringLiteral("Auto")) {
         return true;
     }
-    QString outputDevice = config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")).trimmed();
-    if (outputDevice.isEmpty()) {
-        outputDevice = config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")).trimmed();
-    }
-    if (outputDevice.isEmpty()) {
-        outputDevice = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
-    }
+    const QString outputDevice = deviceForOutput(config);
     if (outputDevice.isEmpty()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("Select a hardware video output device first.");
@@ -855,54 +1244,72 @@ bool BackendController::applyVideoInputConnection(const VrecordConfig& config, Q
         }
         return false;
     }
-    const QString inputConnection = config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed();
-    QString connectionName;
-    if (inputConnection == QStringLiteral("sdi")) connectionName = QStringLiteral("SDI");
-    else if (inputConnection == QStringLiteral("hdmi")) connectionName = QStringLiteral("HDMI");
-    else if (inputConnection == QStringLiteral("component")) connectionName = QStringLiteral("Component");
-    else if (inputConnection == QStringLiteral("composite")) connectionName = QStringLiteral("Composite");
-    else if (inputConnection == QStringLiteral("s-video")) connectionName = QStringLiteral("S-Video");
-    if (connectionName.isEmpty()) {
+    const QString connection = config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed();
+    if (!VrecordOptions::videoInputs().contains(connection)) {
         return true;
     }
-    return DeckLinkDiscovery::applyInputConnection(inputDevice, connectionName, errorMessage);
+    return DeckLinkDiscovery::applyInputConnection(inputDevice, connection, errorMessage);
+}
+
+// ---------------------------------------------------------------- test signal
+
+bool BackendController::isTestSignalActive() const {
+    if (m_testSignalFeed && m_testSignalFeed->isRunning()) {
+        return true;
+    }
+    QFile pidFile(testSignalPidPath());
+    if (!pidFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+    return pidAlive(QString::fromUtf8(pidFile.readAll()).trimmed().toLongLong());
+}
+
+bool BackendController::stopTestSignalInternal(QString* errorMessage) {
+    if (m_testSignalFeed) {
+        stopFeed(m_testSignalFeed);
+        emit outputStatus(QStringLiteral("stopped"));
+    }
+    if (!stopTrackedProcess(testSignalPidPath(), errorMessage)) {
+        return false;
+    }
+    if (!s_testMode) {
+        sweepOrphanedTestStreams();
+    }
+    return true;
 }
 
 bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage) {
     if (!saveConfig(config, errorMessage)) {
         return false;
     }
-
-    const QString pidPath = testSignalPidPath();
     if (!enabled) {
-        const bool stopped = stopTrackedProcess(pidPath, errorMessage);
-        sweepOrphanedTestStreams();
-        return stopped;
+        return stopTestSignalInternal(errorMessage);
     }
 
-    QString outputDevice = config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")).trimmed();
-    if (outputDevice.isEmpty()) {
-        outputDevice = config.value(QStringLiteral("PREVIEW_RELAY_DEV_CHOICE")).trimmed();
-    }
-    if (outputDevice.isEmpty()) {
-        outputDevice = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
-    }
+    const QString outputDevice = deviceForOutput(config);
     if (outputDevice.isEmpty()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("Select a hardware video output device first.");
         }
         return false;
     }
-
-    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
-    if (!QFileInfo::exists(ffmpegPath)) {
+    if (!QFileInfo::exists(ffmpegPath())) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find ffmpeg backend at %1").arg(QDir::toNativeSeparators(ffmpegPath));
+            *errorMessage = QStringLiteral("Could not find ffmpeg backend at %1").arg(QDir::toNativeSeparators(ffmpegPath()));
+        }
+        return false;
+    }
+    if (!s_testMode && isShellRunning()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("The %1 session is using the card.").arg(m_shellMode);
         }
         return false;
     }
 
-    const SignalMode signalMode = resolveSignalMode(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    VideoMode signalMode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    if (!signalMode.isValid()) {
+        signalMode = VideoModes::forStandard(QStringLiteral("NTSC"));
+    }
     const QString pattern = config.value(QStringLiteral("TEST_SIGNAL_PATTERN_CHOICE")).trimmed();
     const QString audio = config.value(QStringLiteral("TEST_SIGNAL_AUDIO_CHOICE")).trimmed();
     const QString videoSource = testVideoSourceForPattern(pattern, signalMode);
@@ -913,12 +1320,14 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
     // outputs down FIRST and let the driver settle, otherwise the connector
     // apply below hits the teardown race and silently fails (the new stream
     // then starts on a stale analog connector and the HDMI monitor stays dark)
-    stopManagedFileOutputInternal(nullptr);
-    stopOutputFeed();
-    stopVideoPreview();
-    stopTrackedProcess(pidPath, nullptr);
-    sweepOrphanedTestStreams();
-    QThread::msleep(400);
+    if (!s_testMode) {
+        stopManagedFileOutputInternal(nullptr);
+        stopVideoPreview();
+    }
+    stopTestSignalInternal(nullptr);
+    if (!s_testMode) {
+        QThread::msleep(400);
+    }
 
     if (!applyVideoOutputConnection(config, errorMessage)) {
         return false;
@@ -926,7 +1335,8 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
 
     QStringList arguments;
     arguments << QStringLiteral("-nostdin")
-              << QStringLiteral("-loglevel") << QStringLiteral("info")
+              << QStringLiteral("-hide_banner")
+              << QStringLiteral("-loglevel") << QStringLiteral("error")
               << QStringLiteral("-re")
               << QStringLiteral("-f") << QStringLiteral("lavfi")
               << QStringLiteral("-i") << videoSource
@@ -946,16 +1356,47 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
               << outputDevice;
 
     if (s_testMode) {
-        s_captured << (ffmpegPath + QLatin1Char(' ') + arguments.join(QLatin1Char(' ')));
+        s_captured << (ffmpegPath() + QLatin1Char(' ') + arguments.join(QLatin1Char(' ')));
         return true;
     }
 
+    const QString pidPath = testSignalPidPath();
+    const QString requestedSize = lockedPatternSize(pattern).isEmpty() ? signalMode.size() : lockedPatternSize(pattern);
     // launch, verify liveness, then verify the card actually locked the
     // requested raster: a silent connector revert (teardown race) would
     // stream the bars into a stale connector while the HDMI monitor stays dark
     const auto launchSignal = [&]() -> bool {
+        if (m_managedOutputs) {
+            // GUI: one process for the card and the output pane
+            const QStringList sizeParts = requestedSize.split(QLatin1Char('x'));
+            const int srcW = sizeParts.value(0).toInt();
+            const int srcH = sizeParts.value(1).toInt();
+            const double aspect = (signalMode.formatCode == QStringLiteral("ntsc") || signalMode.formatCode == QStringLiteral("pal"))
+                                          && lockedPatternSize(pattern).isEmpty()
+                                      ? VideoModes::displayAspect(signalMode, config.value(QStringLiteral("ASPECT_RATIO_CHOICE")))
+                                      : (srcH > 0 ? double(srcW) / srcH : 16.0 / 9.0);
+            int width = 0;
+            int height = 0;
+            VideoModes::previewSize(srcH, aspect, &width, &height);
+            FrameFeed::Attempt attempt;
+            attempt.label = QStringLiteral("test signal %1").arg(requestedSize);
+            attempt.arguments = arguments;
+            attempt.arguments << previewPipeOutput(videoFilters.join(QLatin1Char(',')), width, height);
+            m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(kDeckLinkPreroll * signalMode.fps()));
+            QThread::msleep(1500);
+            if (!m_testSignalFeed || !m_testSignalFeed->isRunning()) {
+                const QString tail = m_testSignalFeed ? m_testSignalFeed->stderrTail().trimmed().section(QLatin1Char('\n'), -1) : QString();
+                stopFeed(m_testSignalFeed);
+                if (errorMessage) {
+                    *errorMessage = tail.isEmpty() ? QStringLiteral("Test signal output exited immediately.")
+                                                   : QStringLiteral("Test signal output failed: %1").arg(tail);
+                }
+                return false;
+            }
+            return true;
+        }
         qint64 newPid = 0;
-        if (!startDetachedProgramWithLog(ffmpegPath, arguments, testSignalLogPath(), &newPid, errorMessage)) {
+        if (!startDetachedProgramWithLog(ffmpegPath(), arguments, testSignalLogPath(), &newPid, errorMessage)) {
             return false;
         }
         QFile pidFile(pidPath);
@@ -965,7 +1406,7 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         }
         QThread::msleep(1500);
         if (!pidAlive(newPid)) {
-            const QString logTail = lastLogFileLine(testSignalLogPath());
+            const QString logTail = lastLogLines(testSignalLogPath(), 1);
             QFile::remove(pidPath);
             if (errorMessage) {
                 *errorMessage = logTail.isEmpty()
@@ -981,17 +1422,12 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
 
-    const QString requestedSize = signalMode.size;
-    const bool requestedHD = !lockedPatternSize(pattern).isEmpty()
-        || requestedSize.startsWith(QStringLiteral("1920"))
-        || requestedSize.startsWith(QStringLiteral("3840"))
-        || requestedSize.startsWith(QStringLiteral("4096"))
-        || requestedSize.startsWith(QStringLiteral("2048"))
-        || requestedSize.startsWith(QStringLiteral("1280"));
+    const bool requestedHD = !requestedSize.startsWith(QStringLiteral("720x"));
     if (requestedHD) {
         const QString activeMode = DeckLinkDiscovery::activeOutputModeFourCC(outputDevice, nullptr);
         if (activeMode == QStringLiteral("ntsc") || activeMode == QStringLiteral("pal")) {
             // teardown race hit: re-apply the connector and relaunch once
+            stopFeed(m_testSignalFeed);
             stopTrackedProcess(pidPath, nullptr);
             QThread::msleep(400);
             if (!applyVideoOutputConnection(config, errorMessage)) {
@@ -1002,33 +1438,11 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
             }
         }
     }
+    emit outputStatus(QStringLiteral("test signal: %1, %2").arg(pattern, requestedSize));
     return true;
 }
 
-bool BackendController::openLegacyUi(QString* errorMessage) const {
-    return startProcess({QStringLiteral("-e")}, errorMessage);
-}
-
-bool BackendController::startProcess(const QStringList& arguments, QString* errorMessage) const {
-    const QString cmdPath = QDir(m_packageRoot).filePath(QStringLiteral("vrecord.cmd"));
-    const QString shPath = QDir(m_packageRoot).filePath(QStringLiteral("vrecord.sh"));
-    QString program;
-    QStringList finalArgs;
-
-    if (QFileInfo::exists(cmdPath)) {
-        program = QStringLiteral("cmd.exe");
-        finalArgs << QStringLiteral("/c") << cmdPath;
-    } else if (QFileInfo::exists(shPath)) {
-        program = shPath;
-    } else {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find vrecord backend entrypoint beside the Qt frontend.");
-        }
-        return false;
-    }
-    finalArgs << arguments;
-    return startDetachedProgram(program, finalArgs, errorMessage);
-}
+// ---------------------------------------------------------------- helpers
 
 void BackendController::setTestMode(bool enabled) {
     s_testMode = enabled;
@@ -1055,14 +1469,6 @@ bool BackendController::capturedAnyContaining(const QString& needle) {
     return false;
 }
 
-bool BackendController::startDetachedProgram(const QString& program, const QStringList& arguments, QString* errorMessage) const {
-    if (s_testMode) {
-        s_captured << (program + QLatin1Char(' ') + arguments.join(QLatin1Char(' ')));
-        return true;
-    }
-    Q_UNUSED(errorMessage);
-    return QProcess::startDetached(program, arguments, m_packageRoot);
-}
 bool BackendController::startDetachedProgramWithLog(const QString& program, const QStringList& arguments, const QString& logPath, qint64* pid, QString* errorMessage) const {
     if (s_testMode) {
         s_captured << (program + QLatin1Char(' ') + arguments.join(QLatin1Char(' ')));

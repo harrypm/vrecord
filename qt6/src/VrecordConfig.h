@@ -10,6 +10,9 @@ struct VrecordConfig {
 
     static VrecordConfig load(const QString& scriptName, const QString& explicitPath = {});
     bool save() const;
+    // fill the keys the shell backend reads (DURATION, HD_CHOICE) from the
+    // frontend-only ones before saving
+    void prepareForBackend();
 
     QString value(const QString& key, const QString& fallback = {}) const;
     void setValue(const QString& key, const QString& value);

@@ -245,7 +245,8 @@ int main(int argc, char** argv) {
             return 1;
         }
         for (const auto& device : devices) {
-            std::cout << "Device: " << device.modelName.toStdString()
+            std::cout << "Device: " << device.ffmpegName.toStdString()
+                      << (device.ffmpegName != device.modelName ? QStringLiteral(" (%1)").arg(device.modelName).toStdString() : std::string())
                       << "  (index " << device.persistentId << ")" << std::endl;
         }
         return 0;

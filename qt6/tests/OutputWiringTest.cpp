@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     }
     bool targetFound = false;
     for (const auto& device : devices) {
-        if (device.modelName == outputDevice) {
+        if (device.ffmpegName == outputDevice || device.modelName == outputDevice) {
             targetFound = true;
         }
     }

@@ -22,6 +22,8 @@ add_executable(VrecordQt6 WIN32
   src/VrecordConfig.cpp
   src/DeckLinkDiscovery.cpp
   src/BackendController.cpp
+  src/FrameFeed.cpp
+  src/VideoView.cpp
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
 )
 
@@ -44,6 +46,7 @@ add_executable(vsignal
   src/VrecordConfig.cpp
   src/DeckLinkDiscovery.cpp
   src/BackendController.cpp
+  src/FrameFeed.cpp
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
 )
 
@@ -54,6 +57,7 @@ target_include_directories(vsignal PRIVATE
 
 target_link_libraries(vsignal PRIVATE
   Qt6::Core
+  Qt6::Gui
   ole32
   oleaut32
   uuid
@@ -64,6 +68,7 @@ add_executable(VrecordOutputTest
   src/VrecordConfig.cpp
   src/DeckLinkDiscovery.cpp
   src/BackendController.cpp
+  src/FrameFeed.cpp
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
 )
 
@@ -74,6 +79,7 @@ target_include_directories(VrecordOutputTest PRIVATE
 
 target_link_libraries(VrecordOutputTest PRIVATE
   Qt6::Core
+  Qt6::Gui
   ole32
   oleaut32
   uuid

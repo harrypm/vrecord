@@ -11,32 +11,89 @@ namespace {
 QString bstrToQString(BSTR value) {
     return value ? QString::fromWCharArray(value) : QString();
 }
+
+QString deviceDisplayName(IDeckLink* deckLink) {
+    BSTR name = nullptr;
+    QString result;
+    if (deckLink->GetDisplayName(&name) == S_OK) {
+        result = bstrToQString(name);
+        SysFreeString(name);
+    }
+    return result;
+}
+
+QString deviceModelName(IDeckLink* deckLink) {
+    BSTR name = nullptr;
+    QString result;
+    if (deckLink->GetModelName(&name) == S_OK) {
+        result = bstrToQString(name);
+        SysFreeString(name);
+    }
+    return result;
+}
+
+// display modes are fourCCs ('ntsc', 'Hp25', '4k30', ...): decode the four
+// bytes and trim the padding to get the ffmpeg format_code name
+QString fourCC(qint64 value) {
+    QString code;
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        const char character = static_cast<char>((value >> shift) & 0xFF);
+        if (character != ' ' && character != '\0') {
+            code += QLatin1Char(character);
+        }
+    }
+    return code;
+}
+
+// COM for the calling thread; balanced only if this call initialised it (the
+// Qt GUI thread is already an OLE STA, so there it is a no-op)
+struct ComScope {
+    HRESULT hr;
+    ComScope() : hr(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
+    ~ComScope() {
+        if (SUCCEEDED(hr)) {
+            CoUninitialize();
+        }
+    }
+    bool ok() const { return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE; }
+};
+
+IDeckLinkIterator* createIterator(QString* errorMessage) {
+    IDeckLinkIterator* iterator = nullptr;
+    const HRESULT hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator,
+                                        reinterpret_cast<void**>(&iterator));
+    if (FAILED(hr) || !iterator) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("DeckLink drivers not found (Blackmagic Desktop Video is not installed or the iterator could not be created, 0x%1).")
+                                .arg(QString::number(static_cast<uint>(hr), 16));
+        }
+        return nullptr;
+    }
+    return iterator;
+}
+
+int64_t connectionMaskForName(const QString& name) {
+    if (name == QStringLiteral("SDI")) return bmdVideoConnectionSDI;
+    if (name == QStringLiteral("HDMI")) return bmdVideoConnectionHDMI;
+    if (name == QStringLiteral("Optical SDI")) return bmdVideoConnectionOpticalSDI;
+    if (name == QStringLiteral("Component")) return bmdVideoConnectionComponent;
+    if (name == QStringLiteral("Composite")) return bmdVideoConnectionComposite;
+    if (name == QStringLiteral("S-Video")) return bmdVideoConnectionSVideo;
+    return 0;
+}
 }
 
 QVector<DeckLinkDeviceInfo> DeckLinkDiscovery::enumerateDevices(QString* errorMessage) {
     QVector<DeckLinkDeviceInfo> devices;
-
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool comInitialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    });
-
-    if (!comInitialized) {
+    ComScope com;
+    if (!com.ok()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("Failed to initialize COM for DeckLink discovery.");
         }
         return devices;
     }
-
-    IDeckLinkIterator* iterator = nullptr;
-    hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator));
-    if (FAILED(hr) || !iterator) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("DeckLink drivers not found or iterator creation failed.");
-        }
+    IDeckLinkIterator* iterator = createIterator(errorMessage);
+    if (!iterator) {
         return devices;
     }
 
@@ -44,67 +101,85 @@ QVector<DeckLinkDeviceInfo> DeckLinkDiscovery::enumerateDevices(QString* errorMe
     int index = 1;
     while (iterator->Next(&deckLink) == S_OK && deckLink) {
         DeckLinkDeviceInfo info;
-        BSTR modelName = nullptr;
-        if (deckLink->GetModelName(&modelName) == S_OK) {
-            info.modelName = bstrToQString(modelName);
-            SysFreeString(modelName);
-        } else {
+        info.modelName = deviceModelName(deckLink);
+        if (info.modelName.isEmpty()) {
             info.modelName = QStringLiteral("Unknown DeckLink");
+        }
+        info.ffmpegName = deviceDisplayName(deckLink);
+        if (info.ffmpegName.isEmpty()) {
+            info.ffmpegName = info.modelName;
         }
 
         IDeckLinkProfileAttributes* attributes = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkProfileAttributes, reinterpret_cast<void**>(&attributes)) == S_OK && attributes) {
-            int64_t persistentId = 0;
-            if (attributes->GetInt(BMDDeckLinkPersistentID, &persistentId) == S_OK) {
-                info.persistentId = persistentId;
+            LONGLONG value = 0;
+            if (attributes->GetInt(BMDDeckLinkPersistentID, &value) == S_OK) {
+                info.persistentId = value;
             }
-            int64_t inputMask = 0;
-            if (attributes->GetInt(BMDDeckLinkVideoInputConnections, &inputMask) == S_OK) {
-                info.videoInputConnections = inputMask;
+            if (attributes->GetInt(BMDDeckLinkVideoInputConnections, &value) == S_OK) {
+                info.videoInputConnections = value;
             }
-            int64_t outputMask = 0;
-            if (attributes->GetInt(BMDDeckLinkVideoOutputConnections, &outputMask) == S_OK) {
-                info.videoOutputConnections = outputMask;
+            if (attributes->GetInt(BMDDeckLinkVideoOutputConnections, &value) == S_OK) {
+                info.videoOutputConnections = value;
+            }
+            if (attributes->GetInt(BMDDeckLinkDuplex, &value) == S_OK) {
+                info.supportsFullDuplex = (value == bmdDuplexFull);
+            }
+            BOOL flag = FALSE;
+            if (attributes->GetFlag(BMDDeckLinkSupportsInputFormatDetection, &flag) == S_OK) {
+                info.supportsInputFormatDetection = flag != FALSE;
             }
             attributes->Release();
         }
 
-        info.displayName = QStringLiteral("%1 [%2] (%3)")
-            .arg(info.modelName, QString::number(index), QString::number(info.persistentId));
+        info.displayName = info.ffmpegName == info.modelName
+            ? QStringLiteral("%1 [%2]").arg(info.ffmpegName, QString::number(index))
+            : QStringLiteral("%1 (%2) [%3]").arg(info.ffmpegName, info.modelName, QString::number(index));
         devices.push_back(info);
         deckLink->Release();
         deckLink = nullptr;
         ++index;
     }
     iterator->Release();
+    if (devices.isEmpty() && errorMessage && errorMessage->isEmpty()) {
+        *errorMessage = QStringLiteral("No DeckLink devices found - check the card is seated and Desktop Video Setup can see it.");
+    }
     return devices;
 }
 
-bool DeckLinkDiscovery::applyConnection(const QString& modelName, int configurationId, const QString& connectionName, QString* errorMessage)
-{
-    int64_t connectionMask = 0;
-    if (connectionName == QStringLiteral("SDI")) {
-        connectionMask = bmdVideoConnectionSDI;
-    } else if (connectionName == QStringLiteral("HDMI")) {
-        connectionMask = bmdVideoConnectionHDMI;
-    } else if (connectionName == QStringLiteral("Component")) {
-        connectionMask = bmdVideoConnectionComponent;
-    } else if (connectionName == QStringLiteral("Composite")) {
-        connectionMask = bmdVideoConnectionComposite;
-    } else if (connectionName == QStringLiteral("S-Video")) {
-        connectionMask = bmdVideoConnectionSVideo;
-    } else {
+bool DeckLinkDiscovery::withDevice(const QString& deviceName, const std::function<bool(IDeckLink*)>& action, QString* errorMessage) {
+    ComScope com;
+    if (!com.ok()) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Unknown video connection: %1").arg(connectionName);
+            *errorMessage = QStringLiteral("Failed to initialize COM for DeckLink access.");
         }
         return false;
     }
-    const auto configId = static_cast<BMDDeckLinkConfigurationID>(configurationId);
-    return applyConnectionInternal(modelName, configId, connectionName, connectionMask, errorMessage);
+    // exact display-name match first (distinguishes "DeckLink Duo (1)" from
+    // "(2)"), then the model name older configs stored
+    for (int pass = 0; pass < 2; ++pass) {
+        IDeckLinkIterator* iterator = createIterator(errorMessage);
+        if (!iterator) {
+            return false;
+        }
+        auto releaseIterator = qScopeGuard([iterator] { iterator->Release(); });
+        IDeckLink* deckLink = nullptr;
+        while (iterator->Next(&deckLink) == S_OK && deckLink) {
+            auto releaseDevice = qScopeGuard([deckLink] { deckLink->Release(); });
+            const QString candidate = pass == 0 ? deviceDisplayName(deckLink) : deviceModelName(deckLink);
+            if (candidate == deviceName) {
+                return action(deckLink);
+            }
+            deckLink = nullptr;
+        }
+    }
+    if (errorMessage && errorMessage->isEmpty()) {
+        *errorMessage = QStringLiteral("DeckLink device not found: %1").arg(deviceName);
+    }
+    return false;
 }
 
-QStringList DeckLinkDiscovery::connectionNamesFromMask(qint64 mask)
-{
+QStringList DeckLinkDiscovery::connectionNamesFromMask(qint64 mask) {
     QStringList names;
     const struct { qint64 bit; const char* name; } mapping[] = {
         {bmdVideoConnectionSDI, "SDI"},
@@ -122,254 +197,132 @@ QStringList DeckLinkDiscovery::connectionNamesFromMask(qint64 mask)
     return names;
 }
 
-QString DeckLinkDiscovery::detectInputFormatCode(const QString& modelName, QString* errorMessage)
-{
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool comInitialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
+QStringList DeckLinkDiscovery::outputModeCodes(const QString& deviceName, QString* errorMessage) {
+    QStringList codes;
+    withDevice(deviceName, [&](IDeckLink* deckLink) {
+        IDeckLinkOutput* output = nullptr;
+        if (deckLink->QueryInterface(IID_IDeckLinkOutput, reinterpret_cast<void**>(&output)) != S_OK || !output) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Device %1 has no video output.").arg(deviceName);
+            }
+            return false;
         }
-    });
-    if (!comInitialized) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to initialize COM for input detection.");
+        auto releaseOutput = qScopeGuard([output] { output->Release(); });
+        IDeckLinkDisplayModeIterator* modes = nullptr;
+        if (output->GetDisplayModeIterator(&modes) != S_OK || !modes) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Device %1 did not list its output modes.").arg(deviceName);
+            }
+            return false;
         }
-        return {};
-    }
+        IDeckLinkDisplayMode* mode = nullptr;
+        while (modes->Next(&mode) == S_OK && mode) {
+            codes << fourCC(mode->GetDisplayMode());
+            mode->Release();
+            mode = nullptr;
+        }
+        modes->Release();
+        return true;
+    }, errorMessage);
+    return codes;
+}
 
-    IDeckLinkIterator* iterator = nullptr;
-    hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator));
-    if (FAILED(hr) || !iterator) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("DeckLink drivers not found or iterator creation failed.");
-        }
-        return {};
-    }
-
-    QString detectedCode;
-    IDeckLink* deckLink = nullptr;
-    while (iterator->Next(&deckLink) == S_OK && deckLink) {
-        BSTR modelNameBstr = nullptr;
-        QString deviceModel;
-        if (deckLink->GetModelName(&modelNameBstr) == S_OK) {
-            deviceModel = bstrToQString(modelNameBstr);
-            SysFreeString(modelNameBstr);
-        }
-        if (deviceModel != modelName) {
-            deckLink->Release();
-            continue;
-        }
-
+QString DeckLinkDiscovery::detectInputFormatCode(const QString& deviceName, QString* errorMessage) {
+    QString detected;
+    withDevice(deviceName, [&](IDeckLink* deckLink) {
         IDeckLinkStatus* status = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkStatus, reinterpret_cast<void**>(&status)) != S_OK || !status) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("Device %1 does not expose the status interface.").arg(modelName);
+                *errorMessage = QStringLiteral("Device %1 does not expose the status interface.").arg(deviceName);
             }
-            deckLink->Release();
-            break;
+            return false;
         }
-
         LONGLONG locked = 0;
-        LONGLONG detectedMode = 0;
+        LONGLONG mode = 0;
         const bool signalLocked = status->GetInt(bmdDeckLinkStatusVideoInputSignalLocked, &locked) == S_OK && locked != 0;
-        const bool modeDetected = status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &detectedMode) == S_OK;
+        const bool modeDetected = status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &mode) == S_OK;
         status->Release();
-        deckLink->Release();
-
         if (!signalLocked || !modeDetected) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("No input signal detected on %1.").arg(modelName);
+                *errorMessage = QStringLiteral("No input signal detected on %1.").arg(deviceName);
             }
-            break;
+            return false;
         }
-
-        // display modes are fourCCs ('ntsc ', 'Hp25', '4k30', ...): decode the
-        // four bytes and trim the padding to get the ffmpeg format_code name
-        QString code;
-        for (int shift = 24; shift >= 0; shift -= 8) {
-            const char character = static_cast<char>((detectedMode >> shift) & 0xFF);
-            if (character != ' ') {
-                code += QLatin1Char(character);
-            }
-        }
-        detectedCode = code;
-        break;
-    }
-
-    iterator->Release();
-    if (detectedCode.isEmpty() && errorMessage && errorMessage->isEmpty()) {
-        *errorMessage = QStringLiteral("DeckLink device not found: %1").arg(modelName);
-    }
-    return detectedCode;
+        detected = fourCC(mode);
+        return true;
+    }, errorMessage);
+    return detected;
 }
 
-bool DeckLinkDiscovery::applyOutputConnection(const QString& modelName, const QString& connectionName, QString* errorMessage)
-{
-    return applyConnection(modelName, static_cast<int>(bmdDeckLinkConfigVideoOutputConnection), connectionName, errorMessage);
-}
-
-bool DeckLinkDiscovery::applyInputConnection(const QString& modelName, const QString& connectionName, QString* errorMessage)
-{
-    return applyConnection(modelName, static_cast<int>(bmdDeckLinkConfigVideoInputConnection), connectionName, errorMessage);
-}
-
-QString DeckLinkDiscovery::activeOutputModeFourCC(const QString& modelName, QString* errorMessage)
-{
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool comInitialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    });
-    if (!comInitialized) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to initialize COM for output mode probe.");
-        }
-        return {};
-    }
-
-    IDeckLinkIterator* iterator = nullptr;
-    hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator));
-    if (FAILED(hr) || !iterator) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("DeckLink drivers not found or iterator creation failed.");
-        }
-        return {};
-    }
-
+QString DeckLinkDiscovery::activeOutputModeFourCC(const QString& deviceName, QString* errorMessage) {
     QString modeCode;
-    IDeckLink* deckLink = nullptr;
-    while (iterator->Next(&deckLink) == S_OK && deckLink) {
-        BSTR modelNameBstr = nullptr;
-        QString deviceModel;
-        if (deckLink->GetModelName(&modelNameBstr) == S_OK) {
-            deviceModel = bstrToQString(modelNameBstr);
-            SysFreeString(modelNameBstr);
-        }
-        if (deviceModel != modelName) {
-            deckLink->Release();
-            continue;
-        }
-
+    withDevice(deviceName, [&](IDeckLink* deckLink) {
         IDeckLinkStatus* status = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkStatus, reinterpret_cast<void**>(&status)) != S_OK || !status) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("Device %1 does not expose the status interface.").arg(modelName);
+                *errorMessage = QStringLiteral("Device %1 does not expose the status interface.").arg(deviceName);
             }
-            deckLink->Release();
-            break;
+            return false;
         }
-
         LONGLONG activeMode = 0;
-        if (status->GetInt(bmdDeckLinkStatusCurrentVideoOutputMode, &activeMode) != S_OK) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("Device %1 did not report its active output mode.").arg(modelName);
-            }
-            status->Release();
-            deckLink->Release();
-            break;
-        }
+        const bool ok = status->GetInt(bmdDeckLinkStatusCurrentVideoOutputMode, &activeMode) == S_OK;
         status->Release();
-        deckLink->Release();
-
-        for (int shift = 24; shift >= 0; shift -= 8) {
-            const char character = static_cast<char>((activeMode >> shift) & 0xFF);
-            if (character != ' ') {
-                modeCode += QLatin1Char(character);
+        if (!ok) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Device %1 did not report its active output mode.").arg(deviceName);
             }
+            return false;
         }
-        break;
-    }
-
-    iterator->Release();
+        modeCode = fourCC(activeMode);
+        return true;
+    }, errorMessage);
     return modeCode;
 }
 
-bool DeckLinkDiscovery::applyConnectionInternal(const QString& modelName, std::int64_t configurationId, const QString& connectionName, std::int64_t connectionMask, QString* errorMessage)
-{
+bool DeckLinkDiscovery::applyOutputConnection(const QString& deviceName, const QString& connectionName, QString* errorMessage) {
+    return applyConnection(deviceName, bmdDeckLinkConfigVideoOutputConnection, connectionName, errorMessage);
+}
+
+bool DeckLinkDiscovery::applyInputConnection(const QString& deviceName, const QString& connectionName, QString* errorMessage) {
+    return applyConnection(deviceName, bmdDeckLinkConfigVideoInputConnection, connectionName, errorMessage);
+}
+
+bool DeckLinkDiscovery::applyConnection(const QString& deviceName, std::int64_t configurationId, const QString& connectionName, QString* errorMessage) {
+    const int64_t connectionMask = connectionMaskForName(connectionName);
+    if (connectionMask == 0) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Unknown video connection: %1").arg(connectionName);
+        }
+        return false;
+    }
     const auto configId = static_cast<BMDDeckLinkConfigurationID>(configurationId);
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool comInitialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    });
-    if (!comInitialized) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to initialize COM for DeckLink configuration.");
-        }
-        return false;
-    }
-
-    IDeckLinkIterator* iterator = nullptr;
-    hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator));
-    if (FAILED(hr) || !iterator) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("DeckLink drivers not found or iterator creation failed.");
-        }
-        return false;
-    }
-
-    IDeckLink* deckLink = nullptr;
-    bool matchedDevice = false;
-    while (!matchedDevice && iterator->Next(&deckLink) == S_OK && deckLink) {
-        BSTR modelNameBstr = nullptr;
-        QString deviceModel;
-        if (deckLink->GetModelName(&modelNameBstr) == S_OK) {
-            deviceModel = bstrToQString(modelNameBstr);
-            SysFreeString(modelNameBstr);
-        }
-        if (deviceModel != modelName) {
-            deckLink->Release();
-            deckLink = nullptr;
-            continue;
-        }
-        matchedDevice = true;
-
+    const QString direction = configId == bmdDeckLinkConfigVideoInputConnection ? QStringLiteral("input") : QStringLiteral("output");
+    return withDevice(deviceName, [&](IDeckLink* deckLink) {
         IDeckLinkConfiguration* configuration = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkConfiguration, reinterpret_cast<void**>(&configuration)) != S_OK || !configuration) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("Device %1 does not expose the DeckLink configuration interface.").arg(modelName);
+                *errorMessage = QStringLiteral("Device %1 does not expose the DeckLink configuration interface.").arg(deviceName);
             }
-            deckLink->Release();
-            break;
+            return false;
         }
-
+        auto release = qScopeGuard([configuration] { configuration->Release(); });
         const HRESULT setResult = configuration->SetInt(configId, connectionMask);
         if (FAILED(setResult)) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("DeckLink SDK rejected output connection %1 on %2 (0x%3) - the connector may not exist on this device.")
-                                    .arg(connectionName, modelName, QString::number(static_cast<uint>(setResult), 16));
+                *errorMessage = QStringLiteral("DeckLink SDK rejected video %1 connection %2 on %3 (0x%4) - the connector may not exist on this device.")
+                                    .arg(direction, connectionName, deviceName, QString::number(static_cast<uint>(setResult), 16));
             }
-            configuration->Release();
-            deckLink->Release();
-            break;
+            return false;
         }
-
         LONGLONG readback = 0;
         if (configuration->GetInt(configId, &readback) != S_OK || (readback & connectionMask) != connectionMask) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("Video output connection %1 on %2 failed SDK readback verification (device reports 0x%3).")
-                                    .arg(connectionName, modelName, QString::number(static_cast<qulonglong>(readback), 16));
+                *errorMessage = QStringLiteral("Video %1 connection %2 on %3 failed SDK readback verification (device reports 0x%4).")
+                                    .arg(direction, connectionName, deviceName, QString::number(static_cast<qulonglong>(readback), 16));
             }
-            configuration->Release();
-            deckLink->Release();
-            break;
+            return false;
         }
-
         configuration->WriteConfigurationToPreferences();
-        configuration->Release();
-        deckLink->Release();
-        iterator->Release();
         return true;
-    }
-
-    if (!matchedDevice && errorMessage && errorMessage->isEmpty()) {
-        *errorMessage = QStringLiteral("DeckLink device not found: %1").arg(modelName);
-    }
-    iterator->Release();
-    return false;
+    }, errorMessage);
 }

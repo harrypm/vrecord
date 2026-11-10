@@ -1,5 +1,7 @@
 #include "VrecordConfig.h"
 
+#include "VrecordOptions.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -7,12 +9,45 @@
 #include <QTextStream>
 
 namespace {
+// the shell sources this file, so values are bash double-quoted strings:
+// \, ", $ and ` are escaped on save and unescaped on load (configs the shell
+// wrote itself carry unescaped Windows paths like C:\Captures - a backslash
+// before any other character is literal in bash and is kept as-is here too)
 QString unquote(QString value) {
     value = value.trimmed();
     if (value.size() >= 2 && value.startsWith('"') && value.endsWith('"')) {
         value = value.mid(1, value.size() - 2);
+        QString out;
+        out.reserve(value.size());
+        for (qsizetype i = 0; i < value.size(); ++i) {
+            const QChar c = value.at(i);
+            if (c == QLatin1Char('\\') && i + 1 < value.size()) {
+                const QChar next = value.at(i + 1);
+                if (next == QLatin1Char('\\') || next == QLatin1Char('"') || next == QLatin1Char('$') || next == QLatin1Char('`')) {
+                    out += next;
+                    ++i;
+                    continue;
+                }
+            }
+            out += c;
+        }
+        return out;
     }
     return value;
+}
+
+QString bashQuote(const QString& value) {
+    QString out;
+    out.reserve(value.size() + 2);
+    out += QLatin1Char('"');
+    for (const QChar c : value) {
+        if (c == QLatin1Char('\\') || c == QLatin1Char('"') || c == QLatin1Char('$') || c == QLatin1Char('`')) {
+            out += QLatin1Char('\\');
+        }
+        out += c;
+    }
+    out += QLatin1Char('"');
+    return out;
 }
 }
 
@@ -25,6 +60,13 @@ VrecordConfig VrecordConfig::load(const QString& scriptName, const QString& expl
     QFile file(cfg.configPath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         cfg.values.insert(QStringLiteral("DEVICE_INPUT_CHOICE"), QStringLiteral("0"));
+        cfg.values.insert(QStringLiteral("VIDEO_INPUT_CHOICE"), QStringLiteral("SDI"));
+        cfg.values.insert(QStringLiteral("AUDIO_INPUT_CHOICE"), QStringLiteral("SDI Embedded Audio"));
+        cfg.values.insert(QStringLiteral("AUDIO_MAPPING_CHOICE"), QStringLiteral("1 Stereo Track (From Channels 1 & 2)"));
+        cfg.values.insert(QStringLiteral("EMBED_LOGS_CHOICE"), QStringLiteral("Yes"));
+        cfg.values.insert(QStringLiteral("PLAYBACKVIEW_CHOICE"), QStringLiteral("Visual"));
+        cfg.values.insert(QStringLiteral("PLAYBACKVIEW_CHOICE_PASS"), QStringLiteral("Visual"));
+        cfg.values.insert(QStringLiteral("MONITOR_AUDIO_CHOICE"), QStringLiteral("Yes"));
         cfg.values.insert(QStringLiteral("CONTAINER_CHOICE"), QStringLiteral("Matroska"));
         cfg.values.insert(QStringLiteral("VIDEO_CODEC_CHOICE"), QStringLiteral("FFV1 version 3"));
         cfg.values.insert(QStringLiteral("AUDIO_CODEC_CHOICE"), QStringLiteral("24-bit PCM"));
@@ -33,7 +75,8 @@ VrecordConfig VrecordConfig::load(const QString& scriptName, const QString& expl
         cfg.values.insert(QStringLiteral("ASPECT_RATIO_CHOICE"), QStringLiteral("4/3"));
         cfg.values.insert(QStringLiteral("THEME_CHOICE"), QStringLiteral("Dark"));
         cfg.values.insert(QStringLiteral("FILEPLAY_AUTO_CHOICE"), QStringLiteral("true"));
-        cfg.values.insert(QStringLiteral("PREVIEW_RELAY_CHOICE"), QStringLiteral("true"));
+        cfg.values.insert(QStringLiteral("QT6_CONFIG_REV"), QStringLiteral("2"));
+        cfg.values.insert(QStringLiteral("PREVIEW_RELAY_CHOICE"), QStringLiteral("false"));
         return cfg;
     }
 
@@ -48,10 +91,47 @@ VrecordConfig VrecordConfig::load(const QString& scriptName, const QString& expl
             continue;
         }
         const QString key = line.left(eq).trimmed();
-        const QString value = unquote(line.mid(eq + 1));
+        const QString value = VrecordOptions::migrate(key, unquote(line.mid(eq + 1)));
         cfg.values.insert(key, value);
     }
+    // the shell stores the recording time as DURATION="H:M:S"; split it for
+    // the three entry boxes when this config came from the GTK frontend
+    const QString duration = cfg.values.value(QStringLiteral("DURATION"));
+    if (!duration.isEmpty() && !cfg.values.contains(QStringLiteral("DURATION_HOURS"))) {
+        const QStringList parts = duration.split(QLatin1Char(':'));
+        if (parts.size() == 3) {
+            cfg.values.insert(QStringLiteral("DURATION_HOURS"), parts.at(0));
+            cfg.values.insert(QStringLiteral("DURATION_MINUTES"), parts.at(1));
+            cfg.values.insert(QStringLiteral("DURATION_SECONDS"), parts.at(2));
+        }
+    }
+    // rev 2: file playout defaults to the file's native mode. Earlier Qt
+    // builds saved FILEPLAY_AUTO_CHOICE="false" without the user choosing it,
+    // so flip it once; a later explicit untick is saved with the marker and kept
+    if (cfg.values.value(QStringLiteral("QT6_CONFIG_REV")).toInt() < 2) {
+        cfg.values.insert(QStringLiteral("FILEPLAY_AUTO_CHOICE"), QStringLiteral("true"));
+        cfg.values.insert(QStringLiteral("QT6_CONFIG_REV"), QStringLiteral("2"));
+    }
     return cfg;
+}
+
+void VrecordConfig::prepareForBackend() {
+    // DURATION is what the shell reads (the boxes are a frontend split)
+    const QString h = value(QStringLiteral("DURATION_HOURS")).trimmed();
+    const QString m = value(QStringLiteral("DURATION_MINUTES")).trimmed();
+    const QString s = value(QStringLiteral("DURATION_SECONDS")).trimmed();
+    if (h.isEmpty() && m.isEmpty() && s.isEmpty()) {
+        setValue(QStringLiteral("DURATION"), QString());
+    } else {
+        setValue(QStringLiteral("DURATION"), QStringLiteral("%1:%2:%3").arg(h.isEmpty() ? QStringLiteral("0") : h,
+                                                                           m.isEmpty() ? QStringLiteral("0") : m,
+                                                                           s.isEmpty() ? QStringLiteral("0") : s));
+    }
+    // without HD_CHOICE=true the shell only accepts NTSC/PAL and rejects any
+    // HD/UHD standard in _review_option
+    if (VrecordOptions::isHdStandard(value(QStringLiteral("STANDARD_CHOICE")))) {
+        setValue(QStringLiteral("HD_CHOICE"), QStringLiteral("true"));
+    }
 }
 
 bool VrecordConfig::save() const {
@@ -69,7 +149,7 @@ bool VrecordConfig::save() const {
         QTextStream out(&temp);
         out << "# vrecord Qt6 frontend configuration\n";
         for (auto it = values.keyValueBegin(); it != values.keyValueEnd(); ++it) {
-            out << it->first << "=\"" << it->second << "\"\n";
+            out << it->first << '=' << bashQuote(it->second) << '\n';
         }
         temp.flush();
         if (temp.error() != QFile::NoError) {
