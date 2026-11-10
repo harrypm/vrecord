@@ -47,6 +47,8 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
   - **Composite/S-Video** outputs are SD only: PAL for 25/50 fps, NTSC otherwise.
   - **Relay on**: the output follows the input and the combo is disabled.
   - Auto also drives the shell's `FILEPLAY_AUTO_CHOICE`.
+- **Preview and output together** (full-duplex cards): the input preview keeps running during file playout and the test signal. If the preview is relaying, it relaunches without the relay before playout claims the output, and gets the relay back when the user stops the output. Half-duplex cards still stop the preview. While relaying, the output pane mirrors the input frames.
+- **Feed panes** (`VideoView`) take the feed's aspect (height-for-width, re-evaluated when the raster changes) and paint only the picture area black. Leftover layout space stays window-coloured instead of showing black borders. Frames still queued from a stopped feed are dropped so a cleared pane stays cleared. The Activity log and playout notes live on the Logs tab.
 - **Native preview framing**: the input pane is sized from the detected mode (960x540 for 1080, 648x486 for NTSC 4:3, using the Display Aspect choice for SD). It relaunches when the live mode differs from the one it was sized for.
 
 ## Findings

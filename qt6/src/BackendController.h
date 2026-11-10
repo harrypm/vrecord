@@ -50,6 +50,8 @@ public:
     bool stopAllOutputs(const VrecordConfig& config, QString* errorMessage = nullptr);
     bool setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage = nullptr);
     bool isTestSignalActive() const;
+    // cheap (no PID-file / tasklist check): safe to call per frame
+    bool isManagedTestSignalRunning() const { return m_testSignalFeed && m_testSignalFeed->isRunning(); }
     bool applyVideoOutputConnection(const VrecordConfig& config, QString* errorMessage = nullptr) const;
     bool applyVideoInputConnection(const VrecordConfig& config, QString* errorMessage = nullptr) const;
 
@@ -69,6 +71,8 @@ public:
     bool startVideoPreview(const VrecordConfig& config, QString* errorMessage = nullptr);
     bool stopVideoPreview();
     bool isVideoPreviewActive() const;
+    // the running preview also drives the card output (relay)
+    bool isPreviewRelaying() const { return isVideoPreviewActive() && m_previewRelaying; }
 
     static QString deviceForOutput(const VrecordConfig& config);
 
@@ -115,6 +119,9 @@ private:
     FrameFeed* startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames);
     void stopFeed(QPointer<FrameFeed>& feed);
     void followInputMode(const QString& detected);
+    bool deviceIsFullDuplex(const QString& device) const;
+    void claimOutputFromPreview(const QString& outputDevice);
+    void releaseOutputClaim();
     VideoMode outputModeForTestSignal(const VrecordConfig& config) const;
 
     QString m_packageRoot;
@@ -132,6 +139,8 @@ private:
     QString m_lastReportedInputMode;
     VrecordConfig m_previewConfig;
     QTimer* m_inputModeTimer = nullptr;
+    bool m_previewRelaying = false;   // the running preview also drives the output
+    bool m_outputClaimed = false;     // playout / test signal owns the output
 
     // test signal (managed mode)
     QPointer<FrameFeed> m_testSignalFeed;

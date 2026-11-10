@@ -322,6 +322,11 @@ FrameFeed* BackendController::startFeed(const QString& kind, const QList<FrameFe
     // replaced are dropped together with it
     connect(feed, &FrameFeed::frameReady, feed, [this, feed, isInput] {
         const QImage frame = feed->takeFrame();
+        // a stopped feed lives on until deleteLater: drop its queued frames so
+        // they cannot repaint a pane that was already cleared
+        if (feed != m_previewFeed && feed != m_playoutFeed && feed != m_testSignalFeed) {
+            return;
+        }
         if (isInput) {
             emit inputFrame(frame);
         } else {
@@ -562,10 +567,14 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         return false;
     }
 
-    // the input and the output cannot be open at the same time on half-duplex
-    // cards: drop our outputs first
-    stopManagedFileOutputInternal(nullptr);
-    stopTestSignalInternal(nullptr);
+    // half-duplex cards cannot capture while they play out: drop our outputs
+    // first. Full-duplex cards (Intensity Pro 4K reports dxfu) run the
+    // preview alongside playout / the test signal.
+    if (!deviceIsFullDuplex(device)) {
+        stopManagedFileOutputInternal(nullptr);
+        stopTestSignalInternal(nullptr);
+        m_outputClaimed = false;
+    }
     stopFeed(m_previewFeed);
 
     const VideoMode mode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
@@ -598,7 +607,10 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
             relayPossible = (relayDevice != info.ffmpegName && relayDevice != info.modelName) || info.supportsFullDuplex;
         }
     }
-    const bool relay = config.value(QStringLiteral("PREVIEW_RELAY_CHOICE")) == QStringLiteral("true") && relayPossible;
+    // the relay needs the card output: while playout or the test signal owns
+    // it, preview without the relay (it comes back when the output is released)
+    const bool relay = config.value(QStringLiteral("PREVIEW_RELAY_CHOICE")) == QStringLiteral("true") && relayPossible && !m_outputClaimed;
+    m_previewRelaying = relay;
 
     // capture straight to a raw pipe: every captured frame is forwarded (no
     // fps filter), probing is cut to the minimum so the first frame arrives
@@ -703,6 +715,52 @@ void BackendController::followInputMode(const QString& detected) {
             startVideoPreview(config, nullptr);
         });
     }
+}
+
+bool BackendController::deviceIsFullDuplex(const QString& device) const {
+    for (const auto& info : DeckLinkDiscovery::enumerateDevices()) {
+        if (info.ffmpegName == device || info.modelName == device) {
+            return info.supportsFullDuplex;
+        }
+    }
+    return false;
+}
+
+// playout / the test signal is about to own the output of outputDevice
+void BackendController::claimOutputFromPreview(const QString& outputDevice) {
+    m_outputClaimed = true;
+    if (s_testMode || !m_previewFeed) {
+        return;
+    }
+    const bool sameCard = outputDevice == m_previewDevice;
+    if (sameCard && !deviceIsFullDuplex(m_previewDevice)) {
+        stopVideoPreview();
+        return;
+    }
+    if (m_previewRelaying) {
+        // the relay holds the output: relaunch the preview without it
+        const VrecordConfig config = m_previewConfig;
+        stopFeed(m_previewFeed);
+        startVideoPreview(config, nullptr);
+        QThread::msleep(300);   // let the driver release the output
+    }
+}
+
+// the user stopped playout / the test signal: give the relay its output back
+void BackendController::releaseOutputClaim() {
+    m_outputClaimed = false;
+    if (s_testMode || !m_previewFeed || m_previewRelaying
+        || m_previewConfig.value(QStringLiteral("PREVIEW_RELAY_CHOICE")) != QStringLiteral("true")) {
+        return;
+    }
+    QTimer::singleShot(400, this, [this] {
+        if (m_outputClaimed || isShellRunning() || !isVideoPreviewActive() || m_previewRelaying) {
+            return;
+        }
+        const VrecordConfig config = m_previewConfig;
+        stopFeed(m_previewFeed);
+        startVideoPreview(config, nullptr);
+    });
 }
 
 bool BackendController::stopVideoPreview() {
@@ -837,10 +895,10 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
                           .arg(QStringLiteral("%1/%2").arg(media.rateNum).arg(media.rateDen), standard);
     }
 
-    // the file playout owns the card output; on half-duplex cards the input
-    // cannot run alongside it either
+    // the file playout owns the card output: a relaying preview steps aside,
+    // a plain preview keeps running on full-duplex cards
+    claimOutputFromPreview(outputDevice);
     stopTestSignalInternal(nullptr);
-    stopVideoPreview();
     // tear the previous playout down BEFORE applying the connector (teardown
     // race: SetInt silently fails while the driver is still stopping a stream)
     stopManagedFileOutputInternal(nullptr);
@@ -882,6 +940,7 @@ bool BackendController::stopFileOutput(const VrecordConfig& config, QString* err
     Q_UNUSED(config);
     const bool ok = stopManagedFileOutputInternal(errorMessage);
     m_playbackCueSeconds = 0.0;
+    releaseOutputClaim();
     return ok;
 }
 
@@ -892,6 +951,7 @@ bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* err
     }
     const bool ok = stopManagedFileOutputInternal(errorMessage);
     m_playbackCueSeconds = 0.0;
+    releaseOutputClaim();
     return ok;
 }
 
@@ -1341,7 +1401,9 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
     if (!enabled) {
-        return stopTestSignalInternal(errorMessage);
+        const bool ok = stopTestSignalInternal(errorMessage);
+        releaseOutputClaim();
+        return ok;
     }
 
     const QString outputDevice = deviceForOutput(config);
@@ -1376,8 +1438,8 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
     // apply below hits the teardown race and silently fails (the new stream
     // then starts on a stale analog connector and the HDMI monitor stays dark)
     if (!s_testMode) {
+        claimOutputFromPreview(outputDevice);
         stopManagedFileOutputInternal(nullptr);
-        stopVideoPreview();
     }
     stopTestSignalInternal(nullptr);
     if (!s_testMode) {

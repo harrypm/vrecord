@@ -106,7 +106,24 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
     updateDerivedState();
 
     // frames arrive as fast as the card delivers them; each one repaints its pane
-    connect(&m_backend, &BackendController::inputFrame, m_inputView, &VideoView::setFrame);
+    connect(&m_backend, &BackendController::inputFrame, this, [this](const QImage& frame) {
+        m_inputView->setFrame(frame);
+        // relay: the card outputs exactly the input frames, so the output pane
+        // shows them too (playout / the test signal take the pane over)
+        if (m_backend.isPreviewRelaying() && !m_backend.isFileOutputActive() && !m_backend.isManagedTestSignalRunning()) {
+            if (!m_outputMirrorsInput) {
+                m_outputMirrorsInput = true;
+                m_outputView->setCaption(QStringLiteral("relay: live input on the output"));
+            }
+            m_outputView->setFrame(frame);
+        } else if (m_outputMirrorsInput) {
+            m_outputMirrorsInput = false;
+            if (!m_backend.isFileOutputActive() && !m_backend.isManagedTestSignalRunning()) {
+                m_outputView->setCaption(QString());
+                m_outputView->clearFrame(QStringLiteral("No hardware output running"));
+            }
+        }
+    });
     connect(&m_backend, &BackendController::outputFrame, m_outputView, &VideoView::setFrame);
     connect(&m_backend, &BackendController::inputStatus, this, [this](const QString& message) {
         m_inputView->setCaption(message.startsWith(QStringLiteral("streaming")) ? message.mid(11).chopped(1) : QString());
@@ -496,12 +513,10 @@ void MainWindow::buildUi() {
     m_activityText = new QPlainTextEdit(livePreviewBox);
     m_activityText->setReadOnly(true);
     m_activityText->setMaximumBlockCount(400);
-    m_activityText->setMaximumHeight(110);
     livePreviewLayout->addWidget(new QLabel(QStringLiteral("Input preview (native frame rate, straight from the capture)"), livePreviewBox));
-    livePreviewLayout->addWidget(m_inputView, 1);
+    livePreviewLayout->addWidget(m_inputView);
     livePreviewLayout->addWidget(m_previewToggleButton);
-    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Activity"), livePreviewBox));
-    livePreviewLayout->addWidget(m_activityText);
+    livePreviewLayout->addStretch(1);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Hardware video output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_videoOutputDeviceCombo);
     outputDeviceLayout->addWidget(m_previewRelayCheck);
@@ -509,7 +524,7 @@ void MainWindow::buildUi() {
     outputDeviceLayout->addWidget(m_relayDeviceCombo);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Output standard (file playout / test signal)"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_outputStandardCombo);
-    outputDeviceLayout->addWidget(m_outputView, 1);
+    outputDeviceLayout->addWidget(m_outputView);
     auto* transportRow = new QHBoxLayout();
     transportRow->addWidget(btnBack100);
     transportRow->addWidget(btnBack1);
@@ -519,8 +534,7 @@ void MainWindow::buildUi() {
     outputDeviceLayout->addLayout(transportRow);
     outputDeviceLayout->addWidget(m_seekSlider);
     outputDeviceLayout->addWidget(m_positionLabel);
-    outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Preview / playout notes"), outputDeviceBox));
-    outputDeviceLayout->addWidget(m_previewInfoText);
+    outputDeviceLayout->addStretch(1);
     previewRoot->addWidget(livePreviewBox, 1);
     previewRoot->addWidget(outputDeviceBox, 1);
     m_tabs->addTab(previewTab, QStringLiteral("Video Preview"));
@@ -685,10 +699,20 @@ void MainWindow::buildUi() {
     m_validationText = new QPlainTextEdit(validationBox);
     m_validationText->setReadOnly(true);
     validationLayout->addWidget(m_validationText);
+    auto* activityBox = new QGroupBox(QStringLiteral("Activity (preview, playout, backend sessions)"), logsTab);
+    auto* activityLayout = new QVBoxLayout(activityBox);
+    activityLayout->addWidget(m_activityText);
+    auto* notesBox = new QGroupBox(QStringLiteral("Preview / playout notes"), logsTab);
+    auto* notesLayout = new QVBoxLayout(notesBox);
+    notesLayout->addWidget(m_previewInfoText);
+    logsSplitter->addWidget(activityBox);
+    logsSplitter->addWidget(notesBox);
     logsSplitter->addWidget(summaryBox);
     logsSplitter->addWidget(validationBox);
-    logsSplitter->setStretchFactor(0, 1);
+    logsSplitter->setStretchFactor(0, 2);
     logsSplitter->setStretchFactor(1, 1);
+    logsSplitter->setStretchFactor(2, 1);
+    logsSplitter->setStretchFactor(3, 1);
     logsRoot->addWidget(logsSplitter);
     m_tabs->addTab(logsTab, QStringLiteral("Logs"));
 
@@ -839,9 +863,11 @@ void MainWindow::buildUi() {
     // the audio feeding it) relaunches the preview, starting it if needed
     const auto restartPreviewForRelay = [this] {
         updateDerivedState();
-        if (m_backend.isShellRunning() || m_backend.isFileOutputActive() || m_backend.isTestSignalActive()) {
-            return;   // the card output is busy; the relay applies on the next preview start
+        if (m_backend.isShellRunning()) {
+            return;
         }
+        // while playout / the test signal owns the output the backend starts
+        // the preview without the relay and adds it back when the output frees up
         m_backend.stopVideoPreview();
         startPreviewQuietly();
     };

@@ -151,6 +151,7 @@ private:
     QMap<QString, QRadioButton*> m_inputChoiceRadios;
     QStringList m_selfTestResults;
     bool m_populating = false;
+    bool m_outputMirrorsInput = false;
     QComboBox* m_outputStandardCombo = nullptr;
     QTimer* m_autosaveTimer = nullptr;
     VideoView* m_inputView = nullptr;
