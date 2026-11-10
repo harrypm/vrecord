@@ -27,9 +27,14 @@ namespace {
 bool s_testMode = false;
 QStringList s_captured;
 
-// ffmpeg decklink outdev default preroll (decklink_enc_c.c: preroll = 0.5 s):
-// the card shows a frame this long after ffmpeg hands it over
-constexpr double kDeckLinkPreroll = 0.5;
+// ffmpeg's decklink muxer keeps up to 2 x preroll frames scheduled on the
+// card ("frames buffer size" = 2 * preroll) and blocks once that is full, so
+// in steady state a frame reaches the wire 2 x preroll after ffmpeg emits it.
+// The panes are delayed by that much to show the frame on the wire.
+// Playout sets its preroll explicitly (shorter = lower output latency); the
+// test signal keeps ffmpeg's default of 0.5 s.
+constexpr double kPlayoutPreroll = 0.25;
+constexpr double kDefaultPreroll = 0.5;
 
 QString lockedPatternSize(const QString& pattern) {
     if (pattern.contains(QStringLiteral("UHD"), Qt::CaseInsensitive) || pattern.contains(QStringLiteral("2160p"), Qt::CaseInsensitive)) {
@@ -181,31 +186,6 @@ void sweepOrphanedTestStreams() {
                                   "Where-Object { $_.CommandLine -match 'vrecord-test-signal' } | "
                                   "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")});
     sweeper.waitForFinished(5000);
-}
-
-// QProcess::suspend()/resume() are Unix-only - use the ntdll process
-// primitives to hold the DeckLink playout on the exact frame
-using NtProcessControlFunc = LONG(WINAPI*)(HANDLE);
-
-bool suspendProcessById(qint64 pid, bool suspend) {
-    if (pid <= 0) {
-        return false;
-    }
-    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (!ntdll) {
-        return false;
-    }
-    const auto control = reinterpret_cast<NtProcessControlFunc>(GetProcAddress(ntdll, suspend ? "NtSuspendProcess" : "NtResumeProcess"));
-    if (!control) {
-        return false;
-    }
-    const HANDLE handle = OpenProcess(PROCESS_SUSPEND_RESUME, FALSE, static_cast<DWORD>(pid));
-    if (!handle) {
-        return false;
-    }
-    const LONG status = control(handle);
-    CloseHandle(handle);
-    return status == 0;
 }
 
 // the shell names its player window "mode:record - ..." / "mode:passthrough
@@ -818,9 +798,9 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
         m_playbackDevice = outputDevice;
         m_playbackDuration = 60.0;
         m_playbackFps = 25.0;
-        m_playbackCueSeconds = 0.0;
-        m_playbackFrozen = false;
-        m_playbackJogged = false;
+        m_playbackCueFrame = 0;
+        m_playbackTotalFrames = qRound64(m_playbackDuration * m_playbackFps);
+        m_playbackHolding = false;
         m_testPlaybackActive = true;
         return true;
     }
@@ -919,6 +899,9 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
     }
     VideoModes::previewSize(target.height, aspect, &m_previewWidth, &m_previewHeight);
 
+    if (playFile != m_playbackFile) {
+        m_playbackCueFrame = 0;   // another file: start at its first frame
+    }
     m_playbackMedia = media;
     m_playbackMode = target;
     m_playbackFilter = filter;
@@ -927,19 +910,22 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
     m_playbackDevice = outputDevice;
     m_playbackDuration = media.duration;
     m_playbackFps = target.fps() > 0 ? target.fps() : 25.0;
-    m_playbackDelayFrames = qRound(kDeckLinkPreroll * m_playbackFps);
+    m_playbackDelayFrames = qRound(2.0 * kPlayoutPreroll * m_playbackFps);
+    m_playbackTotalFrames = media.duration > 0 ? qMax<qint64>(1, qint64(std::floor(media.duration * m_playbackFps + 1e-6))) : 0;
     m_playbackConfig = config;
-    m_playbackFrozen = false;
-    m_playbackJogged = false;
-    // a cued position survives a stop: toggle Play resumes from it
-    const double resumeAt = (m_playbackCueSeconds > 0.05 && m_playbackCueSeconds < media.duration) ? m_playbackCueSeconds : 0.0;
-    return launchFileOutputProcess(resumeAt, errorMessage);
+    m_playbackHolding = false;
+    // a cued / halted frame survives: Play resumes exactly there
+    qint64 resumeFrame = m_playbackCueFrame;
+    if (resumeFrame < 0 || (m_playbackTotalFrames > 0 && resumeFrame >= m_playbackTotalFrames)) {
+        resumeFrame = 0;
+    }
+    return launchFileOutputProcess(resumeFrame, false, errorMessage);
 }
 
 bool BackendController::stopFileOutput(const VrecordConfig& config, QString* errorMessage) {
     Q_UNUSED(config);
     const bool ok = stopManagedFileOutputInternal(errorMessage);
-    m_playbackCueSeconds = 0.0;
+    m_playbackCueFrame = 0;
     releaseOutputClaim();
     return ok;
 }
@@ -950,7 +936,7 @@ bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* err
         return false;
     }
     const bool ok = stopManagedFileOutputInternal(errorMessage);
-    m_playbackCueSeconds = 0.0;
+    m_playbackCueFrame = 0;
     releaseOutputClaim();
     return ok;
 }
@@ -1066,10 +1052,50 @@ VideoMode BackendController::nativePlayoutMode(const MediaInfo& media, const QSt
     return best;
 }
 
-bool BackendController::launchFileOutputProcess(double atSeconds, QString* errorMessage) {
+// Positions are frame indices on the output timeline (the playout rate).
+// Seeking to frame N uses the midpoint before it, so ffmpeg's accurate seek
+// (which keeps frames with pts >= the seek time) starts exactly on frame N
+// whatever the float rounding.
+double BackendController::seekSecondsForFrame(qint64 frame) const {
+    if (frame <= 0) {
+        return 0.0;
+    }
+    const int num = m_playbackMode.rateNum > 0 ? m_playbackMode.rateNum : 25;
+    const int den = m_playbackMode.rateNum > 0 ? m_playbackMode.rateDen : 1;
+    return (double(frame) - 0.5) * den / num;
+}
+
+qint64 BackendController::wrapFrame(qint64 frame) const {
+    if (m_playbackTotalFrames > 0) {
+        frame %= m_playbackTotalFrames;
+        if (frame < 0) {
+            frame += m_playbackTotalFrames;
+        }
+    }
+    return qMax<qint64>(frame, 0);
+}
+
+qint64 BackendController::clampFrame(qint64 frame) const {
+    if (m_playbackTotalFrames > 0) {
+        frame = qMin(frame, m_playbackTotalFrames - 1);
+    }
+    return qMax<qint64>(frame, 0);
+}
+
+// hold = pause: one frame (N) is repeated to the card with silent audio, so
+// the card and the pane both show exactly the frame the transport is on.
+// (Suspending the playout instead lets the card play out its 0.5 s preroll
+// buffer first and stop ~25 frames past the frame on screen.)
+bool BackendController::launchFileOutputProcess(qint64 frame, bool hold, QString* errorMessage) {
+    frame = hold ? clampFrame(frame) : wrapFrame(frame);
+    const double seekSeconds = seekSecondsForFrame(frame);
     if (s_testMode) {
-        s_captured << (QStringLiteral("ffmpeg-ma -stream_loop -1 -ss %1 -i %2 -f decklink %3")
-                           .arg(QString::number(atSeconds, 'f', 3), m_playbackFile, m_playbackDevice));
+        s_captured << (QStringLiteral("ffmpeg-ma %1-ss %2 -i %3 -f decklink %4")
+                           .arg(hold ? QStringLiteral("(hold) ") : QStringLiteral("-stream_loop -1 "),
+                                QString::number(seekSeconds, 'f', 6), m_playbackFile, m_playbackDevice));
+        m_playbackStartFrame = frame;
+        m_playbackCueFrame = frame;
+        m_playbackHolding = hold;
         return true;
     }
     stopFeed(m_playoutFeed);
@@ -1081,26 +1107,46 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
     // fights it - a 4K50 HEVC file then only reached ~34 fps on the wire
     // instead of 50.
     QStringList arguments{QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
-                          QStringLiteral("-loglevel"), QStringLiteral("error"),
-                          QStringLiteral("-stream_loop"), QStringLiteral("-1")};
-    if (atSeconds > 0.05) {
-        arguments << QStringLiteral("-ss") << QString::number(atSeconds, 'f', 3);
+                          QStringLiteral("-loglevel"), QStringLiteral("error")};
+    if (!hold) {
+        arguments << QStringLiteral("-stream_loop") << QStringLiteral("-1");
+    }
+    if (seekSeconds > 0.0) {
+        arguments << QStringLiteral("-ss") << QString::number(seekSeconds, 'f', 6);
     }
     arguments << QStringLiteral("-i") << m_playbackFile;
+    if (hold) {
+        arguments << QStringLiteral("-f") << QStringLiteral("lavfi")
+                  << QStringLiteral("-i") << QStringLiteral("anullsrc=r=48000:cl=stereo");
+    }
     // card: conform once, straight into the card's 10-bit 4:2:2 (v210) in one
     // swscale pass, then split - the pane is scaled from that same frame. Field
     // marking is frame-level via setfield; no explicit format_code (the muxer
     // would then validate the container field order and reject the output).
-    QString cardChain = m_playbackFilter;
+    const int num = m_playbackMode.rateNum > 0 ? m_playbackMode.rateNum : 25;
+    const int den = m_playbackMode.rateNum > 0 ? m_playbackMode.rateDen : 1;
+    QString cardChain;
+    if (hold) {
+        // the first decoded frame (= frame N), repeated at the output rate
+        cardChain = QStringLiteral("trim=end_frame=1,loop=loop=-1:size=1,setpts=N*%1/%2/TB").arg(den).arg(num);
+    }
+    if (!m_playbackFilter.isEmpty()) {
+        cardChain += (cardChain.isEmpty() ? QString() : QStringLiteral(",")) + m_playbackFilter;
+    }
     cardChain += (cardChain.isEmpty() ? QString() : QStringLiteral(",")) + QStringLiteral("format=yuv422p10le");
     const QString graph = QStringLiteral("[0:v:0]%1,split=2[card][pane];[pane]scale=%2:%3:flags=fast_bilinear,format=bgra[view]")
                               .arg(cardChain).arg(m_previewWidth).arg(m_previewHeight);
     arguments << QStringLiteral("-filter_complex") << graph
-              << QStringLiteral("-map") << QStringLiteral("[card]") << QStringLiteral("-map") << QStringLiteral("0:a:0?")
-              << QStringLiteral("-c:v") << QStringLiteral("v210")
+              << QStringLiteral("-map") << QStringLiteral("[card]")
+              << QStringLiteral("-map") << (hold ? QStringLiteral("1:a:0") : QStringLiteral("0:a:0?"));
+    if (hold) {
+        arguments << QStringLiteral("-r") << QStringLiteral("%1/%2").arg(num).arg(den);
+    }
+    arguments << QStringLiteral("-c:v") << QStringLiteral("v210")
               << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le")
               << QStringLiteral("-ar") << QStringLiteral("48000")
               << QStringLiteral("-ac") << QStringLiteral("2")
+              << QStringLiteral("-preroll") << QString::number(kPlayoutPreroll, 'f', 2)
               << QStringLiteral("-f") << QStringLiteral("decklink") << m_playbackDevice
               << QStringLiteral("-map") << QStringLiteral("[view]")
               << QStringLiteral("-an")
@@ -1109,9 +1155,10 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
               << QStringLiteral("pipe:1");
 
     FrameFeed::Attempt attempt;
-    attempt.label = QStringLiteral("playout %1").arg(m_playbackMode.formatCode);
+    attempt.label = QStringLiteral("%1 %2 frame %3").arg(hold ? QStringLiteral("hold") : QStringLiteral("playout"), m_playbackMode.formatCode).arg(frame);
     attempt.arguments = arguments;
-    m_playoutFeed = startFeed(QStringLiteral("output"), {attempt}, m_previewWidth, m_previewHeight, m_playbackDelayFrames);
+    // a held frame is the same on the wire and in the pane: no preroll delay
+    m_playoutFeed = startFeed(QStringLiteral("output"), {attempt}, m_previewWidth, m_previewHeight, hold ? 0 : m_playbackDelayFrames);
 
     // the card refuses a mode within the first second; report it instead of
     // leaving a dead transport
@@ -1129,52 +1176,51 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
         }
         return false;
     }
-    // remember the seek offset: positions are counted from it
-    m_playbackSeekOffset = atSeconds;
-    m_playbackFrozen = false;
-    m_playbackJogged = false;
-    emit outputStatus(QStringLiteral("playing %1 (%2)").arg(QFileInfo(m_playbackFile).fileName(), m_playbackDescription));
+    m_playbackStartFrame = frame;
+    m_playbackCueFrame = frame;
+    m_playbackHolding = hold;
+    if (hold) {
+        emit outputStatus(QStringLiteral("holding %1 at frame %2").arg(QFileInfo(m_playbackFile).fileName()).arg(frame));
+    } else {
+        emit outputStatus(QStringLiteral("playing %1 (%2)").arg(QFileInfo(m_playbackFile).fileName(), m_playbackDescription));
+    }
     return true;
 }
 
 bool BackendController::stopManagedFileOutputInternal(QString* errorMessage) {
     Q_UNUSED(errorMessage);
     if (m_playoutFeed) {
-        // thaw a frozen playout first so it can be torn down promptly
-        suspendProcessById(m_playoutFeed->processId(), false);
         stopFeed(m_playoutFeed);
         emit outputStatus(QStringLiteral("stopped"));
     }
-    m_playbackFrozen = false;
-    m_playbackJogged = false;
+    m_playbackHolding = false;
     m_testPlaybackActive = false;
-    m_playbackSeekOffset = 0.0;
     return true;
 }
 
-double BackendController::currentPlaybackSeconds() const {
-    if (m_playbackFrozen) {
-        return m_playbackFreezeSeconds;
+// the frame on the wire: frames the pane has shown (it is held back by the
+// card preroll, so it shows what the card is outputting) from the start frame
+qint64 BackendController::currentPlaybackFrame() const {
+    if (m_playbackHolding || s_testMode) {
+        return m_playbackCueFrame;
     }
     if (m_playoutFeed && m_playoutFeed->isRunning()) {
-        // frames on screen = frames delivered to the pane (the pane is held
-        // back by the card preroll, so this is the frame on the wire)
-        double seconds = m_playbackSeekOffset + m_playoutFeed->framesDelivered() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
-        if (m_playbackDuration > 0) {
-            seconds = std::fmod(seconds, m_playbackDuration);
-        }
-        return seconds;
+        return wrapFrame(m_playbackStartFrame + m_playoutFeed->framesDelivered());
     }
-    return m_playbackCueSeconds;
+    return m_playbackCueFrame;
 }
 
-bool BackendController::showPlayFrame(double seconds, QString* errorMessage) {
+double BackendController::currentPlaybackSeconds() const {
+    return currentPlaybackFrame() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
+}
+
+bool BackendController::showPlayFrame(qint64 frame, QString* errorMessage) {
     if (s_testMode || m_playbackFile.isEmpty() || m_previewWidth <= 0 || m_previewHeight <= 0) {
         return true;
     }
     QStringList arguments{QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
                           QStringLiteral("-loglevel"), QStringLiteral("error"),
-                          QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+                          QStringLiteral("-ss"), QString::number(seekSecondsForFrame(frame), 'f', 6),
                           QStringLiteral("-i"), m_playbackFile,
                           QStringLiteral("-frames:v"), QStringLiteral("1")};
     arguments << previewPipeOutput(m_playbackFilter, m_previewWidth, m_previewHeight);
@@ -1184,59 +1230,48 @@ bool BackendController::showPlayFrame(double seconds, QString* errorMessage) {
     if (!extractor.waitForFinished(10000)) {
         extractor.kill();
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not render the frame at %1s.").arg(QString::number(seconds, 'f', 2));
+            *errorMessage = QStringLiteral("Could not render frame %1.").arg(frame);
         }
         return false;
     }
     const QByteArray data = extractor.readAllStandardOutput();
     const qsizetype frameBytes = qsizetype(m_previewWidth) * m_previewHeight * 4;
     if (data.size() >= frameBytes) {
-        QImage frame(m_previewWidth, m_previewHeight, QImage::Format_RGB32);
-        std::memcpy(frame.bits(), data.constData(), size_t(frameBytes));
-        emit outputFrame(frame);
+        QImage image(m_previewWidth, m_previewHeight, QImage::Format_RGB32);
+        std::memcpy(image.bits(), data.constData(), size_t(frameBytes));
+        emit outputFrame(image);
     }
     return true;
 }
 
 bool BackendController::togglePauseFileOutput() {
     if (s_testMode) {
-        m_playbackFrozen = !m_playbackFrozen;
+        m_playbackHolding = !m_playbackHolding;
         return true;
     }
     if (!isFileOutputActive()) {
-        // transport start: fresh playout, or resume from the cued position
+        // transport start: fresh playout, or resume from the cued / halted frame
         VrecordConfig config = m_playbackConfig;
         return startFileOutput(config, nullptr);
     }
-    const qint64 playbackPid = m_playoutFeed->processId();
-    if (!m_playbackFrozen) {
-        // freeze: suspend the process so the card holds the last scheduled
-        // frame (no reload); the pane jumps to that same frame
-        suspendProcessById(playbackPid, true);
-        m_playoutFeed->flushDelay();
-        double seconds = m_playbackSeekOffset + m_playoutFeed->framesReceived() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
-        if (m_playbackDuration > 0) {
-            seconds = std::fmod(seconds, m_playbackDuration);
-        }
-        m_playbackFreezeSeconds = seconds;
-        m_playbackCueSeconds = seconds;
-        m_playbackFrozen = true;
-        emit outputStatus(QStringLiteral("frozen"));
-    } else if (m_playbackJogged) {
-        // the cue was jogged while frozen: restart at the new position
-        const double cue = m_playbackFreezeSeconds;
-        stopManagedFileOutputInternal(nullptr);
-        m_playbackCueSeconds = cue;
-        launchFileOutputProcess(cue, nullptr);
-    } else {
-        // plain resume from the frozen frame, no reload; frames delivered so
-        // far are re-based so the position keeps counting from the freeze
-        suspendProcessById(playbackPid, false);
-        m_playbackSeekOffset = m_playbackFreezeSeconds - m_playoutFeed->framesDelivered() / (m_playbackFps > 0 ? m_playbackFps : 25.0);
-        m_playbackFrozen = false;
-        m_playbackCueSeconds = m_playbackFreezeSeconds;
-        emit outputStatus(QStringLiteral("playing %1 (%2)").arg(QFileInfo(m_playbackFile).fileName(), m_playbackDescription));
+    if (!m_playbackHolding) {
+        // pause on the frame that is on the wire right now
+        return launchFileOutputProcess(currentPlaybackFrame(), true, nullptr);
     }
+    // resume with the frame after the held one
+    return launchFileOutputProcess(m_playbackCueFrame + 1, false, nullptr);
+}
+
+bool BackendController::haltFileOutputForRelay() {
+    if (!isFileOutputActive() || s_testMode) {
+        return false;
+    }
+    const qint64 frame = currentPlaybackFrame();
+    stopManagedFileOutputInternal(nullptr);
+    m_playbackCueFrame = frame;
+    m_playbackHolding = false;
+    emit outputStatus(QStringLiteral("halted %1 at frame %2 - relay has the output").arg(QFileInfo(m_playbackFile).fileName()).arg(frame));
+    releaseOutputClaim();
     return true;
 }
 
@@ -1245,11 +1280,11 @@ bool BackendController::isFileOutputActive() const {
 }
 
 bool BackendController::isFileOutputPaused() const {
-    return isFileOutputActive() && m_playbackFrozen;
+    return isFileOutputActive() && m_playbackHolding;
 }
 
 bool BackendController::isFileOutputCued() const {
-    return !isFileOutputActive() && m_playbackCueSeconds > 0.05;
+    return !isFileOutputActive() && !m_playbackFile.isEmpty() && m_playbackCueFrame > 0;
 }
 
 double BackendController::fileOutputPositionSeconds() const {
@@ -1272,32 +1307,22 @@ bool BackendController::stepFileOutput(int frames, QString* errorMessage) {
     if (frames == 0) {
         return true;
     }
-    const double delta = frames / (m_playbackFps > 0 ? m_playbackFps : 25.0);
-    // while playing: seek by the offset and keep playing; while frozen or
-    // stopped: jog the held position and render that frame into the pane
-    if (isFileOutputActive() && !m_playbackFrozen) {
-        return seekFileOutput(currentPlaybackSeconds() + delta, errorMessage);
+    if (isFileOutputActive() && !m_playbackHolding) {
+        // playing: jump by the frames and keep playing
+        return launchFileOutputProcess(currentPlaybackFrame() + frames, false, errorMessage);
     }
-    const double base = m_playbackFrozen ? m_playbackFreezeSeconds : m_playbackCueSeconds;
-    double target = base + delta;
-    if (m_playbackDuration > 0) {
-        target = qMin(target, m_playbackDuration);
+    const qint64 target = clampFrame(m_playbackCueFrame + frames);
+    if (isFileOutputActive() && m_playbackHolding) {
+        // paused: the card and the pane move to the new frame
+        return launchFileOutputProcess(target, true, errorMessage);
     }
-    target = qMax(target, 0.0);
-    if (m_playbackFrozen) {
-        m_playbackFreezeSeconds = target;
-        m_playbackJogged = true;
-    }
-    m_playbackCueSeconds = target;
+    // cued / halted (relay may own the output): move the cue, show it in the pane
+    m_playbackCueFrame = target;
     return showPlayFrame(target, errorMessage);
 }
 
 bool BackendController::seekFileOutput(double seconds, QString* errorMessage) {
-    double target = seconds;
-    if (m_playbackDuration > 0) {
-        target = qMin(target, m_playbackDuration);
-    }
-    target = qMax(target, 0.0);
+    const qint64 target = clampFrame(qRound64(qMax(seconds, 0.0) * (m_playbackFps > 0 ? m_playbackFps : 25.0)));
     if (!isFileOutputActive() && !s_testMode) {
         if (m_playbackFile.isEmpty()) {
             if (errorMessage) {
@@ -1305,22 +1330,12 @@ bool BackendController::seekFileOutput(double seconds, QString* errorMessage) {
             }
             return false;
         }
-        // stopped: cue the position only - toggle Play to start there
-        m_playbackCueSeconds = target;
+        // stopped / halted: cue the frame only - Play starts there
+        m_playbackCueFrame = target;
         return showPlayFrame(target, errorMessage);
     }
-    m_playbackCueSeconds = target;
-    if (s_testMode) {
-        s_captured << (QStringLiteral("ffmpeg-ma -stream_loop -1 -ss %1 -i %2 -f decklink %3")
-                           .arg(QString::number(target, 'f', 3), m_playbackFile, m_playbackDevice));
-        return true;
-    }
-    // restart at the new position (a frozen playout resumes playing, as on
-    // macOS/Linux with the scrub bar release)
-    if (m_playoutFeed) {
-        suspendProcessById(m_playoutFeed->processId(), false);
-    }
-    return launchFileOutputProcess(target, errorMessage);
+    // playing keeps playing from there, paused stays paused on that frame
+    return launchFileOutputProcess(target, m_playbackHolding, errorMessage);
 }
 
 // ---------------------------------------------------------------- connectors
@@ -1499,7 +1514,7 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
             attempt.label = QStringLiteral("test signal %1").arg(requestedSize);
             attempt.arguments = arguments;
             attempt.arguments << previewPipeOutput(videoFilters.join(QLatin1Char(',')), width, height);
-            m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(kDeckLinkPreroll * signalMode.fps()));
+            m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(2.0 * kDefaultPreroll * signalMode.fps()));
             QThread::msleep(1500);
             if (!m_testSignalFeed || !m_testSignalFeed->isRunning()) {
                 const QString tail = m_testSignalFeed ? m_testSignalFeed->stderrTail().trimmed().section(QLatin1Char('\n'), -1) : QString();

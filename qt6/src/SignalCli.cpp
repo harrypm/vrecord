@@ -11,6 +11,8 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QThread>
+#include <QElapsedTimer>
+#include <QEventLoop>
 
 #include <DeckLinkAPI.h>
 
@@ -107,6 +109,82 @@ QString describeConnection(LONGLONG value) {
 // Direct SDK playout on the current (16.x) interfaces with driver-allocated
 // frames - the path Resolve takes - to tell a card/cabling problem apart from
 // a problem in ffmpeg's decklink muxer (which uses the 14.2.1 compat ABI).
+QString packageRootForTest() {
+    return QCoreApplication::applicationDirPath();
+}
+
+// Hardware check of the frame-exact transport and the relay hand-over, on the
+// same BackendController code the GUI uses (managed outputs, throwaway config):
+// play -> pause holds the on-wire frame -> step +1 -> resume -> relay halts the
+// file -> Play resumes from the halted frame.
+int runTransportTest(const QString& packageRoot, const QString& file) {
+    VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
+    config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-transporttest.conf"));
+    if (!file.isEmpty()) {
+        config.setValue(QStringLiteral("VRECORD_PLAY_FILE"), QDir::fromNativeSeparators(file));
+    }
+    config.setValue(QStringLiteral("OUTPUT_STANDARD_CHOICE"), QStringLiteral("Auto (match file)"));
+    config.setValue(QStringLiteral("PREVIEW_RELAY_CHOICE"), QStringLiteral("true"));
+    BackendController backend(packageRoot);
+    backend.setManagedOutputs(true);
+    const auto pump = [](int ms) {
+        QElapsedTimer t;
+        t.start();
+        while (t.elapsed() < ms) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(10);
+        }
+    };
+    const auto frame = [&] { return qRound64(backend.fileOutputPositionSeconds() * backend.fileOutputFps()); };
+    int failures = 0;
+    const auto check = [&](const char* name, bool ok, const QString& detail) {
+        std::cout << (ok ? "PASS " : "FAIL ") << name << "  " << detail.toStdString() << std::endl;
+        failures += ok ? 0 : 1;
+    };
+    QString error;
+    check("preview with relay starts", backend.startVideoPreview(config, &error), error);
+    pump(2500);
+    check("relay is on the output", backend.isPreviewRelaying(), {});
+    check("playout starts", backend.startFileOutput(config, &error), error);
+    pump(3000);
+    check("preview keeps running during playout, relay stepped aside",
+          backend.isVideoPreviewActive() && !backend.isPreviewRelaying(), {});
+    const qint64 beforePause = frame();
+    backend.togglePauseFileOutput();
+    const qint64 held = frame();
+    pump(1500);
+    check("pause holds the on-wire frame", backend.isFileOutputPaused() && frame() == held && qAbs(held - beforePause) <= 3,
+          QStringLiteral("before=%1 held=%2 after 1.5 s=%3").arg(beforePause).arg(held).arg(frame()));
+    backend.stepFileOutput(1, &error);
+    pump(800);
+    check("step +1 while paused", backend.isFileOutputPaused() && frame() == held + 1,
+          QStringLiteral("now=%1 expected=%2").arg(frame()).arg(held + 1));
+    backend.togglePauseFileOutput();
+    pump(2000);
+    const qint64 played = frame();
+    check("resume continues after the held frame", !backend.isFileOutputPaused() && played > held + 1 && played < held + 1 + 160,
+          QStringLiteral("after 2 s=%1 (from %2)").arg(played).arg(held + 2));
+    const qint64 beforeHalt = frame();
+    check("relay re-enabled halts the file", backend.haltFileOutputForRelay(), {});
+    const qint64 halted = frame();
+    pump(2500);
+    check("file stays halted on its frame, relay back on the output",
+          !backend.isFileOutputActive() && frame() == halted && backend.isPreviewRelaying() && qAbs(halted - beforeHalt) <= 3,
+          QStringLiteral("halted=%1 relay=%2").arg(halted).arg(backend.isPreviewRelaying()));
+    backend.togglePauseFileOutput();   // Play
+    pump(400);
+    const qint64 resumed = frame();
+    check("Play resumes the file from the halted frame", backend.isFileOutputActive() && resumed >= halted && resumed <= halted + 30,
+          QStringLiteral("halted=%1 now=%2").arg(halted).arg(resumed));
+    pump(1500);
+    backend.stopAllOutputs(config, nullptr);
+    backend.stopVideoPreview();
+    pump(500);
+    QFile::remove(config.configPath);
+    std::cout << "TRANSPORT TEST: " << failures << " failures" << std::endl;
+    return failures == 0 ? 0 : 1;
+}
+
 // write bmdDeckLinkConfigVideoOutputConnection exactly (mask, e.g. 0x2 = HDMI),
 // persist it, and read it back
 int runSetOutputConnection(LONGLONG mask) {
@@ -394,6 +472,9 @@ int main(int argc, char** argv) {
 
     if (command == QStringLiteral("probe")) {
         return runProbe();
+    }
+    if (command == QStringLiteral("transporttest")) {
+        return runTransportTest(packageRootForTest(), arguments.value(2));
     }
     if (command == QStringLiteral("setout")) {
         return runSetOutputConnection(arguments.value(2).toLongLong(nullptr, 0));

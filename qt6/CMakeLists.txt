@@ -24,6 +24,8 @@ add_executable(VrecordQt6 WIN32
   src/BackendController.cpp
   src/FrameFeed.cpp
   src/VideoView.cpp
+  resources/vrecord.rc
+  resources/vrecord.qrc
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
 )
 
@@ -43,6 +45,7 @@ target_link_libraries(VrecordQt6 PRIVATE
 
 add_executable(vsignal
   src/SignalCli.cpp
+  resources/vrecord.rc
   src/VrecordConfig.cpp
   src/DeckLinkDiscovery.cpp
   src/BackendController.cpp

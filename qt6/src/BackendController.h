@@ -57,6 +57,9 @@ public:
 
     // managed file playout transport (pause holds the card on the exact frame)
     bool togglePauseFileOutput();
+    // relay is back on: stop the file on its exact frame (cued) so the relay
+    // gets the output; Play resumes from that frame
+    bool haltFileOutputForRelay();
     bool stepFileOutput(int frames, QString* errorMessage = nullptr);
     bool seekFileOutput(double seconds, QString* errorMessage = nullptr);
     bool isFileOutputActive() const;
@@ -108,14 +111,18 @@ private:
     QString testSignalLogPath() const;
     bool stopTrackedProcess(const QString& pidFilePath, QString* errorMessage) const;
     bool stopTestSignalInternal(QString* errorMessage);
-    bool launchFileOutputProcess(double atSeconds, QString* errorMessage);
+    bool launchFileOutputProcess(qint64 frame, bool hold, QString* errorMessage);
+    double seekSecondsForFrame(qint64 frame) const;
+    qint64 wrapFrame(qint64 frame) const;
+    qint64 clampFrame(qint64 frame) const;
+    qint64 currentPlaybackFrame() const;
     bool stopManagedFileOutputInternal(QString* errorMessage);
     bool probeMediaFile(const QString& file, MediaInfo* info, QString* errorMessage) const;
     // the mode a file plays out in when auto-detect is on: its own mode if the
     // card has it, else the card's largest raster at the file's frame rate
     VideoMode nativePlayoutMode(const MediaInfo& media, const QString& device, QString* note) const;
     double currentPlaybackSeconds() const;
-    bool showPlayFrame(double seconds, QString* errorMessage);
+    bool showPlayFrame(qint64 frame, QString* errorMessage);
     FrameFeed* startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames);
     void stopFeed(QPointer<FrameFeed>& feed);
     void followInputMode(const QString& detected);
@@ -155,11 +162,10 @@ private:
     int m_playbackDelayFrames = 0;
     double m_playbackDuration = 0.0;
     double m_playbackFps = 25.0;
-    double m_playbackSeekOffset = 0.0;
-    double m_playbackFreezeSeconds = 0.0;
-    double m_playbackCueSeconds = 0.0;
-    bool m_playbackFrozen = false;
-    bool m_playbackJogged = false;
+    qint64 m_playbackStartFrame = 0;   // frame the running process started at
+    qint64 m_playbackCueFrame = 0;     // held / cued / halted frame
+    qint64 m_playbackTotalFrames = 0;  // at the playout rate (0 = unknown)
+    bool m_playbackHolding = false;    // paused: a hold process repeats the cue frame
     bool m_testPlaybackActive = false;
     QString m_playbackFile;
     QString m_playbackDevice;

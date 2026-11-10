@@ -159,6 +159,7 @@ private:
     QPlainTextEdit* m_activityText = nullptr;
     QPushButton* m_recordButton = nullptr;
     QLabel* m_positionLabel = nullptr;
+    QLabel* m_transportStateLabel = nullptr;
     QLabel* m_outputNameLabel = nullptr;
     QSlider* m_seekSlider = nullptr;
     QPushButton* m_playPauseButton = nullptr;

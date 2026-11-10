@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QScreen>
 #include <QTextStream>
 #include <QTimer>
@@ -14,6 +15,8 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("vrecord-qt6"));
     QApplication::setOrganizationName(QStringLiteral("vrecord"));
+    // the vrecord icon of the GTK launcher (also the exe icon via vrecord.rc)
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/vrecord.ico")));
 
     const QString appDir = QCoreApplication::applicationDirPath();
     const QString startupLogPath = QDir(appDir).filePath(QStringLiteral("VrecordQt6-startup.log"));

@@ -10,6 +10,8 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QGridLayout>
@@ -138,7 +140,7 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
         appendActivity(QStringLiteral("input: %1").arg(message));
     });
     connect(&m_backend, &BackendController::outputStatus, this, [this](const QString& message) {
-        if (message.startsWith(QStringLiteral("playing")) || message.startsWith(QStringLiteral("test signal"))) {
+        if (message.startsWith(QStringLiteral("playing")) || message.startsWith(QStringLiteral("holding")) || message.startsWith(QStringLiteral("test signal"))) {
             m_outputView->setCaption(message);
         } else if (message.startsWith(QStringLiteral("stopped")) || message.startsWith(QStringLiteral("could not"))) {
             m_outputView->clearFrame(QStringLiteral("Output %1").arg(message));
@@ -507,7 +509,19 @@ void MainWindow::buildUi() {
     btnFwd100->setMinimumSize(transportButtonSize);
     m_seekSlider = new QSlider(Qt::Horizontal, outputDeviceBox);
     m_seekSlider->setRange(0, 10000);
-    m_positionLabel = new QLabel(QStringLiteral("00:00:00:00"), outputDeviceBox);
+    // fixed-format, monospace counter: the digits never move between play,
+    // pause and halt; the state sits in its own fixed-width tag
+    m_positionLabel = new QLabel(QStringLiteral("00:00:00:00 / 00:00:00:00   frame 0"), outputDeviceBox);
+    m_positionLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    m_positionLabel->setMinimumWidth(QFontMetrics(m_positionLabel->font()).horizontalAdvance(QStringLiteral("00:00:00:00 / 00:00:00:00   frame 0000000")) + 8);
+    m_transportStateLabel = new QLabel(QStringLiteral("STOPPED"), outputDeviceBox);
+    m_transportStateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    {
+        QFont stateFont = m_transportStateLabel->font();
+        stateFont.setBold(true);
+        m_transportStateLabel->setFont(stateFont);
+        m_transportStateLabel->setFixedWidth(QFontMetrics(stateFont).horizontalAdvance(QStringLiteral("HALTED - RELAY ON OUTPUT")) + 12);
+    }
     m_previewToggleButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Start Preview"), livePreviewBox);
     m_previewToggleButton->setIconSize(QSize(20, 20));
     m_activityText = new QPlainTextEdit(livePreviewBox);
@@ -533,7 +547,11 @@ void MainWindow::buildUi() {
     transportRow->addWidget(btnFwd100);
     outputDeviceLayout->addLayout(transportRow);
     outputDeviceLayout->addWidget(m_seekSlider);
-    outputDeviceLayout->addWidget(m_positionLabel);
+    auto* counterRow = new QHBoxLayout();
+    counterRow->addWidget(m_positionLabel);
+    counterRow->addStretch(1);
+    counterRow->addWidget(m_transportStateLabel);
+    outputDeviceLayout->addLayout(counterRow);
     outputDeviceLayout->addStretch(1);
     previewRoot->addWidget(livePreviewBox, 1);
     previewRoot->addWidget(outputDeviceBox, 1);
@@ -871,7 +889,16 @@ void MainWindow::buildUi() {
         m_backend.stopVideoPreview();
         startPreviewQuietly();
     };
-    connect(m_previewRelayCheck, &QCheckBox::clicked, this, [restartPreviewForRelay](bool) { restartPreviewForRelay(); });
+    connect(m_previewRelayCheck, &QCheckBox::clicked, this, [this, restartPreviewForRelay](bool on) {
+        // relay back on while a file is loaded: the file stops on its exact
+        // frame (Play resumes there) and the relay takes the output
+        if (on && m_backend.isFileOutputActive()) {
+            m_backend.haltFileOutputForRelay();
+            appendActivity(QStringLiteral("relay on: file halted at %1 s, press Play to resume it").arg(m_backend.fileOutputPositionSeconds(), 0, 'f', 3));
+        }
+        restartPreviewForRelay();
+        updateTransportUi();
+    });
     connect(m_relayDeviceCombo, &QComboBox::activated, this, [this, restartPreviewForRelay](int) {
         if (m_previewRelayCheck->isChecked()) {
             restartPreviewForRelay();
@@ -1404,15 +1431,22 @@ void MainWindow::updateTransportUi() {
             .arg(total % 60, 2, 10, QLatin1Char('0'));
     };
     const QString tc = QStringLiteral("%1:%2").arg(formatHms(secondsTotal)).arg(framePart, 2, 10, QLatin1Char('0'));
+    const qint64 durationFrames = qRound64(duration * fps);
+    const QString durationTc = QStringLiteral("%1:%2").arg(formatHms(framesPerSecond > 0 ? durationFrames / framesPerSecond : 0))
+                                   .arg(framesPerSecond > 0 ? durationFrames % framesPerSecond : 0, 2, 10, QLatin1Char('0'));
+    m_positionLabel->setText(QStringLiteral("%1 / %2   frame %3").arg(tc, durationTc).arg(totalFrames));
+    QString state;
     if (active && paused) {
-        m_positionLabel->setText(QStringLiteral("frozen at %1 - press Play to continue").arg(tc));
+        state = QStringLiteral("PAUSED");
+    } else if (active) {
+        state = QStringLiteral("PLAYING");
     } else if (m_backend.isFileOutputCued()) {
-        m_positionLabel->setText(QStringLiteral("cued at %1 - press Play to start there").arg(tc));
-    } else if (duration > 0) {
-        m_positionLabel->setText(QStringLiteral("%1 / %2").arg(tc, formatHms(qRound64(duration))));
+        state = m_backend.isPreviewRelaying() ? QStringLiteral("HALTED - RELAY ON OUTPUT") : QStringLiteral("CUED");
     } else {
-        m_positionLabel->setText(tc);
+        state = QStringLiteral("STOPPED");
     }
+    m_transportStateLabel->setText(state);
+    m_transportStateLabel->setToolTip(active && !paused ? QString() : QStringLiteral("Press Play to continue from this frame"));
     m_seekSlider->setEnabled(duration > 0);
     if (!m_sliderDragging && duration > 0) {
         m_seekSlider->blockSignals(true);

@@ -49,6 +49,14 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
   - Auto also drives the shell's `FILEPLAY_AUTO_CHOICE`.
 - **Preview and output together** (full-duplex cards): the input preview keeps running during file playout and the test signal. If the preview is relaying, it relaunches without the relay before playout claims the output, and gets the relay back when the user stops the output. Half-duplex cards still stop the preview. While relaying, the output pane mirrors the input frames.
 - **Feed panes** (`VideoView`) take the feed's aspect (height-for-width, re-evaluated when the raster changes) and paint only the picture area black. Leftover layout space stays window-coloured instead of showing black borders. Frames still queued from a stopped feed are dropped so a cleared pane stays cleared. The Activity log and playout notes live on the Logs tab.
+- **Frame-exact transport**: positions are frame indices at the playout rate.
+  - **Pause** replaces the playout with a *hold* process (`trim=end_frame=1,loop=-1:size=1,setpts`, silent audio, `-r` at the playout rate) that repeats exactly the frame on the wire. Suspending ffmpeg instead let the card play out its queued frames and stop past the frame on screen.
+  - **Step** while paused moves the hold (card and pane); **resume** continues from the next frame.
+  - **Seeking** to frame N uses `-ss (N-0.5)/fps`, so ffmpeg's accurate seek starts exactly on N. This was verified bit-exact against `select=eq(n,N)` on several frames.
+  - **Relay re-enabled** while a file is loaded halts the file on its exact frame and gives the relay the output; Play resumes the file from that frame.
+- **Pane delay = muxer queue depth**: ffmpeg's decklink muxer schedules up to 2 x preroll frames ("frames buffer size") and blocks when that is full, so a frame reaches the wire 2 x preroll after ffmpeg emits it. Delaying the pane by only 1 x preroll made the pane and counter run ahead of the wire. Playout now passes `-preroll 0.25` (lower latency; 4K50 HEVC still holds a steady 50 fps) and delays the pane by 2 x preroll.
+- **Transport counter**: fixed-format monospace `HH:MM:SS:FF / HH:MM:SS:FF   frame N`, with the state (PLAYING / PAUSED / CUED / HALTED - RELAY ON OUTPUT / STOPPED) in a separate fixed-width tag, so nothing shifts on play/pause.
+- **Icon**: `qt6/resources/vrecord.ico` (the GTK launcher's icon) is embedded as the exe icon (`vrecord.rc`, also for vsignal) and set as the window icon (`vrecord.qrc`).
 - **Native preview framing**: the input pane is sized from the detected mode (960x540 for 1080, 648x486 for NTSC 4:3, using the Display Aspect choice for SD). It relaunches when the live mode differs from the one it was sized for.
 
 ## Findings
@@ -71,6 +79,7 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
 - `vsignal probe`: driver state (connections, pass-through mode, detected input, output mode, pixel format, busy).
 - `vsignal sdktest [MODE] [SECONDS]`: colour bars straight through SDK 16 with driver-allocated frames, to tell card or cabling problems from ffmpeg ones.
 - `vsignal setout <mask>`: write and read back the output connection.
+- `vsignal transporttest [FILE]`: on the card, with the GUI's backend code and a throwaway config, checks relay → playout alongside preview → pause holds the on-wire frame → step +1 → resume → relay halts the file → Play resumes from the halted frame. Close the GUI first, since it holds the card.
 
 ## Known gaps
 - FFV1 10-bit at 1080p50 encodes slower than real time on the test PC. A 10 s capture queued about 5 GB of frames in RAM before draining, so long HD FFV1 captures need a faster CPU or a lighter codec.
