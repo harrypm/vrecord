@@ -281,9 +281,10 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
         m_playbackDevice = outputDevice;
         m_playbackDuration = 60.0;
         m_playbackFps = 25.0;
-        m_playbackBaseSeconds = 0.0;
-        m_playbackPaused = false;
-        m_playbackClockRunning = true;
+        m_playbackCueSeconds = 0.0;
+        m_playbackFrozen = false;
+        m_playbackJogged = false;
+        m_testPlaybackActive = true;
         return true;
     }
 
@@ -305,13 +306,19 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
     m_playbackDevice = outputDevice;
     m_playbackDuration = duration;
     m_playbackFps = fps > 0 ? fps : 25.0;
-    m_playbackPaused = false;
-    return launchFileOutputProcess(0.0, errorMessage) && startOutputFeed(config, errorMessage);
+    m_playbackConfig = config;
+    m_playbackFrozen = false;
+    m_playbackJogged = false;
+    // a cued position survives a stop: toggle Play resumes from it
+    const double resumeAt = (m_playbackCueSeconds > 0.05 && m_playbackCueSeconds < duration) ? m_playbackCueSeconds : 0.0;
+    return launchFileOutputProcess(resumeAt, errorMessage) && startOutputFeed(config, errorMessage);
 }
 
 bool BackendController::stopFileOutput(const VrecordConfig& config, QString* errorMessage) {
     Q_UNUSED(config);
-    return stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+    const bool ok = stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+    m_playbackCueSeconds = 0.0;
+    return ok;
 }
 
 bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* errorMessage) {
@@ -319,7 +326,9 @@ bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* err
     if (!stopTrackedProcess(testSignalPidPath(), errorMessage)) {
         return false;
     }
-    return stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+    const bool ok = stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
+    m_playbackCueSeconds = 0.0;
+    return ok;
 }
 
 bool BackendController::probeMediaFile(const QString& file, double* durationSeconds, double* fps, QString* errorMessage) const {
@@ -379,7 +388,7 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
     const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
     QStringList arguments{
         QStringLiteral("-nostdin"),
-        QStringLiteral("-loglevel"), QStringLiteral("error"),
+        QStringLiteral("-loglevel"), QStringLiteral("info"),
         QStringLiteral("-re"),
         QStringLiteral("-stream_loop"), QStringLiteral("-1")};
     if (atSeconds > 0.05) {
@@ -393,6 +402,13 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
               << QStringLiteral("-f") << QStringLiteral("decklink")
               << m_playbackDevice;
     m_fileOutputProcess = new QProcess(this);
+    m_playbackStderrTail.clear();
+    connect(m_fileOutputProcess, &QProcess::readyReadStandardError, this, [this] {
+        m_playbackStderrTail.append(m_fileOutputProcess->readAllStandardError());
+        if (m_playbackStderrTail.size() > 8192) {
+            m_playbackStderrTail = m_playbackStderrTail.right(8192);
+        }
+    });
     m_fileOutputProcess->start(ffmpegPath, arguments);
     if (!m_fileOutputProcess->waitForStarted(5000)) {
         if (errorMessage) {
@@ -402,12 +418,10 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
         m_fileOutputProcess = nullptr;
         return false;
     }
-    m_playbackBaseSeconds = atSeconds;
-    m_playbackClock.restart();
-    m_playbackClockRunning = !m_playbackPaused;
-    if (m_playbackPaused) {
-        suspendProcessById(m_fileOutputProcess->processId(), true);
-    }
+    // remember the seek offset: ffmpeg rebases its time= counter after -ss
+    m_playbackSeekOffset = atSeconds;
+    m_playbackFrozen = false;
+    m_playbackJogged = false;
     // keep the output feed following the transport position
     if (m_outputFeedProcess) {
         stopOutputFeed();
@@ -419,63 +433,134 @@ bool BackendController::launchFileOutputProcess(double atSeconds, QString* error
 bool BackendController::stopManagedFileOutputInternal(QString* errorMessage) {
     Q_UNUSED(errorMessage);
     if (m_fileOutputProcess) {
+        // thaw a frozen playout first so pending signals are handled promptly
+        suspendProcessById(m_fileOutputProcess->processId(), false);
         m_fileOutputProcess->kill();
         m_fileOutputProcess->waitForFinished(3000);
         m_fileOutputProcess->deleteLater();
         m_fileOutputProcess = nullptr;
     }
-    m_playbackPaused = false;
-    m_playbackClockRunning = false;
-    m_playbackBaseSeconds = 0.0;
+    m_playbackFrozen = false;
+    m_playbackJogged = false;
+    m_testPlaybackActive = false;
+    m_playbackSeekOffset = 0.0;
+    return true;
+}
+
+double BackendController::parsePlaybackLogSeconds() const {
+    // the managed playout writes its stats (time=...) to stderr; the tail is
+    // drained continuously so the pipe never fills and stalls the process
+    const QByteArray tail = m_playbackStderrTail.right(4096);
+    QRegularExpression timeRe(QStringLiteral("time=([0-9]+):([0-9]+):([0-9.]+)"));
+    QRegularExpressionMatchIterator matches = timeRe.globalMatch(QString::fromUtf8(tail));
+    QRegularExpressionMatch last;
+    while (matches.hasNext()) {
+        last = matches.next();
+    }
+    if (!last.hasMatch()) {
+        return -1.0;
+    }
+    return last.captured(1).toDouble() * 3600.0 + last.captured(2).toDouble() * 60.0 + last.captured(3).toDouble();
+}
+
+double BackendController::currentPlaybackSeconds() const {
+    if (m_playbackFrozen) {
+        return m_playbackFreezeSeconds;
+    }
+    if (m_fileOutputProcess && m_fileOutputProcess->state() == QProcess::Running) {
+        const double statsSeconds = parsePlaybackLogSeconds();
+        if (statsSeconds >= 0) {
+            return statsSeconds + m_playbackSeekOffset;
+        }
+    }
+    return m_playbackCueSeconds;
+}
+
+bool BackendController::showPlayFrame(double seconds, QString* errorMessage) {
+    if (s_testMode || m_playbackFile.isEmpty()) {
+        return true;
+    }
+    const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    QProcess extractor;
+    extractor.start(ffmpegPath,
+                    {QStringLiteral("-nostdin"),
+                     QStringLiteral("-loglevel"), QStringLiteral("error"),
+                     QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+                     QStringLiteral("-i"), m_playbackFile,
+                     QStringLiteral("-frames:v"), QStringLiteral("1"),
+                     QStringLiteral("-update"), QStringLiteral("1"),
+                     QStringLiteral("-f"), QStringLiteral("image2"),
+                     QStringLiteral("-y"), outputFeedImagePath()});
+    if (!extractor.waitForFinished(10000)) {
+        extractor.kill();
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Could not render the frame at %1s.").arg(QString::number(seconds, 'f', 2));
+        }
+        return false;
+    }
     return true;
 }
 
 bool BackendController::togglePauseFileOutput() {
     if (s_testMode) {
-        m_playbackPaused = !m_playbackPaused;
+        m_playbackFrozen = !m_playbackFrozen;
         return true;
     }
-    if (!m_fileOutputProcess || m_fileOutputProcess->state() != QProcess::Running) {
-        return false;
+    if (!isFileOutputActive()) {
+        // transport start: fresh playout, or resume from the cued position
+        VrecordConfig config = m_playbackConfig;
+        return startFileOutput(config, nullptr);
     }
     const qint64 playbackPid = m_fileOutputProcess->processId();
     const qint64 feedPid = m_outputFeedProcess ? m_outputFeedProcess->processId() : 0;
-    if (m_playbackPaused) {
-        suspendProcessById(playbackPid, false);
-        if (feedPid > 0) {
-            suspendProcessById(feedPid, false);
+    if (!m_playbackFrozen) {
+        // freeze: capture the exact frame from the freshest stats line, then
+        // suspend the process so the device holds that exact frame (no reload)
+        const double statsSeconds = parsePlaybackLogSeconds();
+        m_playbackFreezeSeconds = statsSeconds >= 0 ? statsSeconds + m_playbackSeekOffset : currentPlaybackSeconds();
+        if (m_playbackDuration > 0) {
+            m_playbackFreezeSeconds = qBound(0.0, m_playbackFreezeSeconds, m_playbackDuration);
         }
-        m_playbackClock.restart();
-        m_playbackClockRunning = true;
-        m_playbackPaused = false;
-    } else {
-        if (m_playbackClockRunning) {
-            m_playbackBaseSeconds += m_playbackClock.elapsed() / 1000.0;
-        }
+        m_playbackCueSeconds = m_playbackFreezeSeconds;
         suspendProcessById(playbackPid, true);
         if (feedPid > 0) {
             suspendProcessById(feedPid, true);
         }
-        m_playbackClockRunning = false;
-        m_playbackPaused = true;
+        m_playbackFrozen = true;
+        showPlayFrame(m_playbackFreezeSeconds, nullptr);
+    } else if (m_playbackJogged) {
+        // the cue was jogged elsewhere while frozen: restart at the new position
+        const double cue = m_playbackFreezeSeconds;
+        stopManagedFileOutputInternal(nullptr);
+        m_playbackCueSeconds = cue;
+        launchFileOutputProcess(cue, nullptr);
+    } else {
+        // plain resume from the frozen frame, no reload
+        suspendProcessById(playbackPid, false);
+        if (feedPid > 0) {
+            suspendProcessById(feedPid, false);
+        }
+        m_playbackFrozen = false;
+        m_playbackCueSeconds = m_playbackFreezeSeconds;
     }
     return true;
 }
 
 bool BackendController::isFileOutputActive() const {
-    return s_testMode ? (m_playbackClockRunning || m_playbackPaused)
+    return s_testMode ? m_testPlaybackActive
                       : (m_fileOutputProcess != nullptr && m_fileOutputProcess->state() == QProcess::Running);
 }
 
 bool BackendController::isFileOutputPaused() const {
-    return isFileOutputActive() && m_playbackPaused;
+    return isFileOutputActive() && m_playbackFrozen;
+}
+
+bool BackendController::isFileOutputCued() const {
+    return !isFileOutputActive() && m_playbackCueSeconds > 0.05;
 }
 
 double BackendController::fileOutputPositionSeconds() const {
-    double position = m_playbackBaseSeconds;
-    if (m_playbackClockRunning) {
-        position += m_playbackClock.elapsed() / 1000.0;
-    }
+    double position = currentPlaybackSeconds();
     if (m_playbackDuration > 0) {
         position = qMin(position, m_playbackDuration);
     }
@@ -495,28 +580,50 @@ bool BackendController::stepFileOutput(int frames, QString* errorMessage) {
         return true;
     }
     const double delta = frames / (m_playbackFps > 0 ? m_playbackFps : 25.0);
-    return seekFileOutput(fileOutputPositionSeconds() + delta, errorMessage);
+    // while playing: seek by the offset and keep playing; while frozen or
+    // stopped: jog the held position and render that frame into the pane
+    if (isFileOutputActive() && !m_playbackFrozen) {
+        return seekFileOutput(currentPlaybackSeconds() + delta, errorMessage);
+    }
+    const double base = m_playbackFrozen ? m_playbackFreezeSeconds : m_playbackCueSeconds;
+    double target = base + delta;
+    if (m_playbackDuration > 0) {
+        target = qMin(target, m_playbackDuration);
+    }
+    target = qMax(target, 0.0);
+    if (m_playbackFrozen) {
+        m_playbackFreezeSeconds = target;
+        m_playbackJogged = true;
+    }
+    m_playbackCueSeconds = target;
+    return showPlayFrame(target, errorMessage);
 }
 
 bool BackendController::seekFileOutput(double seconds, QString* errorMessage) {
-    if (!isFileOutputActive() && !s_testMode) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Start a file playout first.");
-        }
-        return false;
-    }
     double target = seconds;
     if (m_playbackDuration > 0) {
         target = qMin(target, m_playbackDuration);
     }
     target = qMax(target, 0.0);
-    m_playbackBaseSeconds = target;
+    if (!isFileOutputActive() && !s_testMode) {
+        if (m_playbackFile.isEmpty()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Select a file and play it once first.");
+            }
+            return false;
+        }
+        // stopped: cue the position only - toggle Play to start there
+        m_playbackCueSeconds = target;
+        return showPlayFrame(target, errorMessage);
+    }
+    m_playbackCueSeconds = target;
     if (s_testMode) {
         s_captured << (QStringLiteral("ffmpeg-ma -stream_loop -1 -ss %1 -i %2 -f decklink %3")
                            .arg(QString::number(target, 'f', 3), m_playbackFile, m_playbackDevice));
         return true;
     }
-    // relaunch at the new position; relaunching while paused holds the frame
+    // restart at the new position (a frozen playout resumes playing, as on
+    // macOS/Linux with the scrub bar release)
     return launchFileOutputProcess(target, errorMessage);
 }
 
@@ -556,6 +663,7 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         QStringLiteral("-f"), QStringLiteral("image2"),
         QStringLiteral("-y"), previewImagePath()};
     m_previewProcess = new QProcess(this);
+    connect(m_previewProcess, &QProcess::readyReadStandardError, m_previewProcess, &QProcess::readAllStandardError);
     m_previewProcess->start(ffmpegPath, arguments);
     if (!m_previewProcess->waitForStarted(5000)) {
         if (errorMessage) {
@@ -604,8 +712,8 @@ bool BackendController::startOutputFeedProcess() {
         QStringLiteral("-nostdin"),
         QStringLiteral("-loglevel"), QStringLiteral("error"),
         QStringLiteral("-stream_loop"), QStringLiteral("-1")};
-    if (m_playbackBaseSeconds > 0.05) {
-        arguments << QStringLiteral("-ss") << QString::number(m_playbackBaseSeconds, 'f', 3);
+    if (m_playbackSeekOffset > 0.05) {
+        arguments << QStringLiteral("-ss") << QString::number(m_playbackSeekOffset, 'f', 3);
     }
     arguments << QStringLiteral("-i") << m_playbackFile
               << QStringLiteral("-vf") << QStringLiteral("fps=4,scale=480:-1,format=yuv420p")
@@ -615,13 +723,14 @@ bool BackendController::startOutputFeedProcess() {
               << QStringLiteral("-f") << QStringLiteral("image2")
               << QStringLiteral("-y") << outputFeedImagePath();
     m_outputFeedProcess = new QProcess(this);
+    connect(m_outputFeedProcess, &QProcess::readyReadStandardError, m_outputFeedProcess, &QProcess::readAllStandardError);
     m_outputFeedProcess->start(ffmpegPath, arguments);
     if (!m_outputFeedProcess->waitForStarted(5000)) {
         m_outputFeedProcess->deleteLater();
         m_outputFeedProcess = nullptr;
         return false;
     }
-    if (m_playbackPaused) {
+    if (m_playbackFrozen) {
         suspendProcessById(m_outputFeedProcess->processId(), true);
     }
     return true;

@@ -2,7 +2,6 @@
 
 #include "VrecordConfig.h"
 
-#include <QElapsedTimer>
 #include <QObject>
 #include <QProcess>
 #include <QString>
@@ -38,6 +37,7 @@ public slots:
     bool seekFileOutput(double seconds, QString* errorMessage = nullptr);
     bool isFileOutputActive() const;
     bool isFileOutputPaused() const;
+    bool isFileOutputCued() const;
     double fileOutputPositionSeconds() const;
     double fileOutputDurationSeconds() const;
     double fileOutputFps() const;
@@ -63,17 +63,24 @@ private:
     bool probeMediaFile(const QString& file, double* durationSeconds, double* fps, QString* errorMessage) const;
     bool startOutputFeedProcess();
     QString formatCodeForStandard(const QString& standardChoice) const;
+    double parsePlaybackLogSeconds() const;
+    double currentPlaybackSeconds() const;
+    bool showPlayFrame(double seconds, QString* errorMessage);
 
     QString m_packageRoot;
     QProcess* m_fileOutputProcess = nullptr;
     QProcess* m_previewProcess = nullptr;
     QProcess* m_outputFeedProcess = nullptr;
-    double m_playbackBaseSeconds = 0.0;
     double m_playbackDuration = 0.0;
     double m_playbackFps = 25.0;
-    bool m_playbackPaused = false;
-    bool m_playbackClockRunning = false;
-    QElapsedTimer m_playbackClock;
+    double m_playbackSeekOffset = 0.0;
+    double m_playbackFreezeSeconds = 0.0;
+    double m_playbackCueSeconds = 0.0;
+    bool m_playbackFrozen = false;
+    bool m_playbackJogged = false;
+    bool m_testPlaybackActive = false;
     QString m_playbackFile;
     QString m_playbackDevice;
+    VrecordConfig m_playbackConfig;
+    QByteArray m_playbackStderrTail;
 };

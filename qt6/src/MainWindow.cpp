@@ -405,11 +405,16 @@ void MainWindow::buildUi() {
     m_outputFeedLabel = new QLabel(outputDeviceBox);
     m_outputFeedLabel->setMinimumHeight(240);
     m_outputFeedLabel->setAlignment(Qt::AlignCenter);
-    m_playPauseButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Play"), outputDeviceBox);
-    auto* btnBack100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipBackward), QStringLiteral("-100"), outputDeviceBox);
-    auto* btnBack1 = new QPushButton(styleIcon(QStyle::SP_ArrowLeft), QStringLiteral("-1"), outputDeviceBox);
-    auto* btnFwd1 = new QPushButton(styleIcon(QStyle::SP_ArrowRight), QStringLiteral("+1"), outputDeviceBox);
-    auto* btnFwd100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipForward), QStringLiteral("+100"), outputDeviceBox);
+    m_playPauseButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QString(), outputDeviceBox);
+    m_playPauseButton->setToolTip(QStringLiteral("Play / Pause (holds the exact frame)"));
+    auto* btnBack100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipBackward), QString(), outputDeviceBox);
+    btnBack100->setToolTip(QStringLiteral("Step back 100 frames"));
+    auto* btnBack1 = new QPushButton(styleIcon(QStyle::SP_ArrowLeft), QString(), outputDeviceBox);
+    btnBack1->setToolTip(QStringLiteral("Step back 1 frame"));
+    auto* btnFwd1 = new QPushButton(styleIcon(QStyle::SP_ArrowRight), QString(), outputDeviceBox);
+    btnFwd1->setToolTip(QStringLiteral("Step forward 1 frame"));
+    auto* btnFwd100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipForward), QString(), outputDeviceBox);
+    btnFwd100->setToolTip(QStringLiteral("Step forward 100 frames"));
     m_seekSlider = new QSlider(Qt::Horizontal, outputDeviceBox);
     m_seekSlider->setRange(0, 10000);
     m_positionLabel = new QLabel(QStringLiteral("00:00:00:00"), outputDeviceBox);
@@ -1042,7 +1047,6 @@ void MainWindow::refreshFeeds() {
 void MainWindow::updateTransportUi() {
     const bool active = m_backend.isFileOutputActive();
     const bool paused = m_backend.isFileOutputPaused();
-    m_playPauseButton->setText(active && !paused ? QStringLiteral("Pause") : QStringLiteral("Play"));
     m_playPauseButton->setIcon(QApplication::style()->standardIcon(active && !paused ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
     const double duration = m_backend.fileOutputDurationSeconds();
     const double position = m_backend.fileOutputPositionSeconds();
@@ -1056,9 +1060,16 @@ void MainWindow::updateTransportUi() {
             .arg((total / 60) % 60, 2, 10, QLatin1Char('0'))
             .arg(total % 60, 2, 10, QLatin1Char('0'));
     };
-    m_positionLabel->setText(QStringLiteral("%1:%2 / %3").arg(formatHms(secondsTotal))
-                                 .arg(framePart, 2, 10, QLatin1Char('0'))
-                                 .arg(formatHms(qRound64(duration))));
+    const QString tc = QStringLiteral("%1:%2").arg(formatHms(secondsTotal)).arg(framePart, 2, 10, QLatin1Char('0'));
+    if (active && paused) {
+        m_positionLabel->setText(QStringLiteral("frozen at %1 - press Play to continue").arg(tc));
+    } else if (m_backend.isFileOutputCued()) {
+        m_positionLabel->setText(QStringLiteral("cued at %1 - press Play to start there").arg(tc));
+    } else if (duration > 0) {
+        m_positionLabel->setText(QStringLiteral("%1 / %2").arg(tc, formatHms(qRound64(duration))));
+    } else {
+        m_positionLabel->setText(tc);
+    }
     m_seekSlider->setEnabled(duration > 0);
     if (!m_sliderDragging && duration > 0) {
         m_seekSlider->blockSignals(true);
