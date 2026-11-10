@@ -1214,7 +1214,13 @@ QStringList MainWindow::runSelfTest() {
                                                  detail.isEmpty() ? QString() : QStringLiteral(" - %1").arg(detail));
     };
 
+    // run the whole self-test on a THROWAWAY config in the package root:
+    // test saves must never touch the user's real configuration
     const VrecordConfig originalConfig = m_config;
+    VrecordConfig testConfig = originalConfig;
+    testConfig.configPath = QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf"));
+    QFile::remove(testConfig.configPath);
+    m_config = testConfig;
     BackendController::setTestMode(true);
     BackendController::clearCaptured();
 
@@ -1328,6 +1334,7 @@ QStringList MainWindow::runSelfTest() {
     m_config = originalConfig;
     populateFromConfig();
     syncConfigFromUi();
+    QFile::remove(QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf")));
 
     BackendController::setTestMode(false);
     BackendController::clearCaptured();

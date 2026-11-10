@@ -55,15 +55,40 @@ VrecordConfig VrecordConfig::load(const QString& scriptName, const QString& expl
 }
 
 bool VrecordConfig::save() const {
-    QFile file(configPath);
+    // atomic write: a failed save (disk full, lock) must never destroy the
+    // existing config - write to a temp file, keep the old file as .bak,
+    // then rename over
     QDir().mkpath(QFileInfo(configPath).absolutePath());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        return false;
+    const QString tempPath = configPath + QStringLiteral(".tmp");
+    const QString backupPath = configPath + QStringLiteral(".bak");
+    {
+        QFile temp(tempPath);
+        if (!temp.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+            return false;
+        }
+        QTextStream out(&temp);
+        out << "# vrecord Qt6 frontend configuration\n";
+        for (auto it = values.keyValueBegin(); it != values.keyValueEnd(); ++it) {
+            out << it->first << "=\"" << it->second << "\"\n";
+        }
+        temp.flush();
+        if (temp.error() != QFile::NoError) {
+            temp.close();
+            QFile::remove(tempPath);
+            return false;
+        }
     }
-    QTextStream out(&file);
-    out << "# vrecord Qt6 frontend configuration\n";
-    for (auto it = values.keyValueBegin(); it != values.keyValueEnd(); ++it) {
-        out << it->first << "=\"" << it->second << "\"\n";
+    QFile::remove(backupPath);
+    if (QFile::exists(configPath)) {
+        if (!QFile::rename(configPath, backupPath)) {
+            QFile::remove(tempPath);
+            return false;
+        }
+    }
+    if (!QFile::rename(tempPath, configPath)) {
+        // roll the backup back so the old settings survive
+        QFile::rename(backupPath, configPath);
+        return false;
     }
     return true;
 }
