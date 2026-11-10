@@ -29,6 +29,7 @@ public slots:
     bool stopAllOutputs(const VrecordConfig& config, QString* errorMessage = nullptr);
     bool setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage = nullptr);
     bool applyVideoOutputConnection(const VrecordConfig& config, QString* errorMessage = nullptr) const;
+    bool applyVideoInputConnection(const VrecordConfig& config, QString* errorMessage = nullptr) const;
     bool openLegacyUi(QString* errorMessage = nullptr) const;
 
     // managed file playout transport (pause holds the card on the exact frame)

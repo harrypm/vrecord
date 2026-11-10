@@ -647,12 +647,36 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         }
         return false;
     }
+    // route the card's input to the connector the user selected before
+    // sampling it (sdi/hdmi/component/... from the Video Input combo)
+    const QString inputConnection = config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed();
+    if (!inputConnection.isEmpty()) {
+        QString inputConnectionName;
+        if (inputConnection == QStringLiteral("sdi")) inputConnectionName = QStringLiteral("SDI");
+        else if (inputConnection == QStringLiteral("hdmi")) inputConnectionName = QStringLiteral("HDMI");
+        else if (inputConnection == QStringLiteral("component")) inputConnectionName = QStringLiteral("Component");
+        else if (inputConnection == QStringLiteral("composite")) inputConnectionName = QStringLiteral("Composite");
+        else if (inputConnection == QStringLiteral("s-video")) inputConnectionName = QStringLiteral("S-Video");
+        if (!inputConnectionName.isEmpty()) {
+            DeckLinkDiscovery::applyInputConnection(outputDevice, inputConnectionName, nullptr);
+        }
+    }
+
+    // prefer the mode the incoming signal is actually using (the user may be
+    // feeding any format over HDMI/SDI); fall back to the selected standard
+    QString formatCode = DeckLinkDiscovery::detectInputFormatCode(outputDevice, nullptr);
+    QString detectedNote;
+    if (formatCode.isEmpty()) {
+        formatCode = formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    } else {
+        detectedNote = QStringLiteral(" (input mode %1)").arg(formatCode);
+    }
     const QString ffmpegPath = QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
     QStringList arguments{
         QStringLiteral("-nostdin"),
         QStringLiteral("-loglevel"), QStringLiteral("error"),
         QStringLiteral("-f"), QStringLiteral("decklink"),
-        QStringLiteral("-format_code"), formatCodeForStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed()),
+        QStringLiteral("-format_code"), formatCode,
         QStringLiteral("-raw_format"), QStringLiteral("uyvy422"),
         QStringLiteral("-i"), outputDevice,
         QStringLiteral("-an"),
@@ -672,6 +696,10 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         m_previewProcess->deleteLater();
         m_previewProcess = nullptr;
         return false;
+    }
+    if (errorMessage) {
+        // success path: carry the detected input mode back to the caller
+        *errorMessage = detectedNote;
     }
     return true;
 }
@@ -783,6 +811,27 @@ bool BackendController::applyVideoOutputConnection(const VrecordConfig& config, 
         return false;
     }
     return DeckLinkDiscovery::applyOutputConnection(outputDevice, connection, errorMessage);
+}
+
+bool BackendController::applyVideoInputConnection(const VrecordConfig& config, QString* errorMessage) const {
+    const QString inputDevice = config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
+    if (inputDevice.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Select a DeckLink device first.");
+        }
+        return false;
+    }
+    const QString inputConnection = config.value(QStringLiteral("VIDEO_INPUT_CHOICE")).trimmed();
+    QString connectionName;
+    if (inputConnection == QStringLiteral("sdi")) connectionName = QStringLiteral("SDI");
+    else if (inputConnection == QStringLiteral("hdmi")) connectionName = QStringLiteral("HDMI");
+    else if (inputConnection == QStringLiteral("component")) connectionName = QStringLiteral("Component");
+    else if (inputConnection == QStringLiteral("composite")) connectionName = QStringLiteral("Composite");
+    else if (inputConnection == QStringLiteral("s-video")) connectionName = QStringLiteral("S-Video");
+    if (connectionName.isEmpty()) {
+        return true;
+    }
+    return DeckLinkDiscovery::applyInputConnection(inputDevice, connectionName, errorMessage);
 }
 
 bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage) {

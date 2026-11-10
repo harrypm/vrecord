@@ -97,6 +97,9 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
     QString previewError;
     if (m_backend.startVideoPreview(m_config, &previewError)) {
         m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
+        if (!previewError.isEmpty()) {
+            statusBar()->showMessage(QStringLiteral("Live input preview running%1").arg(previewError), 5000);
+        }
     } else {
         m_selfTestResults << QStringLiteral("NOTE: auto preview did not start: %1").arg(previewError);
         updateDerivedState();
@@ -731,6 +734,21 @@ void MainWindow::buildUi() {
         applyVideoOutputConnection();
         restartTestSignalIfRunning();
     });
+    connect(m_videoInputCombo, &QComboBox::activated, this, [this](int) {
+        QString errorMessage;
+        if (!m_backend.applyVideoInputConnection(m_config, &errorMessage)) {
+            showError(errorMessage);
+            return;
+        }
+        if (m_backend.isVideoPreviewActive()) {
+            m_backend.stopVideoPreview();
+            QString restartError;
+            if (m_backend.startVideoPreview(m_config, &restartError)) {
+                statusBar()->showMessage(QStringLiteral("Live input preview restarted on %1").arg(m_videoInputCombo->currentText()), 5000);
+            }
+        }
+        updateDerivedState();
+    });
     connect(m_previewToggleButton, &QPushButton::clicked, this, &MainWindow::togglePreview);
     connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::togglePlayPause);
     connect(btnBack100, &QPushButton::clicked, this, [this] { stepPlayback(-100); });
@@ -1008,13 +1026,21 @@ void MainWindow::togglePreview() {
         return;
     }
     syncConfigFromUi();
+    QString inputApplyError;
+    if (!m_backend.applyVideoInputConnection(m_config, &inputApplyError)) {
+        showError(inputApplyError);
+        return;
+    }
     if (!m_backend.startVideoPreview(m_config, &errorMessage)) {
         showError(errorMessage);
         return;
     }
     m_previewToggleButton->setText(QStringLiteral("Stop Preview"));
     m_previewToggleButton->setIcon(QApplication::style()->standardIcon(QStyle::SP_MediaStop));
-    statusBar()->showMessage(QStringLiteral("Live input preview running"), 3000);
+    statusBar()->showMessage(errorMessage.isEmpty()
+                                 ? QStringLiteral("Live input preview running")
+                                 : QStringLiteral("Live input preview running%1").arg(errorMessage),
+                             5000);
 }
 
 void MainWindow::togglePlayPause() {
