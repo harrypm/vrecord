@@ -18,6 +18,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSlider>
+#include <QSplitter>
 #include <QStyleFactory>
 #include <QStyleHints>
 #include <QStatusBar>
@@ -607,18 +608,25 @@ void MainWindow::buildUi() {
     root->addLayout(summaryRow);
     root->addLayout(actionBar);
 
-    auto* summaryBox = new QGroupBox(QStringLiteral("Settings Summary"), central);
+    auto* logsTab = new QWidget(this);
+    auto* logsRoot = new QVBoxLayout(logsTab);
+    auto* logsSplitter = new QSplitter(Qt::Vertical, logsTab);
+    auto* summaryBox = new QGroupBox(QStringLiteral("Settings Summary"), logsTab);
     auto* summaryLayout = new QVBoxLayout(summaryBox);
     m_summaryText = new QPlainTextEdit(summaryBox);
     m_summaryText->setReadOnly(true);
     summaryLayout->addWidget(m_summaryText);
-    auto* validationBox = new QGroupBox(QStringLiteral("Errors & Warnings"), central);
+    auto* validationBox = new QGroupBox(QStringLiteral("Errors & Warnings (incl. self test)"), logsTab);
     auto* validationLayout = new QVBoxLayout(validationBox);
     m_validationText = new QPlainTextEdit(validationBox);
     m_validationText->setReadOnly(true);
     validationLayout->addWidget(m_validationText);
-    root->addWidget(summaryBox);
-    root->addWidget(validationBox);
+    logsSplitter->addWidget(summaryBox);
+    logsSplitter->addWidget(validationBox);
+    logsSplitter->setStretchFactor(0, 1);
+    logsSplitter->setStretchFactor(1, 1);
+    logsRoot->addWidget(logsSplitter);
+    m_tabs->addTab(logsTab, QStringLiteral("Logs"));
 
     setCentralWidget(central);
     setWindowTitle(QStringLiteral("vrecord Qt6"));
@@ -733,6 +741,10 @@ void MainWindow::buildUi() {
     connect(m_videoOutputConnectionCombo, &QComboBox::activated, this, [this, restartTestSignalIfRunning](int) {
         applyVideoOutputConnection();
         restartTestSignalIfRunning();
+    });
+    connect(m_deckLinkCombo, &QComboBox::activated, this, [this](int) {
+        rebuildConnectorCombos();
+        updateDerivedState();
     });
     connect(m_videoInputCombo, &QComboBox::activated, this, [this](int) {
         QString errorMessage;
@@ -923,6 +935,45 @@ void MainWindow::populateDeckLinkCombo(const QVector<DeckLinkDeviceInfo>& device
         m_relayDeviceCombo->setCurrentIndex(relayIdx);
     } else if (!devices.isEmpty()) {
         m_relayDeviceCombo->setCurrentIndex(0);
+    }
+    rebuildConnectorCombos();
+}
+
+void MainWindow::rebuildConnectorCombos() {
+    // populate the input/output connector selectors from the selected
+    // device's real hardware IO (BMDDeckLinkVideoInput/OutputConnections)
+    const QString selectedDevice = m_deckLinkCombo->currentData().toString();
+    qint64 inputMask = 0;
+    qint64 outputMask = 0;
+    for (const auto& device : m_devices) {
+        if (device.modelName == selectedDevice) {
+            inputMask = device.videoInputConnections;
+            outputMask = device.videoOutputConnections;
+            break;
+        }
+    }
+
+    // input connectors (config stores the lowercase names)
+    const QString currentInput = m_videoInputCombo->currentText();
+    m_videoInputCombo->clear();
+    const QStringList inputNames = DeckLinkDiscovery::connectionNamesFromMask(inputMask);
+    for (const QString& name : inputNames) {
+        m_videoInputCombo->addItem(name.toLower());
+    }
+    if (m_videoInputCombo->findText(currentInput) < 0 && m_videoInputCombo->count() > 0) {
+        m_videoInputCombo->setCurrentIndex(0);
+    }
+
+    // output connectors: Auto always allowed, hardware list otherwise
+    const QString currentOutput = m_videoOutputConnectionCombo->currentText();
+    m_videoOutputConnectionCombo->clear();
+    m_videoOutputConnectionCombo->addItem(QStringLiteral("Auto"));
+    const QStringList outputNames = DeckLinkDiscovery::connectionNamesFromMask(outputMask);
+    for (const QString& name : outputNames) {
+        m_videoOutputConnectionCombo->addItem(name);
+    }
+    if (m_videoOutputConnectionCombo->findText(currentOutput) < 0) {
+        m_videoOutputConnectionCombo->setCurrentIndex(0);
     }
 }
 
@@ -1192,6 +1243,23 @@ QStringList MainWindow::runSelfTest() {
     m_backend.stepFileOutput(100, nullptr);
     check(QStringLiteral("Player step control seeks the playout"),
           BackendController::capturedAnyContaining(QStringLiteral(" -ss ")));
+
+    // every offered connector must exist on the selected hardware
+    bool unsupportedOffered = false;
+    const QString selfTestDevice = m_deckLinkCombo->currentData().toString();
+    for (const auto& device : m_devices) {
+        if (device.modelName != selfTestDevice) {
+            continue;
+        }
+        const QStringList supported = DeckLinkDiscovery::connectionNamesFromMask(device.videoOutputConnections);
+        for (int i = 1; i < m_videoOutputConnectionCombo->count(); ++i) {
+            if (!supported.contains(m_videoOutputConnectionCombo->itemText(i))) {
+                unsupportedOffered = true;
+            }
+        }
+        break;
+    }
+    check(QStringLiteral("Output connector list matches the device hardware"), !unsupportedOffered);
 
     m_backend.togglePauseFileOutput();
     check(QStringLiteral("Pause toggle holds the playout"), m_backend.isFileOutputPaused());

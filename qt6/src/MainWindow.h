@@ -45,6 +45,7 @@ private:
     void populateFromConfig();
     void syncConfigFromUi();
     void populateDeckLinkCombo(const QVector<DeckLinkDeviceInfo>& devices, const QString& selectedValue);
+    void rebuildConnectorCombos();
     QComboBox* makeCombo(const QStringList& items);
     QCheckBox* makeCheckBox(const QString& label);
     QLineEdit* makeLineEdit();

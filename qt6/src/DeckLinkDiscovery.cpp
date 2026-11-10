@@ -58,6 +58,14 @@ QVector<DeckLinkDeviceInfo> DeckLinkDiscovery::enumerateDevices(QString* errorMe
             if (attributes->GetInt(BMDDeckLinkPersistentID, &persistentId) == S_OK) {
                 info.persistentId = persistentId;
             }
+            int64_t inputMask = 0;
+            if (attributes->GetInt(BMDDeckLinkVideoInputConnections, &inputMask) == S_OK) {
+                info.videoInputConnections = inputMask;
+            }
+            int64_t outputMask = 0;
+            if (attributes->GetInt(BMDDeckLinkVideoOutputConnections, &outputMask) == S_OK) {
+                info.videoOutputConnections = outputMask;
+            }
             attributes->Release();
         }
 
@@ -93,6 +101,25 @@ bool DeckLinkDiscovery::applyConnection(const QString& modelName, int configurat
     }
     const auto configId = static_cast<BMDDeckLinkConfigurationID>(configurationId);
     return applyConnectionInternal(modelName, configId, connectionName, connectionMask, errorMessage);
+}
+
+QStringList DeckLinkDiscovery::connectionNamesFromMask(qint64 mask)
+{
+    QStringList names;
+    const struct { qint64 bit; const char* name; } mapping[] = {
+        {bmdVideoConnectionSDI, "SDI"},
+        {bmdVideoConnectionHDMI, "HDMI"},
+        {bmdVideoConnectionOpticalSDI, "Optical SDI"},
+        {bmdVideoConnectionComponent, "Component"},
+        {bmdVideoConnectionComposite, "Composite"},
+        {bmdVideoConnectionSVideo, "S-Video"},
+    };
+    for (const auto& entry : mapping) {
+        if (mask & entry.bit) {
+            names << QLatin1String(entry.name);
+        }
+    }
+    return names;
 }
 
 QString DeckLinkDiscovery::detectInputFormatCode(const QString& modelName, QString* errorMessage)
