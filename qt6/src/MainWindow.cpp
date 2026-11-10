@@ -405,20 +405,33 @@ void MainWindow::buildUi() {
     m_outputFeedLabel = new QLabel(outputDeviceBox);
     m_outputFeedLabel->setMinimumHeight(240);
     m_outputFeedLabel->setAlignment(Qt::AlignCenter);
+    const QSize transportIconSize(28, 28);
+    const QSize transportButtonSize(56, 40);
     m_playPauseButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QString(), outputDeviceBox);
     m_playPauseButton->setToolTip(QStringLiteral("Play / Pause (holds the exact frame)"));
+    m_playPauseButton->setIconSize(transportIconSize);
+    m_playPauseButton->setMinimumSize(transportButtonSize);
     auto* btnBack100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipBackward), QString(), outputDeviceBox);
     btnBack100->setToolTip(QStringLiteral("Step back 100 frames"));
+    btnBack100->setIconSize(transportIconSize);
+    btnBack100->setMinimumSize(transportButtonSize);
     auto* btnBack1 = new QPushButton(styleIcon(QStyle::SP_ArrowLeft), QString(), outputDeviceBox);
     btnBack1->setToolTip(QStringLiteral("Step back 1 frame"));
+    btnBack1->setIconSize(transportIconSize);
+    btnBack1->setMinimumSize(transportButtonSize);
     auto* btnFwd1 = new QPushButton(styleIcon(QStyle::SP_ArrowRight), QString(), outputDeviceBox);
     btnFwd1->setToolTip(QStringLiteral("Step forward 1 frame"));
+    btnFwd1->setIconSize(transportIconSize);
+    btnFwd1->setMinimumSize(transportButtonSize);
     auto* btnFwd100 = new QPushButton(styleIcon(QStyle::SP_MediaSkipForward), QString(), outputDeviceBox);
     btnFwd100->setToolTip(QStringLiteral("Step forward 100 frames"));
+    btnFwd100->setIconSize(transportIconSize);
+    btnFwd100->setMinimumSize(transportButtonSize);
     m_seekSlider = new QSlider(Qt::Horizontal, outputDeviceBox);
     m_seekSlider->setRange(0, 10000);
     m_positionLabel = new QLabel(QStringLiteral("00:00:00:00"), outputDeviceBox);
     m_previewToggleButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Start Preview"), livePreviewBox);
+    m_previewToggleButton->setIconSize(QSize(20, 20));
     livePreviewLayout->addWidget(new QLabel(QStringLiteral("Record: input preview"), livePreviewBox));
     livePreviewLayout->addWidget(m_livePreviewLabel, 1);
     livePreviewLayout->addWidget(m_previewToggleButton);
@@ -489,18 +502,21 @@ void MainWindow::buildUi() {
     auto* dirLayout = new QHBoxLayout(dirBox);
     m_dirEdit = makeLineEdit();
     auto* dirBrowseButton = new QPushButton(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), QStringLiteral("Browse..."), dirBox);
+    dirBrowseButton->setIconSize(QSize(20, 20));
     dirLayout->addWidget(m_dirEdit);
     dirLayout->addWidget(dirBrowseButton);
     auto* logDirBox = new QGroupBox(QStringLiteral("Select a directory for auxiliary files"), central);
     auto* logDirLayout = new QHBoxLayout(logDirBox);
     m_logDirEdit = makeLineEdit();
     auto* logDirBrowseButton = new QPushButton(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), QStringLiteral("Browse..."), logDirBox);
+    logDirBrowseButton->setIconSize(QSize(20, 20));
     logDirLayout->addWidget(m_logDirEdit);
     logDirLayout->addWidget(logDirBrowseButton);
     auto* playFileBox = new QGroupBox(QStringLiteral("Select a file to play to the output device"), central);
     auto* playFileLayout = new QHBoxLayout(playFileBox);
     m_playFileEdit = makeLineEdit();
     auto* playFileBrowseButton = new QPushButton(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), QStringLiteral("Browse..."), playFileBox);
+    playFileBrowseButton->setIconSize(QSize(20, 20));
     playFileLayout->addWidget(m_playFileEdit);
     playFileLayout->addWidget(playFileBrowseButton);
     directoryRow->addWidget(dirBox);
@@ -568,6 +584,10 @@ void MainWindow::buildUi() {
     auto* fileOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Play File to Output"), central);
     auto* stopOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaStop), QStringLiteral("Stop Output"), central);
     auto* legacyButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_edit.png")), QStringLiteral("Open Legacy UI"), central);
+    for (QPushButton* button : {refreshDevicesButton, saveButton, recordButton, passthroughButton,
+                                audioButton, fileOutputButton, stopOutputButton, legacyButton}) {
+        button->setIconSize(QSize(24, 24));
+    }
 
     actionBar->addWidget(refreshDevicesButton);
     actionBar->addWidget(saveButton);
