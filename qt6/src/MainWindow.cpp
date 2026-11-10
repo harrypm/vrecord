@@ -134,7 +134,14 @@ void MainWindow::buildUi() {
     m_tabs = new QTabWidget(central);
 
     m_deckLinkCombo = new QComboBox(this);
-    m_videoInputCombo = makeCombo({QStringLiteral("sdi"), QStringLiteral("hdmi"), QStringLiteral("component"), QStringLiteral("composite"), QStringLiteral("s-video")});
+    m_videoInputCombo = new QComboBox(this);
+    for (const auto& entry : {std::pair<QString, QString>{QStringLiteral("SDI"), QStringLiteral("sdi")},
+                              std::pair<QString, QString>{QStringLiteral("HDMI"), QStringLiteral("hdmi")},
+                              std::pair<QString, QString>{QStringLiteral("Component"), QStringLiteral("component")},
+                              std::pair<QString, QString>{QStringLiteral("Composite"), QStringLiteral("composite")},
+                              std::pair<QString, QString>{QStringLiteral("S-Video"), QStringLiteral("s-video")}}) {
+        m_videoInputCombo->addItem(entry.first, entry.second);
+    }
     m_audioInputCombo = makeCombo({QStringLiteral("embedded"), QStringLiteral("aesebu"), QStringLiteral("analog"), QStringLiteral("hdmi")});
     m_audioMappingCombo = makeCombo({QStringLiteral("2 channels"), QStringLiteral("4 channels"), QStringLiteral("8 channels"), QStringLiteral("16 channels")});
     m_standardCombo = makeCombo({QStringLiteral("NTSC"),
@@ -856,7 +863,10 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("YES_SUFFIX"), m_enableSuffixCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("DEVICE_INPUT_CHOICE"), currentRadioValue());
     m_config.setValue(QStringLiteral("DECKLINK_INPUT_CHOICE"), m_deckLinkCombo->currentData().toString());
-    m_config.setValue(QStringLiteral("VIDEO_INPUT_CHOICE"), m_videoInputCombo->currentText());
+    m_config.setValue(QStringLiteral("VIDEO_INPUT_CHOICE"),
+                      m_videoInputCombo->currentData().toString().isEmpty()
+                          ? m_videoInputCombo->currentText().toLower()
+                          : m_videoInputCombo->currentData().toString());
     m_config.setValue(QStringLiteral("AUDIO_INPUT_CHOICE"), m_audioInputCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_MAPPING_CHOICE"), m_audioMappingCombo->currentText());
     m_config.setValue(QStringLiteral("STANDARD_CHOICE"), m_standardCombo->currentText());
@@ -954,13 +964,13 @@ void MainWindow::rebuildConnectorCombos() {
     }
 
     // input connectors (config stores the lowercase names)
-    const QString currentInput = m_videoInputCombo->currentText();
+    const QString currentInput = m_videoInputCombo->currentData().toString();
     m_videoInputCombo->clear();
     const QStringList inputNames = DeckLinkDiscovery::connectionNamesFromMask(inputMask);
     for (const QString& name : inputNames) {
-        m_videoInputCombo->addItem(name.toLower());
+        m_videoInputCombo->addItem(name, name.toLower());
     }
-    if (m_videoInputCombo->findText(currentInput) < 0 && m_videoInputCombo->count() > 0) {
+    if (m_videoInputCombo->findData(currentInput) < 0 && m_videoInputCombo->count() > 0) {
         m_videoInputCombo->setCurrentIndex(0);
     }
 
@@ -975,6 +985,14 @@ void MainWindow::rebuildConnectorCombos() {
     if (m_videoOutputConnectionCombo->findText(currentOutput) < 0) {
         m_videoOutputConnectionCombo->setCurrentIndex(0);
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    // persist the current selections (recording/auxiliary directories, playout
+    // file, connector choices) so they are waiting at the next launch
+    syncConfigFromUi();
+    m_config.save();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::refreshDeckLinkDevices() {

@@ -10,6 +10,7 @@
 #include <QMap>
 
 class QButtonGroup;
+class QCloseEvent;
 class QCheckBox;
 class QGroupBox;
 class QLabel;
@@ -26,6 +27,9 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(const QString& packageRoot, QWidget* parent = nullptr);
     QStringList runSelfTest();
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void refreshDeckLinkDevices();
