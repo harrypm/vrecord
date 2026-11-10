@@ -161,6 +161,21 @@ QString toBashPath(QString value) {
     return value;
 }
 
+// belt and braces like the shell backend's pkill: a detached launcher can die
+// while its ffmpeg child survives and keeps holding the card (every later
+// launch then fails with 'Could not enable video output'). Sweep any orphan
+// carrying our test-signal metadata marker.
+void sweepOrphanedTestStreams() {
+    QProcess sweeper;
+    sweeper.start(QStringLiteral("powershell.exe"),
+                  {QStringLiteral("-NoProfile"),
+                   QStringLiteral("-Command"),
+                   QStringLiteral("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg-ma.exe'\" | "
+                                  "Where-Object { $_.CommandLine -match 'vrecord-test-signal' } | "
+                                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")});
+    sweeper.waitForFinished(5000);
+}
+
 // QProcess::suspend()/resume() are Unix-only - use the ntdll process
 // primitives to hold the DeckLink playout on the exact frame
 using NtProcessControlFunc = LONG(WINAPI*)(HANDLE);
@@ -331,6 +346,7 @@ bool BackendController::stopAllOutputs(const VrecordConfig& config, QString* err
     if (!stopTrackedProcess(testSignalPidPath(), errorMessage)) {
         return false;
     }
+    sweepOrphanedTestStreams();
     const bool ok = stopManagedFileOutputInternal(errorMessage) && stopOutputFeed();
     m_playbackCueSeconds = 0.0;
     return ok;
@@ -846,7 +862,9 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
 
     const QString pidPath = testSignalPidPath();
     if (!enabled) {
-        return stopTrackedProcess(pidPath, errorMessage);
+        const bool stopped = stopTrackedProcess(pidPath, errorMessage);
+        sweepOrphanedTestStreams();
+        return stopped;
     }
 
     QString outputDevice = config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")).trimmed();
@@ -886,6 +904,7 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
     stopOutputFeed();
     stopVideoPreview();
     stopTrackedProcess(pidPath, nullptr);
+    sweepOrphanedTestStreams();
     QThread::msleep(400);
 
     if (!applyVideoOutputConnection(config, errorMessage)) {
