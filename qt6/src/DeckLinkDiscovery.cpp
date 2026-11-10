@@ -214,6 +214,79 @@ bool DeckLinkDiscovery::applyInputConnection(const QString& modelName, const QSt
     return applyConnection(modelName, static_cast<int>(bmdDeckLinkConfigVideoInputConnection), connectionName, errorMessage);
 }
 
+QString DeckLinkDiscovery::activeOutputModeFourCC(const QString& modelName, QString* errorMessage)
+{
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool comInitialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+    auto uninit = qScopeGuard([&] {
+        if (SUCCEEDED(hr)) {
+            CoUninitialize();
+        }
+    });
+    if (!comInitialized) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Failed to initialize COM for output mode probe.");
+        }
+        return {};
+    }
+
+    IDeckLinkIterator* iterator = nullptr;
+    hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator));
+    if (FAILED(hr) || !iterator) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("DeckLink drivers not found or iterator creation failed.");
+        }
+        return {};
+    }
+
+    QString modeCode;
+    IDeckLink* deckLink = nullptr;
+    while (iterator->Next(&deckLink) == S_OK && deckLink) {
+        BSTR modelNameBstr = nullptr;
+        QString deviceModel;
+        if (deckLink->GetModelName(&modelNameBstr) == S_OK) {
+            deviceModel = bstrToQString(modelNameBstr);
+            SysFreeString(modelNameBstr);
+        }
+        if (deviceModel != modelName) {
+            deckLink->Release();
+            continue;
+        }
+
+        IDeckLinkStatus* status = nullptr;
+        if (deckLink->QueryInterface(IID_IDeckLinkStatus, reinterpret_cast<void**>(&status)) != S_OK || !status) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Device %1 does not expose the status interface.").arg(modelName);
+            }
+            deckLink->Release();
+            break;
+        }
+
+        LONGLONG activeMode = 0;
+        if (status->GetInt(bmdDeckLinkStatusCurrentVideoOutputMode, &activeMode) != S_OK) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Device %1 did not report its active output mode.").arg(modelName);
+            }
+            status->Release();
+            deckLink->Release();
+            break;
+        }
+        status->Release();
+        deckLink->Release();
+
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            const char character = static_cast<char>((activeMode >> shift) & 0xFF);
+            if (character != ' ') {
+                modeCode += QLatin1Char(character);
+            }
+        }
+        break;
+    }
+
+    iterator->Release();
+    return modeCode;
+}
+
 bool DeckLinkDiscovery::applyConnectionInternal(const QString& modelName, std::int64_t configurationId, const QString& connectionName, std::int64_t connectionMask, QString* errorMessage)
 {
     const auto configId = static_cast<BMDDeckLinkConfigurationID>(configurationId);

@@ -9,6 +9,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QTextStream>
+#include <QThread>
 #include <QTimer>
 
 #include <windows.h>
@@ -298,6 +299,10 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
     if (!probeMediaFile(playFile, &duration, &fps, errorMessage)) {
         return false;
     }
+    // tear the previous playout down BEFORE applying the connector (teardown
+    // race: SetInt silently fails while the driver is still stopping a stream)
+    stopManagedFileOutputInternal(nullptr);
+    QThread::msleep(400);
     if (!applyVideoOutputConnection(config, errorMessage)) {
         return false;
     }
@@ -873,15 +878,19 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
     const QString audioSource = testAudioSource(audio);
     const QStringList videoFilters = videoFilterChainForPattern(pattern, signalMode);
 
-    if (!applyVideoOutputConnection(config, errorMessage)) {
-        return false;
-    }
-
-    // the test signal owns the card output exclusively
+    // the test signal owns the card output exclusively - tear the other
+    // outputs down FIRST and let the driver settle, otherwise the connector
+    // apply below hits the teardown race and silently fails (the new stream
+    // then starts on a stale analog connector and the HDMI monitor stays dark)
     stopManagedFileOutputInternal(nullptr);
     stopOutputFeed();
     stopVideoPreview();
     stopTrackedProcess(pidPath, nullptr);
+    QThread::msleep(400);
+
+    if (!applyVideoOutputConnection(config, errorMessage)) {
+        return false;
+    }
 
     QStringList arguments;
     arguments << QStringLiteral("-nostdin")
@@ -904,36 +913,62 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
               << QStringLiteral("-f") << QStringLiteral("decklink")
               << outputDevice;
 
-    qint64 pid = 0;
-    if (!startDetachedProgramWithLog(ffmpegPath, arguments, testSignalLogPath(), &pid, errorMessage)) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to start test signal output.");
-        }
-        return false;
-    }
-
     if (s_testMode) {
+        s_captured << (ffmpegPath + QLatin1Char(' ') + arguments.join(QLatin1Char(' ')));
         return true;
     }
 
-    QFile pidFile(pidPath);
-    if (pidFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        QTextStream out(&pidFile);
-        out << pid << '\n';
+    // launch, verify liveness, then verify the card actually locked the
+    // requested raster: a silent connector revert (teardown race) would
+    // stream the bars into a stale connector while the HDMI monitor stays dark
+    const auto launchSignal = [&]() -> bool {
+        qint64 newPid = 0;
+        if (!startDetachedProgramWithLog(ffmpegPath, arguments, testSignalLogPath(), &newPid, errorMessage)) {
+            return false;
+        }
+        QFile pidFile(pidPath);
+        if (pidFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+            QTextStream out(&pidFile);
+            out << newPid << '\n';
+        }
+        QThread::msleep(1500);
+        if (!pidAlive(newPid)) {
+            const QString logTail = lastLogFileLine(testSignalLogPath());
+            QFile::remove(pidPath);
+            if (errorMessage) {
+                *errorMessage = logTail.isEmpty()
+                    ? QStringLiteral("Test signal output exited immediately - see VrecordQt6-testsignal.log")
+                    : QStringLiteral("Test signal output failed: %1").arg(logTail);
+            }
+            return false;
+        }
+        return true;
+    };
+
+    if (!launchSignal()) {
+        return false;
     }
 
-    QEventLoop waitLoop;
-    QTimer::singleShot(1500, &waitLoop, &QEventLoop::quit);
-    waitLoop.exec();
-    if (!pidAlive(pid)) {
-        const QString logTail = lastLogFileLine(testSignalLogPath());
-        QFile::remove(pidPath);
-        if (errorMessage) {
-            *errorMessage = logTail.isEmpty()
-                ? QStringLiteral("Test signal output exited immediately - see VrecordQt6-testsignal.log")
-                : QStringLiteral("Test signal output failed: %1").arg(logTail);
+    const QString requestedSize = signalMode.size;
+    const bool requestedHD = !lockedPatternSize(pattern).isEmpty()
+        || requestedSize.startsWith(QStringLiteral("1920"))
+        || requestedSize.startsWith(QStringLiteral("3840"))
+        || requestedSize.startsWith(QStringLiteral("4096"))
+        || requestedSize.startsWith(QStringLiteral("2048"))
+        || requestedSize.startsWith(QStringLiteral("1280"));
+    if (requestedHD) {
+        const QString activeMode = DeckLinkDiscovery::activeOutputModeFourCC(outputDevice, nullptr);
+        if (activeMode == QStringLiteral("ntsc") || activeMode == QStringLiteral("pal")) {
+            // teardown race hit: re-apply the connector and relaunch once
+            stopTrackedProcess(pidPath, nullptr);
+            QThread::msleep(400);
+            if (!applyVideoOutputConnection(config, errorMessage)) {
+                return false;
+            }
+            if (!launchSignal()) {
+                return false;
+            }
         }
-        return false;
     }
     return true;
 }

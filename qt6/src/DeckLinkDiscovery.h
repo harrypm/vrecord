@@ -20,6 +20,7 @@ public:
     static QStringList connectionNamesFromMask(qint64 mask);
     static bool applyOutputConnection(const QString& modelName, const QString& connectionName, QString* errorMessage = nullptr);
     static bool applyInputConnection(const QString& modelName, const QString& connectionName, QString* errorMessage = nullptr);
+    static QString activeOutputModeFourCC(const QString& modelName, QString* errorMessage = nullptr);
     static QString detectInputFormatCode(const QString& modelName, QString* errorMessage = nullptr);
 
 private:
