@@ -10,6 +10,8 @@
 #include <QProcess>
 #include <QString>
 
+class QTimer;
+
 class BackendController : public QObject {
     Q_OBJECT
 public:
@@ -77,6 +79,8 @@ signals:
     void outputStatus(const QString& message);
     void shellStarted(const QString& mode);
     void shellFinished(const QString& mode, int exitCode, const QString& message);
+    // the driver reports a (new) mode on the live input, e.g. "Hp50"
+    void inputModeDetected(const QString& formatCode);
 
 private:
     struct MediaInfo {
@@ -110,6 +114,8 @@ private:
     bool showPlayFrame(double seconds, QString* errorMessage);
     FrameFeed* startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames);
     void stopFeed(QPointer<FrameFeed>& feed);
+    void followInputMode(const QString& detected);
+    VideoMode outputModeForTestSignal(const VrecordConfig& config) const;
 
     QString m_packageRoot;
     bool m_managedOutputs = false;
@@ -122,6 +128,10 @@ private:
     QPointer<FrameFeed> m_previewFeed;
 
     QString m_previewDevice;
+    QString m_previewFrameCode;       // the mode the pane raster was sized for
+    QString m_lastReportedInputMode;
+    VrecordConfig m_previewConfig;
+    QTimer* m_inputModeTimer = nullptr;
 
     // test signal (managed mode)
     QPointer<FrameFeed> m_testSignalFeed;

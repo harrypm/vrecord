@@ -32,7 +32,10 @@ public:
     // display modes the device can play out, as ffmpeg format codes
     // ('ntsc', 'Hp50', '4k30', ...)
     static QStringList outputModeCodes(const QString& deviceName, QString* errorMessage = nullptr);
-    static QString detectInputFormatCode(const QString& deviceName, QString* errorMessage = nullptr);
+    // allowStale: return the detected mode without requiring the lock flag.
+    // The Intensity Pro 4K reports 'locked: NO' even mid-capture while the
+    // detected mode is live; idle, the driver keeps the last detected mode.
+    static QString detectInputFormatCode(const QString& deviceName, QString* errorMessage = nullptr, bool allowStale = false);
 
 private:
     static bool withDevice(const QString& deviceName, const std::function<bool(IDeckLink*)>& action, QString* errorMessage);

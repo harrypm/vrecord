@@ -16,6 +16,7 @@
 #include <QRegularExpression>
 #include <QTextStream>
 #include <QThread>
+#include <QTimer>
 
 #include <cmath>
 #include <cstring>
@@ -107,23 +108,6 @@ QStringList previewPipeOutput(const QString& filterPrefix, int width, int height
             QStringLiteral("-f"), QStringLiteral("rawvideo"),
             QStringLiteral("-flush_packets"), QStringLiteral("1"),
             QStringLiteral("pipe:1")};
-}
-
-// The live input follows whatever the deck sends (autodetect can switch the
-// raster mid-stream), so the pipe raster cannot be derived from the selected
-// standard: fit any input into a fixed 16:9 box at its display aspect - HD/UHD
-// arrive square-pixel, SD (<= 576 lines) uses the Display Aspect Ratio choice -
-// and letterbox the rest. scale re-evaluates these on every input change.
-constexpr int kInputBoxWidth = 960;
-constexpr int kInputBoxHeight = 540;
-
-QString boxedPreviewChain(double sdAspect) {
-    const QString dar = QStringLiteral("if(lte(ih,576),%1,iw/ih)").arg(sdAspect, 0, 'f', 6);
-    return QStringLiteral("scale=w='2*trunc(min(%1,%2*%3)/2)':h='2*trunc(min(%2,%1/%3)/2)':flags=fast_bilinear,"
-                          "pad=%1:%2:(ow-iw)/2:(oh-ih)/2,setsar=1,format=bgra")
-        .arg(kInputBoxWidth)
-        .arg(kInputBoxHeight)
-        .arg(dar);
 }
 
 QString describeMode(const QString& code) {
@@ -349,9 +333,10 @@ FrameFeed* BackendController::startFeed(const QString& kind, const QList<FrameFe
         if (isInput) {
             // the capture has the input enabled now, so the driver's
             // detection status is live: report what the card actually locked
-            const QString detected = DeckLinkDiscovery::detectInputFormatCode(m_previewDevice);
+            const QString detected = DeckLinkDiscovery::detectInputFormatCode(m_previewDevice, nullptr, true);
             message = QStringLiteral("streaming (%1)").arg(detected.isEmpty() ? QStringLiteral("%1 - no signal lock").arg(label) : describeMode(detected));
             emit inputStatus(message);
+            followInputMode(detected);
         } else {
             emit outputStatus(message);
         }
@@ -584,9 +569,21 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
     stopFeed(m_previewFeed);
 
     const VideoMode mode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
-    const int width = kInputBoxWidth;
-    const int height = kInputBoxHeight;
-    const double sdAspect = config.value(QStringLiteral("ASPECT_RATIO_CHOICE")) == QStringLiteral("16/9") ? 16.0 / 9.0 : 4.0 / 3.0;
+    // native framing: the pane gets the signal's own raster shape. The driver
+    // keeps the last detected input mode even while no capture runs; when the
+    // live capture reports a different one the preview relaunches at that
+    // size (see the streaming handler and the mode poll)
+    QString frameCode = DeckLinkDiscovery::detectInputFormatCode(device, nullptr, true);
+    VideoMode frameMode = VideoModes::forCode(frameCode);
+    if (!frameMode.isValid()) {
+        frameMode = mode;
+        frameCode = mode.formatCode;
+    }
+    int width = 0;
+    int height = 0;
+    VideoModes::previewSize(frameMode.height, VideoModes::displayAspect(frameMode, config.value(QStringLiteral("ASPECT_RATIO_CHOICE"))), &width, &height);
+    m_previewFrameCode = frameCode;
+    m_previewConfig = config;
 
     bool autodetect = true;
     bool relayPossible = false;
@@ -620,7 +617,7 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
                                    QStringLiteral("-raw_format"), QStringLiteral("yuv422p10"),
                                    QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE")))};
     const QStringList pipeOut{QStringLiteral("-map"), QStringLiteral("0:v:0"),
-                              QStringLiteral("-vf"), boxedPreviewChain(sdAspect),
+                              QStringLiteral("-vf"), QStringLiteral("scale=%1:%2:flags=fast_bilinear,setsar=1,format=bgra").arg(width).arg(height),
                               QStringLiteral("-an"),
                               QStringLiteral("-f"), QStringLiteral("rawvideo"),
                               QStringLiteral("-flush_packets"), QStringLiteral("1"),
@@ -671,11 +668,47 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
     }
     m_previewFeed = startFeed(QStringLiteral("input"), attempts, width, height, 0);
     m_previewDevice = device;
-    emit inputStatus(QStringLiteral("starting (%1)").arg(attempts.first().label));
+    if (!m_inputModeTimer) {
+        m_inputModeTimer = new QTimer(this);
+        m_inputModeTimer->setInterval(2000);
+        connect(m_inputModeTimer, &QTimer::timeout, this, [this] {
+            if (!isVideoPreviewActive() || !m_previewFeed->isStreaming()) {
+                return;
+            }
+            followInputMode(DeckLinkDiscovery::detectInputFormatCode(m_previewDevice, nullptr, true));
+        });
+    }
+    m_inputModeTimer->start();
+    emit inputStatus(QStringLiteral("starting (%1) at %2x%3").arg(attempts.first().label).arg(width).arg(height));
     return true;
 }
 
+void BackendController::followInputMode(const QString& detected) {
+    if (detected.isEmpty() || !VideoModes::forCode(detected).isValid()) {
+        return;
+    }
+    if (detected != m_lastReportedInputMode) {
+        m_lastReportedInputMode = detected;
+        emit inputModeDetected(detected);
+    }
+    if (detected != m_previewFrameCode) {
+        // the signal changed raster/rate: relaunch so the pane keeps native framing
+        m_previewFrameCode = detected;
+        QTimer::singleShot(0, this, [this] {
+            if (!isVideoPreviewActive() || isShellRunning()) {
+                return;
+            }
+            const VrecordConfig config = m_previewConfig;
+            stopFeed(m_previewFeed);
+            startVideoPreview(config, nullptr);
+        });
+    }
+}
+
 bool BackendController::stopVideoPreview() {
+    if (m_inputModeTimer) {
+        m_inputModeTimer->stop();
+    }
     if (m_previewFeed) {
         stopFeed(m_previewFeed);
         emit inputStatus(QStringLiteral("stopped"));
@@ -751,8 +784,16 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
     VideoMode target;
     QString filter;
     QString description;
+    // the output has its own standard, independent of the capture Standard:
+    // "Auto" plays the file in its native mode; a named standard converts to it.
+    // Composite/S-Video only carry SD, so there Auto follows the file's rate
+    // (25/50 fps -> PAL, everything else -> NTSC).
     QString nativeNote;
-    if (config.value(QStringLiteral("FILEPLAY_AUTO_CHOICE"), QStringLiteral("true")) != QStringLiteral("false")) {
+    const QString outputStandard = config.value(QStringLiteral("OUTPUT_STANDARD_CHOICE")).trimmed();
+    const bool autoOutput = outputStandard.isEmpty() || outputStandard.startsWith(QStringLiteral("Auto"));
+    const QString connection = config.value(QStringLiteral("VIDEO_OUTPUT_CONNECTION_CHOICE")).trimmed();
+    const bool analogSdOnly = connection == QStringLiteral("Composite") || connection == QStringLiteral("S-Video");
+    if (autoOutput && !analogSdOnly) {
         target = nativePlayoutMode(media, outputDevice, &nativeNote);
     }
     const QString fileRate = QString::number(media.rateDen > 0 ? double(media.rateNum) / media.rateDen : 0.0, 'f', media.rateDen == 1 ? 0 : 2);
@@ -777,7 +818,10 @@ bool BackendController::startFileOutput(const VrecordConfig& config, QString* er
             description += QStringLiteral(" (%1)").arg(nativeNote);
         }
     } else {
-        const QString standard = config.value(QStringLiteral("STANDARD_CHOICE")).trimmed();
+        const bool pal = media.rateDen > 0 && (media.rateNum == 25 * media.rateDen || media.rateNum == 50 * media.rateDen);
+        const QString standard = !autoOutput    ? outputStandard
+                                 : analogSdOnly ? (pal ? QStringLiteral("PAL") : QStringLiteral("NTSC"))
+                                                : config.value(QStringLiteral("STANDARD_CHOICE")).trimmed();
         target = VideoModes::forStandard(standard);
         if (!target.isValid()) {
             if (errorMessage) {
@@ -1278,6 +1322,20 @@ bool BackendController::stopTestSignalInternal(QString* errorMessage) {
     return true;
 }
 
+// the test signal goes out in the output standard; on Auto it follows the
+// capture Standard (what the deck/monitor chain is set up for)
+VideoMode BackendController::outputModeForTestSignal(const VrecordConfig& config) const {
+    const QString outputStandard = config.value(QStringLiteral("OUTPUT_STANDARD_CHOICE")).trimmed();
+    VideoMode mode;
+    if (!outputStandard.isEmpty() && !outputStandard.startsWith(QStringLiteral("Auto"))) {
+        mode = VideoModes::forStandard(outputStandard);
+    }
+    if (!mode.isValid()) {
+        mode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    }
+    return mode.isValid() ? mode : VideoModes::forStandard(QStringLiteral("NTSC"));
+}
+
 bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage) {
     if (!saveConfig(config, errorMessage)) {
         return false;
@@ -1306,10 +1364,7 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
 
-    VideoMode signalMode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
-    if (!signalMode.isValid()) {
-        signalMode = VideoModes::forStandard(QStringLiteral("NTSC"));
-    }
+    VideoMode signalMode = outputModeForTestSignal(config);
     const QString pattern = config.value(QStringLiteral("TEST_SIGNAL_PATTERN_CHOICE")).trimmed();
     const QString audio = config.value(QStringLiteral("TEST_SIGNAL_AUDIO_CHOICE")).trimmed();
     const QString videoSource = testVideoSourceForPattern(pattern, signalMode);

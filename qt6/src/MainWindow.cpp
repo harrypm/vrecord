@@ -128,6 +128,7 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
         }
         appendActivity(QStringLiteral("output: %1").arg(message));
     });
+    connect(&m_backend, &BackendController::inputModeDetected, this, &MainWindow::followInputMode);
     connect(&m_backend, &BackendController::shellStarted, this, [this](const QString& mode) {
         m_inputView->clearFrame(mode == QStringLiteral("record")
                                     ? QStringLiteral("Recording - monitor in the player window.\nClose that window (or press Stop Recording) to finish.")
@@ -180,6 +181,20 @@ QComboBox* MainWindow::makeCombo(const QStringList& items) {
     return combo;
 }
 
+// show "MOV (QuickTime)" etc.; the item data keeps the shell's spelling
+void MainWindow::labelContainerItems(QComboBox* combo) {
+    for (int i = 0; i < combo->count(); ++i) {
+        const QString value = combo->itemText(i);
+        combo->setItemData(i, value);
+        combo->setItemText(i, VrecordOptions::containerLabel(value));
+    }
+}
+
+QString MainWindow::choiceValue(const QComboBox* combo) {
+    const QVariant data = combo->currentData();
+    return data.isValid() && !data.toString().isEmpty() ? data.toString() : combo->currentText();
+}
+
 QCheckBox* MainWindow::makeCheckBox(const QString& label) {
     return new QCheckBox(label, this);
 }
@@ -219,6 +234,7 @@ void MainWindow::buildUi() {
     m_aspectRatioCombo = makeCombo(VrecordOptions::aspectRatios());
     m_embedLogsCombo = makeCombo(VrecordOptions::embedLogs());
     m_containerCombo = makeCombo(VrecordOptions::containers());
+    labelContainerItems(m_containerCombo);
     m_videoCodecCombo = makeCombo(VrecordOptions::videoCodecs());
     m_audioCodecCombo = makeCombo(VrecordOptions::audioCodecs());
     m_playbackViewCombo = makeCombo(VrecordOptions::playbackViews());
@@ -286,6 +302,7 @@ void MainWindow::buildUi() {
 
     m_dvDeviceCombo = makeCombo({QStringLiteral("auto"), QStringLiteral("device 0")});
     m_dvContainerCombo = makeCombo(VrecordOptions::dvContainers());
+    labelContainerItems(m_dvContainerCombo);
     m_dvOptionSCheck = makeCheckBox(QStringLiteral("recording start flags"));
     m_dvOptionDCheck = makeCheckBox(QStringLiteral("recording timestamps jumps"));
     m_dvOptionTCheck = makeCheckBox(QStringLiteral("timecode jumps"));
@@ -425,8 +442,19 @@ void MainWindow::buildUi() {
     m_videoOutputDeviceCombo = new QComboBox(this);
     m_relayDeviceCombo = new QComboBox(this);
     m_filePlayAutoCheck = makeCheckBox(QStringLiteral("Auto-detect file format (play natively)"));
+    m_filePlayAutoCheck->hide();   // folded into the output standard's "Auto" entry
+    m_outputStandardCombo = makeCombo(QStringList{QStringLiteral("Auto (match file)")} + VrecordOptions::standards());
     m_previewInfoText = new QPlainTextEdit(this);
     m_previewInfoText->setReadOnly(true);
+    m_autosaveTimer = new QTimer(this);
+    m_autosaveTimer->setSingleShot(true);
+    m_autosaveTimer->setInterval(700);
+    connect(m_autosaveTimer, &QTimer::timeout, this, [this] {
+        QString error;
+        if (!m_backend.saveConfig(m_config, &error)) {
+            statusBar()->showMessage(error, 5000);
+        }
+    });
     m_feedTimer = new QTimer(this);
     m_feedTimer->setInterval(100);
     auto* previewTab = new QWidget(this);
@@ -479,7 +507,8 @@ void MainWindow::buildUi() {
     outputDeviceLayout->addWidget(m_previewRelayCheck);
     outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox));
     outputDeviceLayout->addWidget(m_relayDeviceCombo);
-    outputDeviceLayout->addWidget(m_filePlayAutoCheck);
+    outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Output standard (file playout / test signal)"), outputDeviceBox));
+    outputDeviceLayout->addWidget(m_outputStandardCombo);
     outputDeviceLayout->addWidget(m_outputView, 1);
     auto* transportRow = new QHBoxLayout();
     transportRow->addWidget(btnBack100);
@@ -776,6 +805,9 @@ void MainWindow::buildUi() {
     connect(m_standardCombo, &QComboBox::activated, this, [restartTestSignalIfRunning](int) {
         restartTestSignalIfRunning();
     });
+    connect(m_outputStandardCombo, &QComboBox::activated, this, [restartTestSignalIfRunning](int) {
+        restartTestSignalIfRunning();
+    });
     connect(m_testPatternCombo, &QComboBox::activated, this, [restartTestSignalIfRunning](int) {
         restartTestSignalIfRunning();
     });
@@ -912,6 +944,7 @@ void MainWindow::populateFromConfig() {
     m_invertPhase4Check->setChecked(m_config.value(QStringLiteral("INVERT_PHASE_4")) == QStringLiteral("true"));
     m_previewRelayCheck->setChecked(m_config.value(QStringLiteral("PREVIEW_RELAY_CHOICE"), QStringLiteral("true")) == QStringLiteral("true"));
     m_filePlayAutoCheck->setChecked(m_config.value(QStringLiteral("FILEPLAY_AUTO_CHOICE"), QStringLiteral("true")) == QStringLiteral("true"));
+    setChoice(m_outputStandardCombo, m_config.value(QStringLiteral("OUTPUT_STANDARD_CHOICE")), QStringLiteral("Auto (match file)"));
     m_testSignalOutputCheck->setChecked(m_config.value(QStringLiteral("TEST_SIGNAL_OUTPUT_CHOICE")) == QStringLiteral("true"));
     m_mediaIdTypeEdit->setText(m_config.value(QStringLiteral("MEDIA_ID_TYPE")));
     m_webVttExtraEdit->setText(m_config.value(QStringLiteral("WEBVTT_EXTRA")));
@@ -937,7 +970,7 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("STANDARD_CHOICE"), m_standardCombo->currentText());
     m_config.setValue(QStringLiteral("VIDEO_OUTPUT_CONNECTION_CHOICE"), m_videoOutputConnectionCombo->currentText());
     m_config.setValue(QStringLiteral("EMBED_LOGS_CHOICE"), m_embedLogsCombo->currentText());
-    m_config.setValue(QStringLiteral("CONTAINER_CHOICE"), m_containerCombo->currentText());
+    m_config.setValue(QStringLiteral("CONTAINER_CHOICE"), choiceValue(m_containerCombo));
     m_config.setValue(QStringLiteral("VIDEO_CODEC_CHOICE"), m_videoCodecCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_CODEC_CHOICE"), m_audioCodecCombo->currentText());
     m_config.setValue(QStringLiteral("PLAYBACKVIEW_CHOICE"), m_playbackViewCombo->currentText());
@@ -945,7 +978,7 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("VIDEO_BIT_DEPTH_CHOICE"), m_bitDepthCombo->currentText());
     m_config.setValue(QStringLiteral("ASPECT_RATIO_CHOICE"), m_aspectRatioCombo->currentText());
     m_config.setValue(QStringLiteral("DVRESCUE_INPUT_CHOICE"), m_dvDeviceCombo->currentText());
-    m_config.setValue(QStringLiteral("DV_CONTAINER_CHOICE"), m_dvContainerCombo->currentText());
+    m_config.setValue(QStringLiteral("DV_CONTAINER_CHOICE"), choiceValue(m_dvContainerCombo));
     m_config.setValue(QStringLiteral("AUDIO_DEV_CHOICE"), m_audioDeviceCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_MODE_CODEC_CHOICE"), m_audioModeCodecCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_CHANNEL_CHOICE"), m_audioChannelsCombo->currentText());
@@ -978,7 +1011,9 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("INVERT_PHASE_2"), m_invertPhase2Check->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("INVERT_PHASE_4"), m_invertPhase4Check->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("PREVIEW_RELAY_CHOICE"), m_previewRelayCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
-    m_config.setValue(QStringLiteral("FILEPLAY_AUTO_CHOICE"), m_filePlayAutoCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
+    m_config.setValue(QStringLiteral("OUTPUT_STANDARD_CHOICE"), m_outputStandardCombo->currentText());
+    // the shell's own file playback reads FILEPLAY_AUTO_CHOICE: Auto = native
+    m_config.setValue(QStringLiteral("FILEPLAY_AUTO_CHOICE"), m_outputStandardCombo->currentIndex() == 0 ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("TEST_SIGNAL_OUTPUT_CHOICE"), m_testSignalOutputCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("MEDIA_ID_TYPE"), m_mediaIdTypeEdit->text().trimmed());
     m_config.setValue(QStringLiteral("WEBVTT_EXTRA"), m_webVttExtraEdit->text().trimmed());
@@ -1118,51 +1153,42 @@ void MainWindow::saveConfig() {
 }
 
 // The shell captures with -format_code from the Standard choice: a deck sending
-// a different mode is captured as blank frames ("No input signal"), so the
-// recording and its monitor show nothing. Compare against what the card has
-// locked and offer the matching standard. Returns false to cancel the start.
+// a different mode is captured as blank frames ("No input signal"). The
+// Standard therefore follows what the card has locked - here right before a
+// session starts, and continuously while the live preview runs.
 bool MainWindow::confirmInputStandard() {
     if (BackendController::testMode() || m_config.value(QStringLiteral("DEVICE_INPUT_CHOICE"), QStringLiteral("0")) != QStringLiteral("0")) {
         return true;
     }
     const QString device = m_config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed();
-    if (device.isEmpty()) {
-        return true;
+    if (!device.isEmpty()) {
+        followInputMode(DeckLinkDiscovery::detectInputFormatCode(device, nullptr, true));
     }
-    const QString detected = DeckLinkDiscovery::detectInputFormatCode(device);
-    if (detected.isEmpty()) {
-        return true;
+    return true;
+}
+
+void MainWindow::followInputMode(const QString& formatCode) {
+    if (formatCode.isEmpty() || m_backend.isShellRunning()) {
+        return;
     }
     QString match;
     for (const QString& standard : VrecordOptions::standards()) {
         const QString code = standard == QStringLiteral("NTSC") ? QStringLiteral("ntsc")
                            : standard == QStringLiteral("PAL")  ? QStringLiteral("pal")
                                                                 : standard.left(4);
-        if (code == detected) {
+        if (code == formatCode) {
             match = standard;
             break;
         }
     }
-    const QString current = m_standardCombo->currentText();
-    if (match.isEmpty() || match == current) {
-        return true;
+    if (match.isEmpty() || match == m_standardCombo->currentText()) {
+        return;
     }
-    QMessageBox box(QMessageBox::Warning, QStringLiteral("vrecord Qt6"),
-                    QStringLiteral("The card is receiving %1 on %2, but Standard is set to %3.\n\n"
-                                   "Capturing as %3 would record blank frames. Switch Standard to %1?")
-                        .arg(match, m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE")), current),
-                    QMessageBox::NoButton, this);
-    QPushButton* switchButton = box.addButton(QStringLiteral("Switch to %1").arg(match), QMessageBox::AcceptRole);
-    QPushButton* keepButton = box.addButton(QStringLiteral("Keep %1").arg(current), QMessageBox::DestructiveRole);
-    box.addButton(QMessageBox::Cancel);
-    box.setDefaultButton(switchButton);
-    box.exec();
-    if (box.clickedButton() == switchButton) {
-        m_standardCombo->setCurrentText(match);
-        syncConfigFromUi();
-        return true;
-    }
-    return box.clickedButton() == keepButton;
+    const QString previous = m_standardCombo->currentText();
+    m_standardCombo->setCurrentText(match);
+    updateDerivedState();
+    appendActivity(QStringLiteral("Standard set to %1 to match the input (was %2)").arg(match, previous));
+    statusBar()->showMessage(QStringLiteral("Standard follows the input: %1").arg(match), 6000);
 }
 
 void MainWindow::startRecord() {
@@ -1598,7 +1624,13 @@ void MainWindow::setComboValue(QComboBox* combo, const QString& value) {
 void MainWindow::setChoice(QComboBox* combo, const QString& value, const QString& fallback) {
     // shell option combos never grow: an unknown value falls back to the
     // default instead of being written back to the config
-    int index = combo->findText(value);
+    int index = combo->findData(value);
+    if (index < 0) {
+        index = combo->findText(value);
+    }
+    if (index < 0) {
+        index = combo->findData(fallback);
+    }
     if (index < 0) {
         index = combo->findText(fallback);
     }
@@ -1653,6 +1685,16 @@ void MainWindow::updateDerivedState() {
         return;
     }
     syncConfigFromUi();
+    // relay copies the input to the output, so it overrides the output standard
+    const bool relayOn = m_previewRelayCheck->isChecked();
+    m_outputStandardCombo->setEnabled(!relayOn);
+    m_outputStandardCombo->setToolTip(relayOn ? QStringLiteral("Relay is on: the output follows the input mode.")
+                                              : QStringLiteral("Standard sent to the hardware output for file playout and the test signal.\n"
+                                                               "Auto plays files in their native mode; independent of the capture Standard."));
+    // every change is kept: save shortly after the last edit
+    if (!BackendController::testMode() && m_autosaveTimer) {
+        m_autosaveTimer->start();
+    }
     m_summaryText->setPlainText(m_config.summary());
     const QStringList issues = m_config.validate();
     QString validationText = issues.isEmpty() ? QStringLiteral("OK") : issues.join(QLatin1Char('\n'));

@@ -28,6 +28,19 @@ inline QStringList containers() {
     return {QStringLiteral("QuickTime"), QStringLiteral("Matroska"), QStringLiteral("AVI"), QStringLiteral("MXF"), QStringLiteral("MP4")};
 }
 
+// combo label for a container value: extension first, full name after
+inline QString containerLabel(const QString& value) {
+    static const QMap<QString, QString> labels{
+        {QStringLiteral("QuickTime"), QStringLiteral("MOV (QuickTime)")},
+        {QStringLiteral("Matroska"), QStringLiteral("MKV (Matroska)")},
+        {QStringLiteral("AVI"), QStringLiteral("AVI (Audio Video Interleave)")},
+        {QStringLiteral("MXF"), QStringLiteral("MXF (Material Exchange Format)")},
+        {QStringLiteral("MP4"), QStringLiteral("MP4 (MPEG-4 Part 14)")},
+        {QStringLiteral("DV"), QStringLiteral("DV (raw DV stream)")},
+    };
+    return labels.value(value, value);
+}
+
 inline QStringList dvContainers() {
     return {QStringLiteral("DV"), QStringLiteral("Matroska"), QStringLiteral("QuickTime")};
 }

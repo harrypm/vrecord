@@ -227,7 +227,7 @@ QStringList DeckLinkDiscovery::outputModeCodes(const QString& deviceName, QStrin
     return codes;
 }
 
-QString DeckLinkDiscovery::detectInputFormatCode(const QString& deviceName, QString* errorMessage) {
+QString DeckLinkDiscovery::detectInputFormatCode(const QString& deviceName, QString* errorMessage, bool allowStale) {
     QString detected;
     withDevice(deviceName, [&](IDeckLink* deckLink) {
         IDeckLinkStatus* status = nullptr;
@@ -242,7 +242,7 @@ QString DeckLinkDiscovery::detectInputFormatCode(const QString& deviceName, QStr
         const bool signalLocked = status->GetInt(bmdDeckLinkStatusVideoInputSignalLocked, &locked) == S_OK && locked != 0;
         const bool modeDetected = status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &mode) == S_OK;
         status->Release();
-        if (!signalLocked || !modeDetected) {
+        if ((!signalLocked && !allowStale) || !modeDetected || mode == 0) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("No input signal detected on %1.").arg(deviceName);
             }

@@ -38,6 +38,7 @@ private slots:
     void startRecord();
     void startPassthrough();
     bool confirmInputStandard();
+    void followInputMode(const QString& formatCode);
     void startAudioCheck();
     void startFileOutput();
     void stopAllOutputs();
@@ -57,6 +58,8 @@ private:
     QLineEdit* makeLineEdit();
     void setComboValue(QComboBox* combo, const QString& value);
     void setChoice(QComboBox* combo, const QString& value, const QString& fallback);
+    void labelContainerItems(QComboBox* combo);
+    static QString choiceValue(const QComboBox* combo);
     void startPreviewQuietly();
     void updatePreviewButton();
     void appendActivity(const QString& line);
@@ -148,6 +151,8 @@ private:
     QMap<QString, QRadioButton*> m_inputChoiceRadios;
     QStringList m_selfTestResults;
     bool m_populating = false;
+    QComboBox* m_outputStandardCombo = nullptr;
+    QTimer* m_autosaveTimer = nullptr;
     VideoView* m_inputView = nullptr;
     VideoView* m_outputView = nullptr;
     QPlainTextEdit* m_activityText = nullptr;
