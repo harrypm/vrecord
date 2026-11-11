@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BackendController.h"
+#include "ComponentStatus.h"
 #include "DeckLinkDiscovery.h"
 #include "VrecordConfig.h"
 #include <QCheckBox>
@@ -22,12 +23,17 @@ class QSlider;
 class QTabWidget;
 class QTimer;
 class VideoView;
+class DeckControl;
+class QGridLayout;
+class QProcess;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(const QString& packageRoot, QWidget* parent = nullptr);
     QStringList runSelfTest();
+    // open on the tab with this title (--tab "Video Preview"); false if none
+    bool selectTab(const QString& title);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -50,6 +56,14 @@ private slots:
 
 private:
     void buildUi();
+    // RS-422 deck control + timecode scan (Decklink page)
+    void setDeckControlEnabled(bool enabled);
+    void startTimecodeScan();
+    void runNextTimecodeScan();
+    void finishTimecodeScan();
+    // installed-components indicator lights (Config tab)
+    void refreshComponents();
+    void showComponents(const QVector<ComponentStatus>& components);
     void populateFromConfig();
     void syncConfigFromUi();
     void populateDeckLinkCombo(const QVector<DeckLinkDeviceInfo>& devices, const QString& selectedValue);
@@ -154,6 +168,21 @@ private:
     QLineEdit* m_webVttExtraEdit = nullptr;
     QPlainTextEdit* m_ffmpegStatusText = nullptr;
     QPlainTextEdit* m_environmentText = nullptr;
+    DeckControl* m_deckControl = nullptr;
+    QCheckBox* m_deckControlToggle = nullptr;
+    QLabel* m_deckStateLabel = nullptr;
+    QLabel* m_deckTimecodeLabel = nullptr;
+    QList<QPushButton*> m_deckButtons;
+    QPushButton* m_timecodeScanButton = nullptr;
+    QPlainTextEdit* m_timecodeScanText = nullptr;
+    QStringList m_timecodeScanQueue;
+    QProcess* m_timecodeScanProcess = nullptr;
+    bool m_timecodeScanResumePreview = false;
+    QWidget* m_componentsPanel = nullptr;
+    QGridLayout* m_componentsGrid = nullptr;
+    QLabel* m_componentsSummary = nullptr;
+    QPushButton* m_componentsRecheck = nullptr;
+    bool m_componentsChecking = false;
     QPlainTextEdit* m_previewInfoText = nullptr;
     QPlainTextEdit* m_outputInfoText = nullptr;
     QPlainTextEdit* m_summaryText = nullptr;

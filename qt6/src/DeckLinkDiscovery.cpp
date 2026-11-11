@@ -326,3 +326,23 @@ bool DeckLinkDiscovery::applyConnection(const QString& deviceName, std::int64_t 
         return true;
     }, errorMessage);
 }
+
+QString DeckLinkDiscovery::driverVersion() {
+    ComScope com;
+    if (!com.ok()) {
+        return {};
+    }
+    IDeckLinkAPIInformation* info = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_CDeckLinkAPIInformation, nullptr, CLSCTX_ALL, IID_IDeckLinkAPIInformation,
+                                reinterpret_cast<void**>(&info))) || !info) {
+        return {};
+    }
+    QString version;
+    BSTR text = nullptr;
+    if (info->GetString(BMDDeckLinkAPIVersion, &text) == S_OK) {
+        version = bstrToQString(text);
+        SysFreeString(text);
+    }
+    info->Release();
+    return version;
+}

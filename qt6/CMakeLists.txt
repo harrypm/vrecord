@@ -26,6 +26,8 @@ add_executable(VrecordQt6 WIN32
   src/VideoView.cpp
   src/LevelMeter.cpp
   src/PipeFeed.cpp
+  src/ComponentStatus.cpp
+  src/DeckControl.cpp
   resources/vrecord.rc
   resources/vrecord.qrc
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c

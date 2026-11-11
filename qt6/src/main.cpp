@@ -41,9 +41,12 @@ int main(int argc, char* argv[]) {
     writeLog(QStringLiteral("packageRoot=%1").arg(QDir::toNativeSeparators(packageRoot)));
 
     bool selfTestMode = false;
+    QString startTab;
     for (int i = 1; i < argc; ++i) {
         if (QByteArray(argv[i]) == QByteArray("--self-test")) {
             selfTestMode = true;
+        } else if (QByteArray(argv[i]) == QByteArray("--tab") && i + 1 < argc) {
+            startTab = QString::fromLocal8Bit(argv[++i]);
         }
     }
     if (selfTestMode) {
@@ -65,6 +68,9 @@ int main(int argc, char* argv[]) {
 
     MainWindow window(packageRoot);
     writeLog(QStringLiteral("window_constructed"));
+    if (!startTab.isEmpty()) {
+        window.selectTab(startTab);
+    }
     window.show();
     window.setWindowState((window.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
     window.raise();

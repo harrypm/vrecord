@@ -78,6 +78,13 @@ cp -f "$BUILD_DIR/gtkdialog-install/bin/gtkdialog.exe" "$PKG/bin/"
 cp -f "$BUILD_DIR/xmlstarlet-install/bin/xmlstarlet.exe" "$PKG/bin/" 2>/dev/null || true
 cp -f "$BUILD_DIR/xmlstarlet-install/bin/xml.exe" "$PKG/bin/" 2>/dev/null || true
 cp -f "$BUILD_DIR/mediainfo-cli/MediaInfo.exe" "$BUILD_DIR/mediainfo-cli/"*.dll "$PKG/bin/" 2>/dev/null || true
+# optional tools (the GTK "Optional Tools" lights / Qt "Installed components"):
+# deckcontrol (RS-422 deck control, built from deckcontrol-src against the
+# DeckLink SDK), MediaConch CLI (+ its libcurl), DVRescue CLI, mpv (QC view)
+cp -f "$BUILD_DIR/deckcontrol-src/deckcontrol.exe" "$PKG/bin/" 2>/dev/null || true
+cp -f "$BUILD_DIR/mediaconch-x/MediaConch.exe" "$BUILD_DIR/mediaconch-x/LIBCURL.DLL" "$PKG/bin/" 2>/dev/null || true
+cp -f "$BUILD_DIR/dvrescue-x/DVRescue.exe" "$PKG/bin/" 2>/dev/null || true
+cp -f "$BUILD_DIR/mpv-x/mpv.exe" "$BUILD_DIR/mpv-x/mpv.com" "$BUILD_DIR/mpv-x/d3dcompiler_43.dll" "$PKG/bin/" 2>/dev/null || true
 find "$BUILD_DIR/mkvtoolnix" -name mkvpropedit.exe -exec cp -f {} "$PKG/bin/" \; 2>/dev/null || true
 find "$BUILD_DIR/mkvtoolnix" -name mkvmerge.exe -exec cp -f {} "$PKG/bin/" \; 2>/dev/null || true
 if [[ -d "$BUILD_DIR/cowsay" ]]; then

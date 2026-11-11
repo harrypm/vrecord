@@ -4,6 +4,7 @@
 #include "LevelMeter.h"
 #include "VideoView.h"
 #include "VrecordOptions.h"
+#include "DeckControl.h"
 
 #include <QApplication>
 #include <QUrl>
@@ -41,6 +42,9 @@
 #include <QTextStream>
 #include <QTime>
 #include <QTimer>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -215,6 +219,201 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
 
     // legacy parity: the live input preview starts automatically with the window
     startPreviewQuietly();
+    // indicator lights: checked in the background once the window is up
+    QTimer::singleShot(300, this, &MainWindow::refreshComponents);
+}
+
+// ---------------------------------------------------------------- deck control
+
+void MainWindow::setDeckControlEnabled(bool enabled) {
+    m_deckControl->setEnabled(enabled);
+    for (QPushButton* button : m_deckButtons) {
+        button->setEnabled(enabled && m_deckControl->isAvailable());
+    }
+}
+
+// the GTK "Scan timecode types": open the input once per timecode type and
+// report what each carries (the card's input is exclusive, so the preview
+// pauses meanwhile and resumes afterwards)
+void MainWindow::startTimecodeScan() {
+    if (m_timecodeScanProcess) {
+        return;
+    }
+    if (m_backend.isShellRunning()) {
+        showError(QStringLiteral("Stop the running session first - it is using the card."));
+        return;
+    }
+    syncConfigFromUi();
+    if (m_config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed().isEmpty()) {
+        showError(QStringLiteral("Select a DeckLink device first."));
+        return;
+    }
+    m_timecodeScanResumePreview = m_backend.isVideoPreviewActive();
+    if (m_timecodeScanResumePreview) {
+        m_backend.stopVideoPreview();
+        m_inputView->clearFrame(QStringLiteral("Preview paused for the timecode scan"));
+    }
+    m_timecodeScanQueue = {QStringLiteral("all"), QStringLiteral("rp188vitc"), QStringLiteral("rp188vitc2"), QStringLiteral("rp188ltc"),
+                           QStringLiteral("rp188any"), QStringLiteral("vitc"), QStringLiteral("vitc2"), QStringLiteral("serial")};
+    m_timecodeScanText->setPlainText(QStringLiteral("Type          Timecode\n"));
+    m_timecodeScanButton->setEnabled(false);
+    m_timecodeScanButton->setText(QStringLiteral("Scanning ..."));
+    runNextTimecodeScan();
+}
+
+void MainWindow::runNextTimecodeScan() {
+    if (m_timecodeScanQueue.isEmpty()) {
+        finishTimecodeScan();
+        return;
+    }
+    const QString type = m_timecodeScanQueue.takeFirst();
+    m_timecodeScanProcess = new QProcess(this);
+    m_timecodeScanProcess->setProcessChannelMode(QProcess::MergedChannels);
+    m_timecodeScanProcess->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+        args->flags |= 0x08000000;   // CREATE_NO_WINDOW
+    });
+    auto* timeout = new QTimer(m_timecodeScanProcess);
+    timeout->setSingleShot(true);
+    connect(timeout, &QTimer::timeout, m_timecodeScanProcess, &QProcess::kill);
+    connect(m_timecodeScanProcess, &QProcess::finished, this, [this, type](int, QProcess::ExitStatus) {
+        const QString output = QString::fromLocal8Bit(m_timecodeScanProcess->readAll());
+        m_timecodeScanProcess->deleteLater();
+        m_timecodeScanProcess = nullptr;
+        static const QRegularExpression tc(QStringLiteral("^\\s*timecode\\s*:\\s*(\\S+)"), QRegularExpression::MultilineOption);
+        const QRegularExpressionMatch match = tc.match(output);
+        m_timecodeScanText->appendPlainText(QStringLiteral("%1 %2").arg(type, -13).arg(match.hasMatch() ? match.captured(1) : QStringLiteral("none")));
+        runNextTimecodeScan();
+    });
+    const QString ffmpeg = QDir(m_backend.packageRoot()).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    m_timecodeScanProcess->start(ffmpeg, {QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("info"),
+                                          QStringLiteral("-timecode_format"), type,
+                                          QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
+                                          QStringLiteral("-f"), QStringLiteral("decklink"),
+                                          QStringLiteral("-i"), m_config.value(QStringLiteral("DECKLINK_INPUT_CHOICE")).trimmed()});
+    timeout->start(8000);
+}
+
+void MainWindow::finishTimecodeScan() {
+    m_timecodeScanButton->setEnabled(true);
+    m_timecodeScanButton->setText(QStringLiteral("Scan timecode types"));
+    appendActivity(QStringLiteral("timecode scan finished"));
+    if (m_timecodeScanResumePreview) {
+        startPreviewQuietly();
+    }
+}
+
+// ---------------------------------------------------------------- components
+
+void MainWindow::refreshComponents() {
+    if (m_componentsChecking) {
+        return;
+    }
+    m_componentsChecking = true;
+    m_componentsRecheck->setEnabled(false);
+    m_componentsSummary->setText(QStringLiteral("Checking ..."));
+    // each tool is started once for its version: keep that off the GUI thread
+    const QString root = m_backend.packageRoot();
+    QThread* worker = QThread::create([this, root] {
+        const QVector<ComponentStatus> components = checkComponents(root);
+        QMetaObject::invokeMethod(this, [this, components] { showComponents(components); }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void MainWindow::showComponents(const QVector<ComponentStatus>& components) {
+    m_componentsChecking = false;
+    m_componentsRecheck->setEnabled(true);
+    while (QLayoutItem* item = m_componentsGrid->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    int row = 0;
+    int requiredMissing = 0;
+    int optionalPresent = 0;
+    int optionalTotal = 0;
+    bool headerOptional = false;
+    const auto heading = [&](const QString& text) {
+        auto* label = new QLabel(QStringLiteral("<b>%1</b>").arg(text), m_componentsPanel);
+        m_componentsGrid->addWidget(label, row++, 0, 1, 3);
+    };
+    heading(QStringLiteral("Required"));
+    for (const ComponentStatus& component : components) {
+        if (!component.required && !headerOptional) {
+            headerOptional = true;
+            heading(QStringLiteral("Optional tools"));
+        }
+        // green = present, amber = present but missing a feature, red =
+        // missing and required, grey = optional and not installed
+        QString colour = QStringLiteral("#2ecc40");
+        QString state = QStringLiteral("installed");
+        if (!component.found) {
+            colour = component.required ? QStringLiteral("#e74c3c") : QStringLiteral("#7f8c8d");
+            state = QStringLiteral("not installed");
+        } else if (component.degraded) {
+            colour = QStringLiteral("#f39c12");
+            state = QStringLiteral("limited");
+        }
+        if (component.required && !component.found) {
+            ++requiredMissing;
+        }
+        if (!component.required) {
+            ++optionalTotal;
+            optionalPresent += component.found ? 1 : 0;
+        }
+        auto* light = new QLabel(m_componentsPanel);
+        light->setFixedSize(12, 12);
+        light->setStyleSheet(QStringLiteral("background:%1; border-radius:6px; border:1px solid #222;").arg(colour));
+        auto* name = new QLabel(component.name, m_componentsPanel);
+        auto* info = new QLabel(component.found ? (component.version.isEmpty() ? state : component.version) : component.detail, m_componentsPanel);
+        info->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        QStringList tip{QStringLiteral("%1 - %2").arg(component.name, state), QStringLiteral("Used for: %1").arg(component.purpose)};
+        if (!component.path.isEmpty()) {
+            tip << QStringLiteral("Location: %1").arg(component.path);
+        }
+        if (!component.version.isEmpty()) {
+            tip << QStringLiteral("Version: %1").arg(component.version);
+        }
+        if (!component.detail.isEmpty()) {
+            tip << component.detail;
+        }
+        for (QLabel* label : {light, name, info}) {
+            label->setToolTip(tip.join(QLatin1Char('\n')));
+        }
+        m_componentsGrid->addWidget(light, row, 0, Qt::AlignVCenter);
+        m_componentsGrid->addWidget(name, row, 1);
+        m_componentsGrid->addWidget(info, row, 2);
+        ++row;
+    }
+    m_componentsGrid->setColumnStretch(2, 1);
+    m_componentsSummary->setText(requiredMissing == 0
+                                     ? QStringLiteral("All required parts present - %1 of %2 optional tools").arg(optionalPresent).arg(optionalTotal)
+                                     : QStringLiteral("%1 required part(s) missing").arg(requiredMissing));
+    // the FFmpeg Status box: what the backend's ffmpeg-ma can do
+    QStringList status;
+    for (const ComponentStatus& component : components) {
+        if (component.name.startsWith(QStringLiteral("ffmpeg-ma")) || component.name.startsWith(QStringLiteral("ffplay-ma"))
+            || component.name.startsWith(QStringLiteral("ffprobe-ma"))) {
+            status << QStringLiteral("%1: %2").arg(component.name, component.found ? component.version : QStringLiteral("missing"));
+            if (!component.detail.isEmpty()) {
+                status << QStringLiteral("  %1").arg(component.detail);
+            }
+            if (!component.path.isEmpty()) {
+                status << QStringLiteral("  %1").arg(component.path);
+            }
+        }
+    }
+    m_ffmpegStatusText->setPlainText(status.join(QLatin1Char('\n')));
+}
+
+bool MainWindow::selectTab(const QString& title) {
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (m_tabs->tabText(i).compare(title, Qt::CaseInsensitive) == 0) {
+            m_tabs->setCurrentIndex(i);
+            return true;
+        }
+    }
+    return false;
 }
 
 void MainWindow::startPreviewQuietly() {
@@ -437,9 +636,75 @@ void MainWindow::buildUi() {
     sidecarLayout->addWidget(m_timecodeVttCheck);
     sidecarLayout->addWidget(m_qcToolsCheck);
     auto* rs422Box = new QGroupBox(QStringLiteral("RS422 deck control and timecode"), deckTab);
-    auto* rs422Layout = new QFormLayout(rs422Box);
-    rs422Layout->addRow(QStringLiteral("Status"), new QLabel(QStringLiteral("Managed by backend / legacy UI"), rs422Box));
-    rs422Layout->addRow(QStringLiteral("Timecode"), new QLabel(QStringLiteral("Managed by backend / legacy UI"), rs422Box));
+    // RS-422 deck control (packaged deckcontrol) + timecode scan, as in GTK
+    m_deckControl = new DeckControl(m_backend.packageRoot(), this);
+    auto* rs422Layout = new QVBoxLayout(rs422Box);
+    auto* deckReadout = new QFormLayout();
+    m_deckStateLabel = new QLabel(m_deckControl->isAvailable() ? QStringLiteral("disabled") : QStringLiteral("deckcontrol not installed"), rs422Box);
+    m_deckStateLabel->setWordWrap(true);
+    m_deckTimecodeLabel = new QLabel(QStringLiteral("--:--:--:--"), rs422Box);
+    {
+        QFont mono(QStringLiteral("Consolas"));
+        mono.setStyleHint(QFont::Monospace);
+        mono.setPointSize(mono.pointSize() + 3);
+        mono.setBold(true);
+        m_deckTimecodeLabel->setFont(mono);
+    }
+    deckReadout->addRow(QStringLiteral("Status"), m_deckStateLabel);
+    deckReadout->addRow(QStringLiteral("Timecode"), m_deckTimecodeLabel);
+    rs422Layout->addLayout(deckReadout);
+    m_deckControlToggle = makeCheckBox(QStringLiteral("Deck Control"));
+    m_deckControlToggle->setToolTip(m_deckControl->isAvailable()
+                                        ? QStringLiteral("Control a video deck over RS-422 through the Blackmagic card (deckcontrol).\n"
+                                                         "Polls the deck state and timecode twice a second while on.")
+                                        : QStringLiteral("deckcontrol is not installed in the package bin folder."));
+    m_deckControlToggle->setEnabled(m_deckControl->isAvailable());
+    auto* deckButtonRow = new QHBoxLayout();
+    deckButtonRow->setSpacing(2);
+    const QList<QPair<QString, QPair<QStyle::StandardPixmap, QString>>> deckVerbs{
+        {QStringLiteral("rewind"), {QStyle::SP_MediaSeekBackward, QStringLiteral("Rewind")}},
+        {QStringLiteral("stepback"), {QStyle::SP_MediaSkipBackward, QStringLiteral("Step Back")}},
+        {QStringLiteral("play"), {QStyle::SP_MediaPlay, QStringLiteral("Play")}},
+        {QStringLiteral("stop"), {QStyle::SP_MediaStop, QStringLiteral("Stop")}},
+        {QStringLiteral("stepforward"), {QStyle::SP_MediaSkipForward, QStringLiteral("Step Fwd")}},
+        {QStringLiteral("fastforward"), {QStyle::SP_MediaSeekForward, QStringLiteral("FF")}},
+        {QStringLiteral("eject"), {QStyle::SP_TitleBarNormalButton, QStringLiteral("Eject")}},
+    };
+    for (const auto& verb : deckVerbs) {
+        // labelled (icons alone vanish when disabled), compact, like the GTK row
+        auto* button = verb.first == QStringLiteral("eject")
+                           ? new QPushButton(QStringLiteral("Eject"), rs422Box)
+                           : new QPushButton(styleIcon(verb.second.first), verb.second.second, rs422Box);
+        button->setToolTip(QStringLiteral("Deck: %1").arg(verb.second.second));
+        button->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+        button->setEnabled(false);
+        button->setProperty("deckVerb", verb.first);
+        connect(button, &QPushButton::clicked, this, [this, button] {
+            m_deckControl->command(button->property("deckVerb").toString());
+        });
+        m_deckButtons << button;
+        deckButtonRow->addWidget(button);
+    }
+    deckButtonRow->addStretch(1);
+    rs422Layout->addWidget(m_deckControlToggle);
+    rs422Layout->addLayout(deckButtonRow);
+    m_timecodeScanButton = new QPushButton(QStringLiteral("Scan timecode types"), rs422Box);
+    m_timecodeScanButton->setToolTip(QStringLiteral("Read the input once with each timecode type (RP188, VITC, serial ...) and list what it carries.\n"
+                                                    "The live preview pauses during the scan."));
+    rs422Layout->addWidget(m_timecodeScanButton);
+    m_timecodeScanText = new QPlainTextEdit(rs422Box);
+    m_timecodeScanText->setReadOnly(true);
+    m_timecodeScanText->setMaximumHeight(90);
+    m_timecodeScanText->setPlaceholderText(QStringLiteral("Timecode scan results"));
+    rs422Layout->addWidget(m_timecodeScanText);
+    connect(m_deckControlToggle, &QCheckBox::toggled, this, &MainWindow::setDeckControlEnabled);
+    connect(m_deckControl, &DeckControl::stateChanged, m_deckStateLabel, &QLabel::setText);
+    connect(m_deckControl, &DeckControl::timecodeChanged, m_deckTimecodeLabel, &QLabel::setText);
+    connect(m_deckControl, &DeckControl::commandFinished, this, [this](const QString& verb, const QString& message) {
+        statusBar()->showMessage(QStringLiteral("Deck %1: %2").arg(verb, message), 4000);
+        appendActivity(QStringLiteral("deck control: %1 - %2").arg(verb, message));
+    });
+    connect(m_timecodeScanButton, &QPushButton::clicked, this, &MainWindow::startTimecodeScan);
     deckLowerRow->addWidget(playbackBox);
     deckLowerRow->addWidget(sidecarBox);
     deckLowerRow->addWidget(rs422Box);
@@ -581,9 +846,24 @@ void MainWindow::buildUi() {
     invertLayout->addWidget(new QLabel(QStringLiteral("WARNING: Do not use this option unless required"), invertBox));
     invertLayout->addWidget(m_invertPhase2Check);
     invertLayout->addWidget(m_invertPhase4Check);
-    auto* toolsBox = new QGroupBox(QStringLiteral("Optional Tools"), configTab);
+    // installed / deployed components: the GTK version's tick lights, for
+    // the required parts as well as the optional tools
+    auto* toolsBox = new QGroupBox(QStringLiteral("Installed components"), configTab);
     auto* toolsLayout = new QVBoxLayout(toolsBox);
-    toolsLayout->addWidget(new QLabel(QStringLiteral("deckcontrol, gnuplot, mediaconch, mkvpropedit, mpv, and dvpackager availability are still detected by the backend."), toolsBox));
+    m_componentsPanel = new QWidget(toolsBox);
+    m_componentsGrid = new QGridLayout(m_componentsPanel);
+    m_componentsGrid->setContentsMargins(0, 0, 0, 0);
+    m_componentsGrid->setHorizontalSpacing(8);
+    m_componentsGrid->setVerticalSpacing(2);
+    toolsLayout->addWidget(m_componentsPanel);
+    auto* componentsFooter = new QHBoxLayout();
+    m_componentsSummary = new QLabel(QStringLiteral("Checking ..."), toolsBox);
+    m_componentsRecheck = new QPushButton(styleIcon(QStyle::SP_BrowserReload), QStringLiteral("Re-check"), toolsBox);
+    componentsFooter->addWidget(m_componentsSummary, 1);
+    componentsFooter->addWidget(m_componentsRecheck);
+    toolsLayout->addLayout(componentsFooter);
+    toolsLayout->addStretch(1);
+    connect(m_componentsRecheck, &QPushButton::clicked, this, &MainWindow::refreshComponents);
     auto* statusBox = new QGroupBox(QStringLiteral("FFmpeg Status"), configTab);
     auto* statusLayout = new QVBoxLayout(statusBox);
     statusLayout->addWidget(m_ffmpegStatusText);
@@ -2091,7 +2371,7 @@ void MainWindow::updateDerivedState() {
         validationText += QStringLiteral("\n--- Auto load self test ---\n") + m_selfTestResults.join(QLatin1Char('\n'));
     }
     m_validationText->setPlainText(validationText);
-    m_ffmpegStatusText->setPlainText(QStringLiteral("Use the legacy UI for live FFmpeg probe output.\nCurrent backend entrypoint: %1").arg(m_backend.packageRoot()));
+    // the FFmpeg Status box is filled by the component check (refreshComponents)
     QString envText;
     QTextStream envStream(&envText);
     envStream << "Config file: " << QDir::toNativeSeparators(m_config.configPath) << '\n';

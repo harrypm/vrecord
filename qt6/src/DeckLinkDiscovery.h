@@ -36,6 +36,8 @@ public:
     // The Intensity Pro 4K reports 'locked: NO' even mid-capture while the
     // detected mode is live; idle, the driver keeps the last detected mode.
     static QString detectInputFormatCode(const QString& deviceName, QString* errorMessage = nullptr, bool allowStale = false);
+    // Desktop Video driver / API version ("15.3"), empty if not installed
+    static QString driverVersion();
 
 private:
     static bool withDevice(const QString& deviceName, const std::function<bool(IDeckLink*)>& action, QString* errorMessage);
