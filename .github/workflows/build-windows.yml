@@ -82,6 +82,7 @@ jobs:
           key: windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Build the portable package (Qt6 frontend + backend + tools)
+        id: portable
         run: bash Release/build-windows-portable.sh
 
       - name: Test the package (no capture hardware)
@@ -89,7 +90,10 @@ jobs:
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           bash Release/ci/windows-package-tests.sh "Release/artifacts/vrecord_windows_${VERSION}"
 
+      # collected even when the tests fail (the job still fails, so a release
+      # never takes it): the package can then be downloaded and debugged
       - name: Collect artifact
+        if: always() && steps.portable.outcome == 'success'
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           mkdir -p artifacts
@@ -97,6 +101,7 @@ jobs:
           ls -la artifacts
 
       - uses: actions/upload-artifact@v7
+        if: always() && steps.portable.outcome == 'success'
         with:
           name: vrecord-windows-x86_64
           path: artifacts/

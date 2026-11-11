@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include <cstdio>
 
 #include "DeckLinkDiscovery.h"
 #include "LevelMeter.h"
@@ -2081,11 +2082,15 @@ QStringList MainWindow::runSelfTest() {
     const auto check = [&](const QString& name, bool ok, const QString& detail = QString()) {
         if (!ok && noHardware && hardwareChecks.contains(name)) {
             results << QStringLiteral("SKIP: %1 (no DeckLink device - CI mode)").arg(name);
+            fprintf(stderr, "%s\n", qPrintable(results.last()));
+            fflush(stderr);
             return;
         }
         results << QStringLiteral("%1: %2%3").arg(ok ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
                                                  name,
                                                  detail.isEmpty() ? QString() : QStringLiteral(" - %1").arg(detail));
+        fprintf(stderr, "%s\n", qPrintable(results.last()));   // progress: a hang shows where
+        fflush(stderr);
     };
 
     // run the whole self-test on a THROWAWAY config in the package root:
@@ -2449,5 +2454,13 @@ void MainWindow::updateDerivedState() {
 }
 
 void MainWindow::showError(const QString& message) {
+    // the self-test runs unattended (CI: offscreen, no card): a modal box
+    // there would wait forever for a click, so log the message instead
+    if (BackendController::testMode()) {
+        appendActivity(QStringLiteral("error (self-test, not shown): %1").arg(QString(message).replace(QLatin1Char('\n'), QLatin1Char(' '))));
+        fprintf(stderr, "self-test error dialog suppressed: %s\n", qPrintable(message));
+        fflush(stderr);
+        return;
+    }
     QMessageBox::warning(this, QStringLiteral("vrecord Qt6"), message);
 }

@@ -40,7 +40,23 @@ tool ffprobe-ma   "ffprobe version"       "$PKG/bin/ffprobe-ma.exe" -hide_banner
 tool MediaInfo    "MediaInfo"             "$PKG/bin/MediaInfo.exe" --Version
 tool MediaConch   "MediaConch"            "$PKG/bin/MediaConch.exe" --version
 tool DVRescue     "DVRescue"              "$PKG/bin/DVRescue.exe" --version
-tool mpv          "mpv"                   "$PKG/bin/mpv.exe" --version
+# mpv.exe is a GUI-subsystem program (no console output): mpv.com is the
+# console wrapper that prints, so the version check uses it when present
+MPV_FAILS_BEFORE=$FAILS
+if [[ -f "$PKG/bin/mpv.com" ]] ; then
+    tool mpv      "mpv"                   "$PKG/bin/mpv.com" --version
+else
+    tool mpv      "mpv"                   "$PKG/bin/mpv.exe" --version
+fi
+if [[ "$FAILS" -gt "$MPV_FAILS_BEFORE" ]] ; then
+    # a silent exit is usually a missing DLL: list what the loader cannot find
+    for exe in "$PKG/bin/mpv.exe" "$PKG/bin/mpv.com" ; do
+        [[ -f "$exe" ]] || continue
+        isolated "$exe" --version > /dev/null 2>&1 ; echo "  $(basename "$exe") exit=$?"
+        objdump -p "$exe" 2>/dev/null | grep -m1 -i 'subsystem' | sed 's/^/  /'
+        ( cd "$PKG/bin" && PATH="$PKG/bin:/c/Windows/System32" ldd "$exe" 2>&1 | grep -i -E 'not found|\?\?\?' | sed 's/^/  missing: /' )
+    done
+fi
 tool xmlstarlet   "1.6"                   "$PKG/bin/xml.exe" --version
 tool deckcontrol  "getcurrentstate"       "$PKG/bin/deckcontrol.exe"
 tool mkvpropedit  "mkvpropedit"           "$PKG/bin/mkvpropedit.exe" --version
@@ -70,7 +86,9 @@ if PATH="$PKG/bin:$PATH" ffmpeg-ma.exe -hide_banner -loglevel error -f lavfi -i 
         if [[ -n "$out" && "$frames" == "125" ]] ; then
             pass "dvpackager DV -> $ext ($frames frames${opts:+, $opts})"
         else
-            fail "dvpackager DV -> $ext (frames='${frames}') - log: $(tail -3 "$WORK/dvpackager-$ext.log" | tr '\n' ' ')"
+            fail "dvpackager DV -> $ext (frames='${frames}', output='${out}')"
+            echo "  --- dvpackager-$ext log:" ; sed 's/^/  /' "$WORK/dvpackager-$ext.log" | head -60
+            echo "  --- $DVDIR:" ; ls -la "$DVDIR" | sed 's/^/  /'
         fi
     done
 else
@@ -80,10 +98,16 @@ fi
 # ---- Qt6 frontend self-test (offscreen; checks that need a card SKIP in CI)
 if [[ -f "$PKG/VrecordQt6.exe" ]] ; then
     ( cd "$PKG" && QT_QPA_PLATFORM=offscreen VRECORD_SELFTEST_ALLOW_NO_HARDWARE=1 \
-        /usr/bin/timeout 600 ./VrecordQt6.exe --self-test > /dev/null 2>&1 )
+        /usr/bin/timeout 300 ./VrecordQt6.exe --self-test > "$WORK/selftest-console.txt" 2>&1 )
     rc=$?
     echo "--- self-test log:"
     cat "$PKG/VrecordQt6-selftest.log" 2>/dev/null || echo "(no log)"
+    if [[ $rc -ne 0 ]] ; then
+        echo "--- self-test console (progress; the last line is where it stopped):"
+        tail -40 "$WORK/selftest-console.txt"
+        echo "--- startup log:"
+        cat "$PKG/VrecordQt6-startup.log" 2>/dev/null
+    fi
     if [[ $rc -eq 0 && -f "$PKG/VrecordQt6-selftest.log" ]] ; then pass "VrecordQt6 --self-test" ; else fail "VrecordQt6 --self-test (exit $rc)" ; fi
 else
     fail "VrecordQt6.exe packaged"
