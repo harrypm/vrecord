@@ -42,6 +42,7 @@
 #include <QTextStream>
 #include <QTime>
 #include <QTimer>
+#include <QPainter>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QThread>
@@ -636,9 +637,60 @@ void MainWindow::buildUi() {
     sidecarLayout->addWidget(m_timecodeVttCheck);
     sidecarLayout->addWidget(m_qcToolsCheck);
     auto* rs422Box = new QGroupBox(QStringLiteral("RS422 deck control and timecode"), deckTab);
-    // RS-422 deck control (packaged deckcontrol) + timecode scan, as in GTK
+    // RS-422 deck control (packaged deckcontrol) + timecode scan, as in GTK:
+    // [Deck Control] + icon-only transport on one row, the readouts under it,
+    // then the scan button and its results
     m_deckControl = new DeckControl(m_backend.packageRoot(), this);
     auto* rs422Layout = new QVBoxLayout(rs422Box);
+    m_deckControlToggle = makeCheckBox(QStringLiteral("Deck Control"));
+    m_deckControlToggle->setToolTip(m_deckControl->isAvailable()
+                                        ? QStringLiteral("Control a video deck over RS-422 through the Blackmagic card (deckcontrol).\n"
+                                                         "Polls the deck state and timecode twice a second while on.")
+                                        : QStringLiteral("deckcontrol is not installed in the package bin folder."));
+    m_deckControlToggle->setEnabled(m_deckControl->isAvailable());
+    // eject has no standard icon: a triangle over a bar, in the button text colour
+    const auto ejectIcon = [this]() {
+        QPixmap pixmap(24, 24);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(palette().color(QPalette::ButtonText));
+        painter.drawPolygon(QPolygonF{QPointF(12, 4), QPointF(21, 14), QPointF(3, 14)});
+        painter.drawRect(QRectF(3, 17, 18, 3));
+        return QIcon(pixmap);
+    };
+    auto* deckButtonRow = new QHBoxLayout();
+    deckButtonRow->setSpacing(4);
+    deckButtonRow->addWidget(m_deckControlToggle);
+    deckButtonRow->addSpacing(8);
+    const QList<QPair<QString, QPair<QStyle::StandardPixmap, QString>>> deckVerbs{
+        {QStringLiteral("rewind"), {QStyle::SP_MediaSeekBackward, QStringLiteral("Rewind")}},
+        {QStringLiteral("stepback"), {QStyle::SP_MediaSkipBackward, QStringLiteral("Step back")}},
+        {QStringLiteral("play"), {QStyle::SP_MediaPlay, QStringLiteral("Play")}},
+        {QStringLiteral("stop"), {QStyle::SP_MediaStop, QStringLiteral("Stop")}},
+        {QStringLiteral("stepforward"), {QStyle::SP_MediaSkipForward, QStringLiteral("Step forward")}},
+        {QStringLiteral("fastforward"), {QStyle::SP_MediaSeekForward, QStringLiteral("Fast forward")}},
+        {QStringLiteral("eject"), {QStyle::SP_CustomBase, QStringLiteral("Eject")}},
+    };
+    for (const auto& verb : deckVerbs) {
+        // icon only (the name is the tooltip), the size of the playout transport
+        const QIcon icon = verb.first == QStringLiteral("eject") ? ejectIcon() : styleIcon(verb.second.first);
+        auto* button = new QPushButton(icon, QString(), rs422Box);
+        button->setIconSize(QSize(20, 20));
+        button->setFixedSize(40, 30);
+        button->setToolTip(QStringLiteral("Deck: %1").arg(verb.second.second));
+        button->setAccessibleName(verb.second.second);
+        button->setEnabled(false);
+        button->setProperty("deckVerb", verb.first);
+        connect(button, &QPushButton::clicked, this, [this, button] {
+            m_deckControl->command(button->property("deckVerb").toString());
+        });
+        m_deckButtons << button;
+        deckButtonRow->addWidget(button);
+    }
+    deckButtonRow->addStretch(1);
+    rs422Layout->addLayout(deckButtonRow);
     auto* deckReadout = new QFormLayout();
     m_deckStateLabel = new QLabel(m_deckControl->isAvailable() ? QStringLiteral("disabled") : QStringLiteral("deckcontrol not installed"), rs422Box);
     m_deckStateLabel->setWordWrap(true);
@@ -653,45 +705,14 @@ void MainWindow::buildUi() {
     deckReadout->addRow(QStringLiteral("Status"), m_deckStateLabel);
     deckReadout->addRow(QStringLiteral("Timecode"), m_deckTimecodeLabel);
     rs422Layout->addLayout(deckReadout);
-    m_deckControlToggle = makeCheckBox(QStringLiteral("Deck Control"));
-    m_deckControlToggle->setToolTip(m_deckControl->isAvailable()
-                                        ? QStringLiteral("Control a video deck over RS-422 through the Blackmagic card (deckcontrol).\n"
-                                                         "Polls the deck state and timecode twice a second while on.")
-                                        : QStringLiteral("deckcontrol is not installed in the package bin folder."));
-    m_deckControlToggle->setEnabled(m_deckControl->isAvailable());
-    auto* deckButtonRow = new QHBoxLayout();
-    deckButtonRow->setSpacing(2);
-    const QList<QPair<QString, QPair<QStyle::StandardPixmap, QString>>> deckVerbs{
-        {QStringLiteral("rewind"), {QStyle::SP_MediaSeekBackward, QStringLiteral("Rewind")}},
-        {QStringLiteral("stepback"), {QStyle::SP_MediaSkipBackward, QStringLiteral("Step Back")}},
-        {QStringLiteral("play"), {QStyle::SP_MediaPlay, QStringLiteral("Play")}},
-        {QStringLiteral("stop"), {QStyle::SP_MediaStop, QStringLiteral("Stop")}},
-        {QStringLiteral("stepforward"), {QStyle::SP_MediaSkipForward, QStringLiteral("Step Fwd")}},
-        {QStringLiteral("fastforward"), {QStyle::SP_MediaSeekForward, QStringLiteral("FF")}},
-        {QStringLiteral("eject"), {QStyle::SP_TitleBarNormalButton, QStringLiteral("Eject")}},
-    };
-    for (const auto& verb : deckVerbs) {
-        // labelled (icons alone vanish when disabled), compact, like the GTK row
-        auto* button = verb.first == QStringLiteral("eject")
-                           ? new QPushButton(QStringLiteral("Eject"), rs422Box)
-                           : new QPushButton(styleIcon(verb.second.first), verb.second.second, rs422Box);
-        button->setToolTip(QStringLiteral("Deck: %1").arg(verb.second.second));
-        button->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
-        button->setEnabled(false);
-        button->setProperty("deckVerb", verb.first);
-        connect(button, &QPushButton::clicked, this, [this, button] {
-            m_deckControl->command(button->property("deckVerb").toString());
-        });
-        m_deckButtons << button;
-        deckButtonRow->addWidget(button);
-    }
-    deckButtonRow->addStretch(1);
-    rs422Layout->addWidget(m_deckControlToggle);
-    rs422Layout->addLayout(deckButtonRow);
+    auto* scanRow = new QHBoxLayout();
     m_timecodeScanButton = new QPushButton(QStringLiteral("Scan timecode types"), rs422Box);
     m_timecodeScanButton->setToolTip(QStringLiteral("Read the input once with each timecode type (RP188, VITC, serial ...) and list what it carries.\n"
                                                     "The live preview pauses during the scan."));
-    rs422Layout->addWidget(m_timecodeScanButton);
+    m_timecodeScanButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    scanRow->addWidget(m_timecodeScanButton);
+    scanRow->addStretch(1);
+    rs422Layout->addLayout(scanRow);
     m_timecodeScanText = new QPlainTextEdit(rs422Box);
     m_timecodeScanText->setReadOnly(true);
     m_timecodeScanText->setMaximumHeight(90);
@@ -858,7 +879,11 @@ void MainWindow::buildUi() {
     toolsLayout->addWidget(m_componentsPanel);
     auto* componentsFooter = new QHBoxLayout();
     m_componentsSummary = new QLabel(QStringLiteral("Checking ..."), toolsBox);
-    m_componentsRecheck = new QPushButton(styleIcon(QStyle::SP_BrowserReload), QStringLiteral("Re-check"), toolsBox);
+    m_componentsRecheck = new QPushButton(styleIcon(QStyle::SP_BrowserReload), QString(), toolsBox);
+    m_componentsRecheck->setIconSize(QSize(20, 20));
+    m_componentsRecheck->setFixedSize(40, 30);
+    m_componentsRecheck->setToolTip(QStringLiteral("Check the installed components again"));
+    m_componentsRecheck->setAccessibleName(QStringLiteral("Re-check"));
     componentsFooter->addWidget(m_componentsSummary, 1);
     componentsFooter->addWidget(m_componentsRecheck);
     toolsLayout->addLayout(componentsFooter);
