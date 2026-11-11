@@ -31,7 +31,11 @@ FILTERS="$(isolated "$PKG/bin/ffplay-ma.exe" -hide_banner -filters 2>&1)"
 tool() {   # tool <label> <expected text> <command...>
     local label="$1" expect="$2" ; shift 2
     local out
-    out="$(isolated /usr/bin/timeout 30 "$@" 2>&1 | head -20)"
+    # output to a FILE, not a pipe: a launcher whose child keeps the pipe
+    # open (mpv.com -> mpv.exe) would block $(...) past the timeout;
+    # -k: hard kill if the program ignores the polite signal
+    isolated /usr/bin/timeout -k 5 30 "$@" < /dev/null > "$WORK/tool.out" 2>&1
+    out="$(head -20 "$WORK/tool.out")"
     if [[ "$out" == *"$expect"* ]] ; then pass "runs standalone: $label" ; else fail "runs standalone: $label -> $(echo "$out" | head -2 | tr '\n' ' ')" ; fi
 }
 tool ffmpeg-ma    "ffmpeg version"        "$PKG/bin/ffmpeg-ma.exe" -hide_banner -version
@@ -40,23 +44,8 @@ tool ffprobe-ma   "ffprobe version"       "$PKG/bin/ffprobe-ma.exe" -hide_banner
 tool MediaInfo    "MediaInfo"             "$PKG/bin/MediaInfo.exe" --Version
 tool MediaConch   "MediaConch"            "$PKG/bin/MediaConch.exe" --version
 tool DVRescue     "DVRescue"              "$PKG/bin/DVRescue.exe" --version
-# mpv.exe is a GUI-subsystem program (no console output): mpv.com is the
-# console wrapper that prints, so the version check uses it when present
-MPV_FAILS_BEFORE=$FAILS
-if [[ -f "$PKG/bin/mpv.com" ]] ; then
-    tool mpv      "mpv"                   "$PKG/bin/mpv.com" --version
-else
-    tool mpv      "mpv"                   "$PKG/bin/mpv.exe" --version
-fi
-if [[ "$FAILS" -gt "$MPV_FAILS_BEFORE" ]] ; then
-    # a silent exit is usually a missing DLL: list what the loader cannot find
-    for exe in "$PKG/bin/mpv.exe" "$PKG/bin/mpv.com" ; do
-        [[ -f "$exe" ]] || continue
-        isolated "$exe" --version > /dev/null 2>&1 ; echo "  $(basename "$exe") exit=$?"
-        objdump -p "$exe" 2>/dev/null | grep -m1 -i 'subsystem' | sed 's/^/  /'
-        ( cd "$PKG/bin" && PATH="$PKG/bin:/c/Windows/System32" ldd "$exe" 2>&1 | grep -i -E 'not found|\?\?\?' | sed 's/^/  missing: /' )
-    done
-fi
+# mpv.com: the console front end of mpv.exe (GUI subsystem, prints nothing)
+tool mpv          "mpv v"                 "$PKG/bin/mpv.com" --version
 tool xmlstarlet   "1.6"                   "$PKG/bin/xml.exe" --version
 tool deckcontrol  "getcurrentstate"       "$PKG/bin/deckcontrol.exe"
 tool mkvpropedit  "mkvpropedit"           "$PKG/bin/mkvpropedit.exe" --version
@@ -77,7 +66,12 @@ if PATH="$PKG/bin:$PATH" ffmpeg-ma.exe -hide_banner -loglevel error -f lavfi -i 
         ext="${case%%:*}" ; opts="${case#*:}"
         rm -f "$DVDIR"/dvtest_part*.* "$DVDIR"/dvtest.dv.dvrescue.xml
         # shellcheck disable=SC2086
-        PATH="$PKG/bin:$PATH" /usr/bin/timeout 300 bash "$PKG/bin/dvpackager" \
+        # /usr/bin/bash, NOT `bash`: with the package first on PATH that is
+        # bin/bash.exe, the windowless GUI wrapper, which starts
+        # C:\msys64's bash - on a runner a second MSYS2 runtime next to the
+        # build's (D:\a\_temp\msys64), so sed/basename/dirname came back
+        # empty and dvpackager wrote to "/.mkv"
+        PATH="$PKG/bin:$PATH" /usr/bin/timeout -k 10 300 /usr/bin/bash "$PKG/bin/dvpackager" \
             -F "$PKG/bin/ffmpeg-ma.exe" -M "$PKG/bin/MediaInfo.exe" -D "$PKG/bin/DVRescue.exe" -X "$PKG/bin/xml.exe" \
             $opts -e "$ext" "$DV" > "$WORK/dvpackager-$ext.log" 2>&1
         out="$(ls "$DVDIR"/dvtest_part1."$ext" 2>/dev/null)"

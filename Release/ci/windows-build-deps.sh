@@ -16,11 +16,15 @@ DL="$B/downloads"
 mkdir -p "$B" "$DL"
 JOBS="$(nproc)"
 
-fetch() {   # fetch <url> <file> <sha256>
-    local url="$1" file="$DL/$2" sum="$3"
+fetch() {   # fetch <url> <file> <sha256> [mirror url]
+    local url="$1" file="$DL/$2" sum="$3" mirror="${4:-}"
     if [[ ! -f "$file" ]] || ! echo "$sum  $file" | sha256sum -c --status ; then
         echo "::group::download $2"
-        curl -fL --retry 3 --retry-delay 5 "$url" -o "$file.part"
+        if ! curl -fL --retry 3 --retry-delay 5 "$url" -o "$file.part" ; then
+            [[ -n "$mirror" ]] || exit 1
+            echo "primary download failed; trying the mirror $mirror"
+            curl -fL --retry 3 --retry-delay 5 "$mirror" -o "$file.part"
+        fi
         mv -f "$file.part" "$file"
         echo "::endgroup::"
     fi
@@ -160,14 +164,21 @@ if [[ ! -f "$B/cowsay/bin/cowsay" ]] ; then
     tar -xzf "$DL/cowsay-3.8.4.tar.gz" -C "$B"
     make -C "$B/cowsay-3.8.4" install prefix="$B/cowsay" > /dev/null
 fi
-# mpv for the QC view: MSYS2's own build (its DLLs are collected by the
-# package's UCRT64 dependency sweep)
-if [[ ! -f "$B/mpv-x/mpv.exe" ]] ; then
-    step "mpv (MSYS2)"
-    mkdir -p "$B/mpv-x"
-    cp -f /ucrt64/bin/mpv.exe "$B/mpv-x/"
-    [[ -f /ucrt64/bin/mpv.com ]] && cp -f /ucrt64/bin/mpv.com "$B/mpv-x/"
-    touch "$B/mpv-x/.msys2"
+# mpv for the QC view: shinchiro's static build (the one the local package
+# was tested with; no DLLs to collect). NOT MSYS2's mpv: run without a
+# desktop it hangs even on --version (2026-11-11, CI and locally).
+# shinchiro prunes GitHub releases after ~40 days: the SourceForge mirror
+# keeps the identical file (same sha256)
+MPV_7Z="mpv-x86_64-20261108-git-55d3feb45c.7z"
+if [[ ! -f "$B/mpv-x/.shinchiro-20261108" ]] ; then
+    step "mpv (shinchiro 20261108)"
+    fetch "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261108/${MPV_7Z}" "$MPV_7Z" \
+          465faafbf90527421ccc304870f02e59f3f47d3361a6f526ef95f40f8f2c2459 \
+          "https://downloads.sourceforge.net/project/mpv-player-windows/64bit/${MPV_7Z}"
+    rm -rf "$B/mpv-x"
+    7z x -y -o"$B/mpv-x" "$DL/$MPV_7Z" > /dev/null
+    test -f "$B/mpv-x/mpv.exe" && test -f "$B/mpv-x/mpv.com"
+    touch "$B/mpv-x/.shinchiro-20261108"
 fi
 step "build inputs ready in $B"
 ls "$B"

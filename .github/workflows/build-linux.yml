@@ -82,9 +82,20 @@ jobs:
           VDIR="$(brew --repo harrypm/vendored)/Formula"
           grep -q "^class " "$VDIR/gtk+.rb" || { echo "::error::vendored gtk+ formula is empty or invalid"; exit 1; }
           grep -q "^class " "$VDIR/gtkdialog.rb" || { echo "::error::vendored gtkdialog formula is empty or invalid"; exit 1; }
-          # deckcontrol builds against the amiaos decklinksdk (BMD API
-          # headers only - no deprecated chain)
-          brew install ffmpeg-ma cowsay amiaopensource/amiaos/deckcontrol harrypm/vendored/gtkdialog
+          # decklinksdk = the BMD API headers deckcontrol compiles against
+          brew install ffmpeg-ma cowsay amiaopensource/amiaos/decklinksdk harrypm/vendored/gtkdialog
+          # deckcontrol: bavc v0.6 (the same pinned tarball the Windows build
+          # uses), built OUTSIDE brew - the amiaos formula's Makefile links
+          # `gcc -lstdc++ ... *.o`, and with Ubuntu's --as-needed the library
+          # before the objects is dropped (undefined operator delete / typeinfo
+          # vtables, 2026-11-11). g++ with the libraries last links correctly.
+          curl -fsSL -o deckcontrol-0.6.tar.gz https://github.com/bavc/deckcontrol/archive/refs/tags/v0.6.tar.gz
+          echo "e4a184ff6ec64aef8cccd15712797e7507d2de1ce873396703d575047ae1463e  deckcontrol-0.6.tar.gz" | sha256sum -c -
+          tar -xzf deckcontrol-0.6.tar.gz
+          BMSDK="$(brew --prefix decklinksdk)/include"
+          (cd deckcontrol-0.6 && g++ -O2 -I"$BMSDK" deckcontrol.cpp "$BMSDK/DeckLinkAPIDispatch.cpp" -o deckcontrol -lpthread -ldl)
+          sudo install -m755 deckcontrol-0.6/deckcontrol /usr/local/bin/deckcontrol
+          deckcontrol 2>&1 | grep -m1 -i "getcurrentstate" || { echo "::error::deckcontrol did not start"; exit 1; }
           # dvrescue + dvpackager: built OUTSIDE brew (brew's superenv
           # scrubs pkg-config and hides the system libavc1394 the build
           # needs; outside, the apt -dev libs are visible). Installs the
