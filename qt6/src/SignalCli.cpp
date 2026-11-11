@@ -426,12 +426,20 @@ int runSdkOutputTest(const QString& modeCode, int seconds) {
         const int frameMs = timeScale > 0 ? int(1000 * frameDuration / timeScale) : 20;
         int shown = 0;
         HRESULT lastHr = S_OK;
-        for (int elapsed = 0; elapsed < seconds * 1000; elapsed += frameMs) {
+        // wall-clock bound: DisplayVideoFrameSync itself blocks about a frame,
+        // so counting frame periods (plus a sleep) ran twice the asked time
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < qint64(seconds) * 1000) {
             lastHr = output->DisplayVideoFrameSync(frame);
             if (lastHr == S_OK) {
                 ++shown;
+            } else {
+                Sleep(DWORD(frameMs));
             }
-            Sleep(DWORD(frameMs));
+            if (shown > 0 && shown % (5000 / std::max(1, frameMs)) == 0) {
+                std::cout << "sdktest: " << clock.elapsed() / 1000 << " s, " << shown << " frames" << std::endl;
+            }
         }
         std::cout << "sdktest: displayed " << shown << " frames, last hr=0x" << toHex(lastHr) << std::endl;
         frame->Release();
