@@ -194,14 +194,21 @@ QString toBashPath(QString value) {
 // while its ffmpeg child survives and keeps holding the card (every later
 // launch then fails with 'Could not enable video output'). Sweep any orphan
 // carrying our test-signal metadata marker.
-void sweepOrphanedTestStreams() {
+void sweepOrphanedTestStreams(bool background = false) {
+    // background (GUI): never block the window on PowerShell, and spare our
+    // own children (a test signal started meanwhile is not an orphan)
+    const QString command = QStringLiteral("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg-ma.exe'\" | "
+                                           "Where-Object { $_.CommandLine -match 'vrecord-test-signal' -and $_.ParentProcessId -ne %1 } | "
+                                           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+                                .arg(QCoreApplication::applicationPid());
+    const QStringList arguments{QStringLiteral("-NoProfile"), QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"),
+                                QStringLiteral("-Command"), command};
+    if (background) {
+        QProcess::startDetached(QStringLiteral("powershell.exe"), arguments);
+        return;
+    }
     QProcess sweeper;
-    sweeper.start(QStringLiteral("powershell.exe"),
-                  {QStringLiteral("-NoProfile"),
-                   QStringLiteral("-Command"),
-                   QStringLiteral("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg-ma.exe'\" | "
-                                  "Where-Object { $_.CommandLine -match 'vrecord-test-signal' } | "
-                                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")});
+    sweeper.start(QStringLiteral("powershell.exe"), arguments);
     sweeper.waitForFinished(5000);
 }
 
@@ -471,6 +478,37 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
     }
     env.insert(QStringLiteral("MSYS2_ARG_CONV_EXCL"), QStringLiteral("*"));
     env.insert(QStringLiteral("MSYS_NO_PATHCONV"), QStringLiteral("1"));
+    // the ffplay view shape picked in the GUI (16:9 / 21:9 / 5:4)
+    env.insert(QStringLiteral("VRECORD_VIEW_ASPECT"), config.value(QStringLiteral("FFPLAY_VIEW_ASPECT_CHOICE"), QStringLiteral("16:9")));
+    // ffplay monitor window: the shell makes the Visual view 16:9 (so a
+    // fullscreen view fills a 1080p monitor); open it at two thirds of the
+    // SMALLEST attached monitor's height so it fits whichever screen it is
+    // dragged to (a primary ultrawide must not size it past a 1080p one).
+    // ffplay (SDL) is DPI-unaware, so logical pixels; a user-set value wins.
+    if (!env.contains(QStringLiteral("VRECORD_FFPLAY_HEIGHT"))) {
+        HDC screenDc = GetDC(nullptr);
+        const int dpi = screenDc ? GetDeviceCaps(screenDc, LOGPIXELSY) : 96;
+        if (screenDc) {
+            ReleaseDC(nullptr, screenDc);
+        }
+        const double dpiScale = dpi > 0 ? dpi / 96.0 : 1.0;
+        int smallestHeight = 0;
+        EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+            MONITORINFO info{};
+            info.cbSize = sizeof(info);
+            if (GetMonitorInfoW(monitor, &info)) {
+                auto* smallest = reinterpret_cast<int*>(data);
+                const int height = info.rcMonitor.bottom - info.rcMonitor.top;
+                if (height > 0 && (*smallest == 0 || height < *smallest)) {
+                    *smallest = height;
+                }
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&smallestHeight));
+        if (smallestHeight > 0) {
+            env.insert(QStringLiteral("VRECORD_FFPLAY_HEIGHT"), QString::number(qRound(smallestHeight / dpiScale * 2.0 / 3.0)));
+        }
+    }
 
     // ffplay monitor off: the session's monitor stream comes to the input pane
     // (frames over a named pipe, levels through a small file) instead of an
@@ -1553,7 +1591,7 @@ bool BackendController::stopTestSignalInternal(QString* errorMessage) {
     // detached launcher needs it on every stop, the GUI's own feeds are its
     // children - sweep once per session there (leftovers of a crashed run)
     if (!s_testMode && (!m_managedOutputs || !m_orphansSwept)) {
-        sweepOrphanedTestStreams();
+        sweepOrphanedTestStreams(m_managedOutputs);
         m_orphansSwept = true;
     }
     return true;

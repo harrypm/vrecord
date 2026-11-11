@@ -163,6 +163,7 @@ private:
     bool m_populating = false;
     QComboBox* m_captureChannelsCombo = nullptr;
     QCheckBox* m_ffplayMonitorCheck = nullptr;
+    QComboBox* m_ffplayAspectCombo = nullptr;
     class LevelMeter* m_outputMeter = nullptr;
     QComboBox* m_monitorPairCombo = nullptr;
     class LevelMeter* m_previewMeter = nullptr;

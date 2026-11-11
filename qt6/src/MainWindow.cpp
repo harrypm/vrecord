@@ -188,6 +188,15 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
                                         : QStringLiteral("%1 running in the player window").arg(mode));
         }
         m_recordButton->setText(mode == QStringLiteral("record") ? QStringLiteral("Stop Recording") : QStringLiteral("Stop %1").arg(mode));
+        // the session took the card (releaseDeckLink stopped the generator and
+        // any playout): reflect that instead of leaving a stale tick behind
+        if (m_testSignalOutputCheck->isChecked()) {
+            m_testSignalOutputCheck->blockSignals(true);
+            m_testSignalOutputCheck->setChecked(false);
+            m_testSignalOutputCheck->blockSignals(false);
+            syncConfigFromUi();
+        }
+        m_outputView->clearFrame(QStringLiteral("Output released to the %1 session").arg(mode));
         updatePreviewButton();
         appendActivity(QStringLiteral("backend: %1 started").arg(mode));
     });
@@ -374,6 +383,10 @@ void MainWindow::buildUi() {
     m_captureChannelsCombo = makeCombo({QStringLiteral("8"), QStringLiteral("16")});
     m_captureChannelsCombo->setToolTip(QStringLiteral("Embedded audio channels captured from the card (the channel mapping picks the tracks)"));
     m_ffplayMonitorCheck = makeCheckBox(QStringLiteral("ffplay monitor window (scopes / views)"));
+    m_ffplayAspectCombo = makeCombo({QStringLiteral("16:9"), QStringLiteral("21:9"), QStringLiteral("5:4")});
+    m_ffplayAspectCombo->setToolTip(QStringLiteral("Shape of the ffplay monitor view, to match the monitor it is shown on:\n"
+                                                   "the window opens in this shape and fullscreen (f / double-click) fills that screen.\n"
+                                                   "In the window, w cycles through the views."));
     m_ffplayMonitorCheck->setToolTip(QStringLiteral("Ticked: Record and Passthrough open the ffplay monitor with the selected view.\n"
                                                     "Unticked: they show in the Video Preview pane instead (no ffplay window)."));
     m_previewMeter = new LevelMeter(this);
@@ -414,6 +427,7 @@ void MainWindow::buildUi() {
     auto* playbackBox = new QGroupBox(QStringLiteral("Playback options"), deckTab);
     auto* playbackLayout = new QFormLayout(playbackBox);
     playbackLayout->addRow(m_ffplayMonitorCheck);
+    playbackLayout->addRow(QStringLiteral("View shape (monitor)"), m_ffplayAspectCombo);
     playbackLayout->addRow(QStringLiteral("View (recording)"), m_playbackViewCombo);
     playbackLayout->addRow(QStringLiteral("View (passthrough)"), m_playbackPassCombo);
     auto* sidecarBox = new QGroupBox(QStringLiteral("Sidecar file options"), deckTab);
@@ -951,7 +965,7 @@ void MainWindow::buildUi() {
                         m_audioDeviceCombo, m_audioModeCodecCombo, m_audioChannelsCombo, m_audioSampleRateCombo,
                         m_waveformScaleCombo, m_signalViewCombo, m_signalIntCombo, m_monitorAudioCombo, m_ntsc43SarCombo,
                         m_ntsc169SarCombo, m_pal43SarCombo, m_pal169SarCombo, m_themeCombo, m_videoOutputDeviceCombo, m_relayDeviceCombo,
-                        m_testPatternCombo, m_testAudioCombo, m_videoOutputConnectionCombo}) {
+                        m_testPatternCombo, m_testAudioCombo, m_videoOutputConnectionCombo, m_ffplayAspectCombo}) {
         connect(combo, &QComboBox::currentTextChanged, this, updateSlots);
     }
     for (auto* check : {m_enableSuffixCheck, m_mp4Check, m_frameMd5Check, m_timecodeVttCheck, m_qcToolsCheck,
@@ -1204,6 +1218,7 @@ void MainWindow::populateFromConfig() {
     setChoice(m_monitorPairCombo, m_config.value(QStringLiteral("MONITOR_PAIR_CHOICE")), QStringLiteral("1/2"));
     m_previewMeter->setMonitorPair(m_monitorPairCombo->currentIndex());
     m_ffplayMonitorCheck->setChecked(m_config.value(QStringLiteral("FFPLAY_MONITOR_CHOICE"), QStringLiteral("true")) != QStringLiteral("false"));
+    setComboValue(m_ffplayAspectCombo, m_config.value(QStringLiteral("FFPLAY_VIEW_ASPECT_CHOICE"), QStringLiteral("16:9")));
     setChoice(m_ntsc43SarCombo, m_config.value(QStringLiteral("NTSC_43_SAR_CHOICE")), QStringLiteral("10/11"));
     setChoice(m_ntsc169SarCombo, m_config.value(QStringLiteral("NTSC_169_SAR_CHOICE")), QStringLiteral("40/33"));
     setChoice(m_pal43SarCombo, m_config.value(QStringLiteral("PAL_43_SAR_CHOICE")), QStringLiteral("12/11"));
@@ -1276,6 +1291,7 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("DECKLINK_AUDIO_CHANNELS_CHOICE"), m_captureChannelsCombo->currentText());
     m_config.setValue(QStringLiteral("MONITOR_PAIR_CHOICE"), m_monitorPairCombo->currentText());
     m_config.setValue(QStringLiteral("FFPLAY_MONITOR_CHOICE"), m_ffplayMonitorCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
+    m_config.setValue(QStringLiteral("FFPLAY_VIEW_ASPECT_CHOICE"), m_ffplayAspectCombo->currentText());
     m_config.setValue(QStringLiteral("NTSC_43_SAR_CHOICE"), m_ntsc43SarCombo->currentText());
     m_config.setValue(QStringLiteral("NTSC_169_SAR_CHOICE"), m_ntsc169SarCombo->currentText());
     m_config.setValue(QStringLiteral("PAL_43_SAR_CHOICE"), m_pal43SarCombo->currentText());
@@ -2057,6 +2073,7 @@ void MainWindow::updateDerivedState() {
     const bool ffplayMonitor = m_ffplayMonitorCheck->isChecked();
     m_playbackViewCombo->setEnabled(ffplayMonitor);
     m_playbackPassCombo->setEnabled(ffplayMonitor);
+    m_ffplayAspectCombo->setEnabled(ffplayMonitor);
     // relay copies the input to the output, so it overrides the output standard
     const bool relayOn = m_previewRelayCheck->isChecked();
     m_outputStandardCombo->setEnabled(!relayOn);
