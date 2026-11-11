@@ -50,7 +50,13 @@ int main(int argc, char* argv[]) {
         }
     }
     if (selfTestMode) {
+        // test mode BEFORE the window exists: its constructor must not start
+        // the live preview (CI: no card) or anything the self-test drives
+        BackendController::setTestMode(true);
+        QFile::remove(QDir(appDir).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
+        writeLog(QStringLiteral("self-test: constructing window"));
         MainWindow window(packageRoot);
+        writeLog(QStringLiteral("self-test: running checks"));
         const QStringList results = window.runSelfTest();
         int failures = 0;
         QFile reportFile(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-selftest.log")));

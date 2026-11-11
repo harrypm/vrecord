@@ -49,8 +49,22 @@
 #include <QThread>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QCoreApplication>
+#include <QDateTime>
 
 namespace {
+// self-test trace: appended to VrecordQt6-selftest-trace.log (a file: survives
+// a hang and a GUI-subsystem exe's lost stderr); CI prints it on failure
+void selfTestTrace(const QString& step) {
+    if (!BackendController::testMode()) {
+        return;
+    }
+    QFile file(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        file.write(QStringLiteral("%1 trace %2\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate), step).toUtf8());
+    }
+}
+
 QPalette stockDarkPalette() {
     QPalette palette;
     palette.setColor(QPalette::Window, QColor(53, 53, 53));
@@ -111,10 +125,14 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
     , m_config(VrecordConfig::load(QStringLiteral("vrecord")))
     , m_backend(packageRoot, this) {
     m_backend.setManagedOutputs(true);
+    selfTestTrace(QStringLiteral("ctor: buildUi"));
     buildUi();
+    selfTestTrace(QStringLiteral("ctor: populateFromConfig"));
     populateFromConfig();
     applySelectedTheme();
+    selfTestTrace(QStringLiteral("ctor: refreshDeckLinkDevices"));
     refreshDeckLinkDevices();
+    selfTestTrace(QStringLiteral("ctor: connect signals"));
     // (the self-test runs only with --self-test: it drives every action and
     // would stop the live preview and stomp the user's fields on each launch)
     updateDerivedState();
@@ -219,10 +237,14 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
         startPreviewQuietly();
     });
 
-    // legacy parity: the live input preview starts automatically with the window
-    startPreviewQuietly();
+    // legacy parity: the live input preview starts automatically with the
+    // window (not in the self-test: it drives every action itself)
+    if (!BackendController::testMode()) {
+        startPreviewQuietly();
+    }
     // indicator lights: checked in the background once the window is up
     QTimer::singleShot(300, this, &MainWindow::refreshComponents);
+    selfTestTrace(QStringLiteral("ctor: done"));
 }
 
 // ---------------------------------------------------------------- deck control
@@ -2082,15 +2104,13 @@ QStringList MainWindow::runSelfTest() {
     const auto check = [&](const QString& name, bool ok, const QString& detail = QString()) {
         if (!ok && noHardware && hardwareChecks.contains(name)) {
             results << QStringLiteral("SKIP: %1 (no DeckLink device - CI mode)").arg(name);
-            fprintf(stderr, "%s\n", qPrintable(results.last()));
-            fflush(stderr);
+            selfTestTrace(results.last());
             return;
         }
         results << QStringLiteral("%1: %2%3").arg(ok ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
                                                  name,
                                                  detail.isEmpty() ? QString() : QStringLiteral(" - %1").arg(detail));
-        fprintf(stderr, "%s\n", qPrintable(results.last()));   // progress: a hang shows where
-        fflush(stderr);
+        selfTestTrace(results.last());   // progress: a hang shows where
     };
 
     // run the whole self-test on a THROWAWAY config in the package root:

@@ -101,6 +101,8 @@ if [[ -f "$PKG/VrecordQt6.exe" ]] ; then
         tail -40 "$WORK/selftest-console.txt"
         echo "--- startup log:"
         cat "$PKG/VrecordQt6-startup.log" 2>/dev/null
+        echo "--- self-test trace (the last line is the last step that finished):"
+        cat "$PKG/VrecordQt6-selftest-trace.log" 2>/dev/null || echo "(no trace)"
     fi
     if [[ $rc -eq 0 && -f "$PKG/VrecordQt6-selftest.log" ]] ; then pass "VrecordQt6 --self-test" ; else fail "VrecordQt6 --self-test (exit $rc)" ; fi
 else

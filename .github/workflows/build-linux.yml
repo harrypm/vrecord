@@ -36,7 +36,7 @@ jobs:
             build-essential curl libgtk2.0-dev libgtk-3-dev bison flex texinfo \
             git mkvtoolnix gnuplot xmlstarlet mpv mediaconch \
             libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools \
-            binutils file desktop-file-utils librsvg2-bin
+            binutils file desktop-file-utils librsvg2-bin zlib1g-dev pkg-config
           # homebrew-on-linux for ffmpeg-ma (mediaarea tap) and a VENDORED
           # GUI stack. Two annotations were seen here:
           # 1. 'gtk+ has been deprecated ... disabled 2027-08-28' - FIXED by
@@ -100,12 +100,19 @@ jobs:
           # scrubs pkg-config and hides the system libavc1394 the build
           # needs; outside, the apt -dev libs are visible). Installs the
           # dvrescue binary and the dvpackager script to /usr/local/bin.
-          curl -fsSL https://mediaarea.net/download/binary/dvrescue/24.07/dvrescue_CLI_24.07_GNU_FromSource.tar.xz | tar -xJ
-          cd dvrescue_CLI_GNU_FromSource/dvrescue
-          ./configure --prefix=/usr/local
-          make -j"$(nproc)"
-          sudo make install
-          sudo install -m755 Source/GUI/dvrescue/dvrescue/dvpackager /usr/local/bin/dvpackager
+          # The FromSource tarball has no top-level configure: its
+          # CLI_Compile.sh builds static ZenLib + MediaInfoLib, then dvrescue
+          # in dvrescue/Project/GNU/CLI. It exits 0 even when a stage fails,
+          # so the binary is checked explicitly.
+          curl -fsSL -o dvrescue-src.tar.xz https://mediaarea.net/download/binary/dvrescue/24.07/dvrescue_CLI_24.07_GNU_FromSource.tar.xz
+          echo "c3ff012d0cf6c0bd5c82771f4cb19d2b57a97dfc71e7cef30d04fc65ec071038  dvrescue-src.tar.xz" | sha256sum -c -
+          tar -xJf dvrescue-src.tar.xz
+          (cd dvrescue_CLI_GNU_FromSource && ./CLI_Compile.sh)
+          DVR_BIN=dvrescue_CLI_GNU_FromSource/dvrescue/Project/GNU/CLI/dvrescue
+          test -x "$DVR_BIN" || { echo "::error::dvrescue did not build (CLI_Compile.sh)"; exit 1; }
+          sudo install -m755 "$DVR_BIN" /usr/local/bin/dvrescue
+          sudo install -m755 dvrescue_CLI_GNU_FromSource/dvrescue/Source/GUI/dvrescue/dvrescue/dvpackager /usr/local/bin/dvpackager
+          dvrescue --version
           cd "$GITHUB_WORKSPACE"
 
       - name: Build .deb package
