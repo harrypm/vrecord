@@ -22,6 +22,8 @@ public:
     // 0 = channels 1/2, 1 = 3/4, ...
     void setMonitorPair(int pair);
     void setTitle(const QString& title);
+    // show only the monitored pair (2 bars wide), labelled with its channels
+    void setPairOnly(bool pairOnly);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -43,4 +45,5 @@ private:
     int m_monitorPair = 0;
     int m_lastChannels = 2;     // keeps the width while no audio arrives
     QString m_title;
+    bool m_pairOnly = false;
 };

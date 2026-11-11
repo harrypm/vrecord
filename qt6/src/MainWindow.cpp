@@ -671,6 +671,7 @@ void MainWindow::buildUi() {
     m_outputMeter = new LevelMeter(this);
     m_outputMeter->setTitle(QStringLiteral("out"));
     m_previewMeter->setTitle(QStringLiteral("in"));
+    m_previewMeter->setPairOnly(true);   // 2 channels wide: the monitored pair
     m_monitorPairCombo = makeCombo({QStringLiteral("1/2"), QStringLiteral("3/4"), QStringLiteral("5/6"), QStringLiteral("7/8"),
                                     QStringLiteral("9/10"), QStringLiteral("11/12"), QStringLiteral("13/14"), QStringLiteral("15/16")});
     m_monitorPairCombo->setToolTip(QStringLiteral("Stereo pair to monitor: highlighted on the meters and sent to the relay output.\n"
@@ -696,21 +697,24 @@ void MainWindow::buildUi() {
     deviceGrid->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox), 0, 1);
     deviceGrid->addWidget(m_videoOutputDeviceCombo, 1, 0);
     deviceGrid->addWidget(m_relayDeviceCombo, 1, 1);
-    deviceGrid->addWidget(m_previewRelayCheck, 2, 0, 1, 2);
+    deviceGrid->addWidget(m_previewRelayCheck, 2, 0);
+    deviceGrid->addWidget(m_testSignalOutputCheck, 2, 1);
     deviceGrid->setColumnStretch(0, 1);
     deviceGrid->setColumnStretch(1, 1);
     outputDeviceLayout->addLayout(deviceGrid);
     auto* generatorBox = new QGroupBox(QStringLiteral("Signal / audio generator"), outputDeviceBox);
-    auto* generatorGrid = new QGridLayout(generatorBox);
-    generatorGrid->addWidget(new QLabel(QStringLiteral("Output standard"), generatorBox), 0, 0);
-    generatorGrid->addWidget(new QLabel(QStringLiteral("Test pattern"), generatorBox), 0, 1);
-    generatorGrid->addWidget(m_outputStandardCombo, 1, 0);
-    generatorGrid->addWidget(m_testPatternCombo, 1, 1);
-    generatorGrid->addWidget(new QLabel(QStringLiteral("Test audio"), generatorBox), 2, 0);
-    generatorGrid->addWidget(m_testAudioCombo, 3, 0);
-    generatorGrid->addWidget(m_testSignalOutputCheck, 3, 1);
-    generatorGrid->setColumnStretch(0, 1);
-    generatorGrid->setColumnStretch(1, 1);
+    // one row: compact standard, then pattern and audio side by side
+    auto* generatorRow = new QHBoxLayout(generatorBox);
+    m_outputStandardCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_outputStandardCombo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    generatorRow->addWidget(new QLabel(QStringLiteral("Standard"), generatorBox));
+    generatorRow->addWidget(m_outputStandardCombo);
+    generatorRow->addSpacing(8);
+    generatorRow->addWidget(new QLabel(QStringLiteral("Pattern"), generatorBox));
+    generatorRow->addWidget(m_testPatternCombo, 3);
+    generatorRow->addSpacing(8);
+    generatorRow->addWidget(new QLabel(QStringLiteral("Audio"), generatorBox));
+    generatorRow->addWidget(m_testAudioCombo, 1);
     m_outputStandardCombo->setToolTip(QStringLiteral("Standard sent to the hardware output for file playout and the test signal.\n"
                                                      "Auto plays files in their native mode; relay on = the output follows the input."));
     outputDeviceLayout->addWidget(generatorBox);

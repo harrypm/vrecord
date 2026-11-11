@@ -34,7 +34,7 @@ int LevelMeter::channelCount() const {
 }
 
 QSize LevelMeter::sizeHint() const {
-    const int channels = std::max(2, channelCount());
+    const int channels = m_pairOnly ? 2 : std::max(2, channelCount());
     const int pairs = (channels + 1) / 2;
     const int scaleW = fontMetrics().horizontalAdvance(QStringLiteral("-60")) + 6;
     return {scaleW + pairs * (2 * kBarW + kInPairGap) + (pairs + 1) * kPairGap, 240};
@@ -46,6 +46,12 @@ QSize LevelMeter::minimumSizeHint() const {
 
 void LevelMeter::setMonitorPair(int pair) {
     m_monitorPair = std::max(0, pair);
+    update();
+}
+
+void LevelMeter::setPairOnly(bool pairOnly) {
+    m_pairOnly = pairOnly;
+    updateGeometry();
     update();
 }
 
@@ -63,7 +69,9 @@ void LevelMeter::setLevels(const QVector<float>& peakDb, const QVector<float>& r
         m_holdAt.fill(0, channels);
         if (channels != m_lastChannels && channels > 0) {
             m_lastChannels = channels;
-            updateGeometry();   // 2 -> 8 -> 16 channels: the meter widens
+            if (!m_pairOnly) {
+                updateGeometry();
+            }   // 2 -> 8 -> 16 channels: the meter widens
         }
     }
     const qint64 now = m_clock.elapsed();
@@ -133,10 +141,13 @@ void LevelMeter::paintEvent(QPaintEvent*) {
 
     const int channels = channelCount();
     const int pairs = (channels + 1) / 2;
-    for (int pair = 0; pair < pairs; ++pair) {
-        const int pairX = area.left() + kPairGap + pair * (2 * kBarW + kInPairGap + kPairGap);
+    const int firstPair = m_pairOnly ? m_monitorPair : 0;
+    const int lastPair = m_pairOnly ? m_monitorPair + 1 : pairs;
+    for (int pair = firstPair; pair < lastPair; ++pair) {
+        const int slot = pair - firstPair;
+        const int pairX = area.left() + kPairGap + slot * (2 * kBarW + kInPairGap + kPairGap);
         const QRect pairRect(pairX - 2, area.top(), 2 * kBarW + kInPairGap + 4, area.height());
-        if (pair == m_monitorPair) {
+        if (pair == m_monitorPair && !m_pairOnly) {
             painter.setPen(QPen(QColor(90, 160, 255), 1));
             painter.drawRect(pairRect.adjusted(0, 0, -1, -1));
         }
@@ -168,7 +179,7 @@ void LevelMeter::paintEvent(QPaintEvent*) {
         }
         painter.setPen(pair == m_monitorPair ? QColor(120, 180, 255) : palette().color(QPalette::WindowText));
         painter.drawText(QRect(pairRect.left() - 4, area.bottom() + 2, pairRect.width() + 8, labelH), Qt::AlignCenter,
-                         channels > pair * 2 + 1 ? QStringLiteral("%1/%2").arg(pair * 2 + 1).arg(pair * 2 + 2)
+                         (m_pairOnly || channels > pair * 2 + 1) ? QStringLiteral("%1/%2").arg(pair * 2 + 1).arg(pair * 2 + 2)
                                                  : QString::number(pair * 2 + 1));
     }
     if (m_peak.isEmpty()) {
