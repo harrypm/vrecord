@@ -1529,7 +1529,7 @@ bool BackendController::applyVideoInputConnection(const VrecordConfig& config, Q
 // ---------------------------------------------------------------- test signal
 
 bool BackendController::isTestSignalActive() const {
-    if (m_testSignalFeed && m_testSignalFeed->isRunning()) {
+    if (m_testSignalStarting || (m_testSignalFeed && m_testSignalFeed->isRunning())) {
         return true;
     }
     QFile pidFile(testSignalPidPath());
@@ -1540,6 +1540,8 @@ bool BackendController::isTestSignalActive() const {
 }
 
 bool BackendController::stopTestSignalInternal(QString* errorMessage) {
+    ++m_testSignalGeneration;   // cancels a start still in its settle / verify steps
+    m_testSignalStarting = false;
     if (m_testSignalFeed) {
         stopFeed(m_testSignalFeed);
         emit outputStatus(QStringLiteral("stopped"));
@@ -1547,8 +1549,12 @@ bool BackendController::stopTestSignalInternal(QString* errorMessage) {
     if (!stopTrackedProcess(testSignalPidPath(), errorMessage)) {
         return false;
     }
-    if (!s_testMode) {
+    // the orphan sweep spawns PowerShell (0.3 s to several seconds): the CLI's
+    // detached launcher needs it on every stop, the GUI's own feeds are its
+    // children - sweep once per session there (leftovers of a crashed run)
+    if (!s_testMode && (!m_managedOutputs || !m_orphansSwept)) {
         sweepOrphanedTestStreams();
+        m_orphansSwept = true;
     }
     return true;
 }
@@ -1678,11 +1684,12 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         stopManagedFileOutputInternal(nullptr);
     }
     stopTestSignalInternal(nullptr);
-    if (!s_testMode) {
+    const bool asyncStart = m_managedOutputs && !s_testMode;
+    if (!s_testMode && !asyncStart) {
         QThread::msleep(400);
     }
 
-    if (!applyVideoOutputConnection(config, errorMessage)) {
+    if (!asyncStart && !applyVideoOutputConnection(config, errorMessage)) {
         return false;
     }
 
@@ -1711,49 +1718,21 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return true;
     }
 
+    if (asyncStart) {
+        // GUI: the settle, launch and verify steps run off timers so the
+        // window never blocks; the outcome arrives as testSignalResult
+        m_pendingSignal = PendingTestSignal{config, signalMode, head, cardOutput, videoFilters, pattern, modeNote,
+                                            !requestedSize.startsWith(QStringLiteral("720x"))};
+        m_testSignalStarting = true;
+        const quint64 generation = m_testSignalGeneration;
+        emit outputStatus(QStringLiteral("test signal: starting %1").arg(describeMode(signalMode.formatCode)));
+        QTimer::singleShot(400, this, [this, generation] { launchManagedTestSignal(generation, false); });
+        return true;
+    }
+
+    // CLI (vsignal): detached process, verified synchronously
     const QString pidPath = testSignalPidPath();
-    // launch, verify liveness, then verify the card actually locked the
-    // requested raster: a silent connector revert (teardown race) would
-    // stream the bars into a stale connector while the HDMI monitor stays dark
     const auto launchSignal = [&]() -> bool {
-        if (m_managedOutputs) {
-            // GUI: one process for the card and the output pane, both from
-            // the same generated (and conformed) frames
-            const double aspect = (signalMode.formatCode == QStringLiteral("ntsc") || signalMode.formatCode == QStringLiteral("pal"))
-                                      ? VideoModes::displayAspect(signalMode, config.value(QStringLiteral("ASPECT_RATIO_CHOICE")))
-                                      : (signalMode.height > 0 ? double(signalMode.width) / signalMode.height : 16.0 / 9.0);
-            int width = 0;
-            int height = 0;
-            VideoModes::previewSize(signalMode.height, aspect, &width, &height);
-            QString chain = videoFilters.join(QLatin1Char(','));
-            chain += (chain.isEmpty() ? QString() : QStringLiteral(",")) + QStringLiteral("format=yuv422p10le");
-            FrameFeed::Attempt attempt;
-            attempt.label = QStringLiteral("test signal %1 %2").arg(signalMode.formatCode, requestedSize);
-            attempt.arguments = head;
-            attempt.arguments << QStringLiteral("-filter_complex")
-                              << QStringLiteral("[0:v]%1,split=2[card][pane];[pane]scale=%2:%3:flags=fast_bilinear,format=bgra[view]")
-                                     .arg(chain).arg(width).arg(height)
-                              << QStringLiteral("-map") << QStringLiteral("[card]") << QStringLiteral("-map") << QStringLiteral("1:a")
-                              << cardOutput
-                              << QStringLiteral("-map") << QStringLiteral("[view]") << QStringLiteral("-an")
-                              << QStringLiteral("-f") << QStringLiteral("rawvideo") << QStringLiteral("-flush_packets") << QStringLiteral("1")
-                              << QStringLiteral("pipe:1")
-                              << QStringLiteral("-map") << QStringLiteral("1:a") << QStringLiteral("-af") << audioMeterFilter()
-                              << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
-            m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(2.0 * kPlayoutPreroll * signalMode.fps()));
-            QThread::msleep(1500);
-            if (!m_testSignalFeed || !m_testSignalFeed->isRunning()) {
-                const QString tail = m_testSignalFeed ? m_testSignalFeed->stderrTail().trimmed() : QString();
-                stopFeed(m_testSignalFeed);
-                if (errorMessage) {
-                    *errorMessage = tail.isEmpty() ? QStringLiteral("Test signal output exited immediately.")
-                                                   : QStringLiteral("Test signal output failed (%1): %2").arg(describeMode(signalMode.formatCode),
-                                                                                                             tail.section(QLatin1Char('\n'), -3));
-                }
-                return false;
-            }
-            return true;
-        }
         qint64 newPid = 0;
         if (!startDetachedProgramWithLog(ffmpegPath(), arguments, testSignalLogPath(), &newPid, errorMessage)) {
             return false;
@@ -1781,12 +1760,12 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
 
+    // verify the card actually locked the requested raster: a silent connector
+    // revert (teardown race) would stream the bars into a stale connector
     const bool requestedHD = !requestedSize.startsWith(QStringLiteral("720x"));
     if (requestedHD) {
         const QString activeMode = DeckLinkDiscovery::activeOutputModeFourCC(outputDevice, nullptr);
         if (activeMode == QStringLiteral("ntsc") || activeMode == QStringLiteral("pal")) {
-            // teardown race hit: re-apply the connector and relaunch once
-            stopFeed(m_testSignalFeed);
             stopTrackedProcess(pidPath, nullptr);
             QThread::msleep(400);
             if (!applyVideoOutputConnection(config, errorMessage)) {
@@ -1800,6 +1779,82 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
     emit outputStatus(QStringLiteral("test signal: %1, %2%3").arg(pattern, describeMode(signalMode.formatCode),
                                                                    modeNote.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(modeNote)));
     return true;
+}
+
+// GUI test signal, step 2 (after the outputs settled): connector, then one
+// process for the card and the output pane, both from the same frames
+void BackendController::launchManagedTestSignal(quint64 generation, bool retried) {
+    if (generation != m_testSignalGeneration) {
+        return;   // stopped / restarted meanwhile
+    }
+    const PendingTestSignal& job = m_pendingSignal;
+    QString error;
+    if (!applyVideoOutputConnection(job.config, &error)) {
+        failManagedTestSignal(generation, error);
+        return;
+    }
+    const VideoMode& signalMode = job.mode;
+    const double aspect = (signalMode.formatCode == QStringLiteral("ntsc") || signalMode.formatCode == QStringLiteral("pal"))
+                              ? VideoModes::displayAspect(signalMode, job.config.value(QStringLiteral("ASPECT_RATIO_CHOICE")))
+                              : (signalMode.height > 0 ? double(signalMode.width) / signalMode.height : 16.0 / 9.0);
+    int width = 0;
+    int height = 0;
+    VideoModes::previewSize(signalMode.height, aspect, &width, &height);
+    QString chain = job.videoFilters.join(QLatin1Char(','));
+    chain += (chain.isEmpty() ? QString() : QStringLiteral(",")) + QStringLiteral("format=yuv422p10le");
+    FrameFeed::Attempt attempt;
+    attempt.label = QStringLiteral("test signal %1 %2").arg(signalMode.formatCode, signalMode.size());
+    attempt.arguments = job.head;
+    attempt.arguments << QStringLiteral("-filter_complex")
+                      << QStringLiteral("[0:v]%1,split=2[card][pane];[pane]scale=%2:%3:flags=fast_bilinear,format=bgra[view]")
+                             .arg(chain).arg(width).arg(height)
+                      << QStringLiteral("-map") << QStringLiteral("[card]") << QStringLiteral("-map") << QStringLiteral("1:a")
+                      << job.cardOutput
+                      << QStringLiteral("-map") << QStringLiteral("[view]") << QStringLiteral("-an")
+                      << QStringLiteral("-f") << QStringLiteral("rawvideo") << QStringLiteral("-flush_packets") << QStringLiteral("1")
+                      << QStringLiteral("pipe:1")
+                      << QStringLiteral("-map") << QStringLiteral("1:a") << QStringLiteral("-af") << audioMeterFilter()
+                      << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
+    m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(2.0 * kPlayoutPreroll * signalMode.fps()));
+    QTimer::singleShot(1500, this, [this, generation, retried] { verifyManagedTestSignal(generation, retried); });
+}
+
+// step 3: still running, and the card on the requested raster?
+void BackendController::verifyManagedTestSignal(quint64 generation, bool retried) {
+    if (generation != m_testSignalGeneration) {
+        return;
+    }
+    const PendingTestSignal& job = m_pendingSignal;
+    if (!m_testSignalFeed || !m_testSignalFeed->isRunning()) {
+        const QString tail = m_testSignalFeed ? m_testSignalFeed->stderrTail().trimmed() : QString();
+        stopFeed(m_testSignalFeed);
+        failManagedTestSignal(generation, tail.isEmpty() ? QStringLiteral("Test signal output exited immediately.")
+                                                         : QStringLiteral("Test signal output failed (%1): %2").arg(describeMode(job.mode.formatCode),
+                                                                                                                   tail.section(QLatin1Char('\n'), -3)));
+        return;
+    }
+    if (job.requestedHD && !retried) {
+        const QString activeMode = DeckLinkDiscovery::activeOutputModeFourCC(deviceForOutput(job.config), nullptr);
+        if (activeMode == QStringLiteral("ntsc") || activeMode == QStringLiteral("pal")) {
+            // teardown race hit: re-apply the connector and relaunch once
+            stopFeed(m_testSignalFeed);
+            QTimer::singleShot(400, this, [this, generation] { launchManagedTestSignal(generation, true); });
+            return;
+        }
+    }
+    m_testSignalStarting = false;
+    emit outputStatus(QStringLiteral("test signal: %1, %2%3").arg(job.pattern, describeMode(job.mode.formatCode),
+                                                                   job.modeNote.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(job.modeNote)));
+    emit testSignalResult(true, {});
+}
+
+void BackendController::failManagedTestSignal(quint64 generation, const QString& message) {
+    if (generation != m_testSignalGeneration) {
+        return;
+    }
+    m_testSignalStarting = false;
+    releaseOutputClaim();
+    emit testSignalResult(false, message);
 }
 
 // ---------------------------------------------------------------- helpers

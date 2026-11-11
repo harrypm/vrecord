@@ -154,6 +154,19 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
         appendActivity(QStringLiteral("output: %1").arg(message));
     });
     connect(&m_backend, &BackendController::inputModeDetected, this, &MainWindow::followInputMode);
+    connect(&m_backend, &BackendController::testSignalResult, this, [this](bool ok, const QString& message) {
+        if (!ok) {
+            m_testSignalOutputCheck->blockSignals(true);
+            m_testSignalOutputCheck->setChecked(false);
+            m_testSignalOutputCheck->blockSignals(false);
+            syncConfigFromUi();
+            m_outputView->clearFrame(QStringLiteral("No hardware output running"));
+            showError(message);
+        } else {
+            statusBar()->showMessage(QStringLiteral("Test signal output running"), 3000);
+        }
+        updatePreviewButton();
+    });
     connect(&m_backend, &BackendController::inputAudioLevels, this, [this](const QVector<float>& peak, const QVector<float>& rms) {
         m_previewMeter->setLevels(peak, rms);
         // relay: the output carries the monitored pair of the input
@@ -1564,7 +1577,7 @@ void MainWindow::setTestSignalOutput() {
     }
     updatePreviewButton();
     statusBar()->showMessage(enabled
-                                 ? QStringLiteral("Started test signal output")
+                                 ? QStringLiteral("Starting test signal output...")
                                  : QStringLiteral("Stopped test signal output"),
                              3000);
 }

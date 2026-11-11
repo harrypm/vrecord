@@ -96,6 +96,9 @@ signals:
     void inputAudioLevels(const QVector<float>& peakDb, const QVector<float>& rmsDb);
     // what goes to the card: playout / held frame / test signal audio
     void outputAudioLevels(const QVector<float>& peakDb, const QVector<float>& rmsDb);
+    // GUI test signal start finished (it runs off timers, not on a blocked
+    // UI thread): ok, or the reason it failed
+    void testSignalResult(bool ok, const QString& message);
 
 private:
     struct MediaInfo {
@@ -119,6 +122,9 @@ private:
     QString testSignalLogPath() const;
     bool stopTrackedProcess(const QString& pidFilePath, QString* errorMessage) const;
     bool stopTestSignalInternal(QString* errorMessage);
+    void launchManagedTestSignal(quint64 generation, bool retried);
+    void verifyManagedTestSignal(quint64 generation, bool retried);
+    void failManagedTestSignal(quint64 generation, const QString& message);
     bool launchFileOutputProcess(qint64 frame, bool hold, QString* errorMessage);
     double seekSecondsForFrame(qint64 frame) const;
     qint64 wrapFrame(qint64 frame) const;
@@ -171,6 +177,20 @@ private:
 
     // test signal (managed mode)
     QPointer<FrameFeed> m_testSignalFeed;
+    struct PendingTestSignal {
+        VrecordConfig config;
+        VideoMode mode;
+        QStringList head;
+        QStringList cardOutput;
+        QStringList videoFilters;
+        QString pattern;
+        QString modeNote;
+        bool requestedHD = false;
+    };
+    PendingTestSignal m_pendingSignal;
+    quint64 m_testSignalGeneration = 0;   // bumped by every stop: cancels pending steps
+    bool m_testSignalStarting = false;
+    bool m_orphansSwept = false;
 
     // file playout
     QPointer<FrameFeed> m_playoutFeed;

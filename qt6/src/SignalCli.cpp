@@ -206,14 +206,31 @@ int runManagedSignalTest(const QString& packageRoot) {
         config.setValue(QStringLiteral("STANDARD_CHOICE"), c.first);
         config.setValue(QStringLiteral("TEST_SIGNAL_PATTERN_CHOICE"), c.second);
         QString error;
-        const bool started = backend.setTestSignalOutput(config, true, &error);
-        pump(1500);          // past start-up and the pane's preroll delay
+        int result = -1;   // async start outcome (GUI path)
+        const auto conn = QObject::connect(&backend, &BackendController::testSignalResult, [&result, &error](bool ok, const QString& m) {
+            result = ok ? 1 : 0;
+            if (!ok) {
+                error = m;
+            }
+        });
+        QElapsedTimer blocked;
+        blocked.start();
+        bool started = backend.setTestSignalOutput(config, true, &error);
+        const qint64 blockedMs = blocked.elapsed();   // how long the UI thread would stall
+        QElapsedTimer wait;
+        wait.start();
+        while (started && result < 0 && wait.elapsed() < 10000) {
+            pump(50);
+        }
+        QObject::disconnect(conn);
+        started = started && result == 1;
+        pump(500);           // past the pane's preroll delay
         frames = 0;
         pump(3000);
         const QString mode = DeckLinkDiscovery::activeOutputModeFourCC(config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")));
-        const bool ok = started && backend.isManagedTestSignalRunning() && frames > 10;   // liveness (this loop under-counts coalesced frames)
+        const bool ok = started && backend.isManagedTestSignalRunning() && frames > 10 && blockedMs < 1000;   // liveness (this loop under-counts coalesced frames)
         std::cout << (ok ? "PASS " : "FAIL ") << c.first.toStdString() << " | " << c.second.toStdString() << "  card=" << mode.toStdString()
-                  << " pane=" << frames / 3 << " fps  " << (started ? lastStatus : error).toStdString() << std::endl;
+                  << " pane=" << frames / 3 << " fps  ui-block=" << blockedMs << "ms  " << (started ? lastStatus : error).toStdString() << std::endl;
         failures += ok ? 0 : 1;
     }
     backend.setTestSignalOutput(config, false, nullptr);
