@@ -253,6 +253,9 @@ QString MainWindow::dropPathFor(QObject* watched, const QMimeData* mime) const {
         return {};
     }
     const QFileInfo info(local);
+    if (!it->target) {   // the window at large: any existing folder or file
+        return info.exists() ? info.absoluteFilePath() : QString();
+    }
     if (it->wantsFolder) {
         return info.isDir() ? info.absoluteFilePath() : info.absolutePath();
     }
@@ -267,11 +270,29 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
                 drag->acceptProposedAction();
                 return true;
             }
+            if (m_dropTargets.value(watched).target) {
+                // a specific box that does not take this (e.g. a folder on the
+                // playout file): refuse it here rather than letting it bubble
+                // up to the window-wide fallback (Qt keeps propagating drag
+                // events that are not accepted, so accept with no action =
+                // the "no drop" cursor, stopped here)
+                drag->setDropAction(Qt::IgnoreAction);
+                drag->accept();
+                return true;
+            }
         } else if (event->type() == QEvent::Drop) {
             auto* drop = static_cast<QDropEvent*>(event);
             const QString path = dropPathFor(watched, drop->mimeData());
+            if (path.isEmpty() && m_dropTargets.value(watched).target) {
+                drop->setDropAction(Qt::IgnoreAction);
+                drop->accept();
+                return true;
+            }
             if (!path.isEmpty()) {
                 QLineEdit* target = m_dropTargets.value(watched).target;
+                if (!target) {   // window fallback: folder -> recording dir, file -> playout file
+                    target = QFileInfo(path).isDir() ? m_dirEdit : m_playFileEdit;
+                }
                 target->setText(QDir::toNativeSeparators(path));
                 drop->acceptProposedAction();
                 statusBar()->showMessage(QStringLiteral("Set from drop: %1").arg(QDir::toNativeSeparators(path)), 4000);
@@ -897,6 +918,9 @@ void MainWindow::buildUi() {
     m_tabs->addTab(logsTab, QStringLiteral("Logs"));
 
     setCentralWidget(central);
+    // drop anywhere else in the window: a folder sets the recording directory,
+    // a file the playout file (the specific boxes above take precedence)
+    registerDropTarget(central, nullptr, false);
     setWindowTitle(QStringLiteral("vrecord Qt6"));
     resize(1380, 920);
 
@@ -1853,6 +1877,53 @@ QStringList MainWindow::runSelfTest() {
     darkPalette.setColor(QPalette::Window, QColor(53, 53, 53));
     check(QStringLiteral("Theme selection applies the dark palette"),
           QApplication::palette().color(QPalette::Window) == darkPalette.color(QPalette::Window));
+
+    {
+        // drag and drop: real QDragEnter/QDrop events through the filters
+        const QString folder = QDir(m_backend.packageRoot()).absolutePath();
+        const QString file = QDir(folder).filePath(QStringLiteral("VrecordQt6.exe"));
+        const auto dropOnto = [](QWidget* widget, const QString& path) {
+            QMimeData mime;
+            mime.setUrls({QUrl::fromLocalFile(path)});
+            const QPoint pos = widget->rect().center();
+            QDragEnterEvent enter(pos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(widget, &enter);
+            if (!enter.isAccepted() || enter.dropAction() == Qt::IgnoreAction) {
+                return false;
+            }
+            QDropEvent drop(QPointF(pos), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(widget, &drop);
+            return drop.isAccepted() && drop.dropAction() != Qt::IgnoreAction;
+        };
+        const QString savedDir = m_dirEdit->text();
+        const QString savedLogDir = m_logDirEdit->text();
+        const QString savedPlay = m_playFileEdit->text();
+        const auto same = [](const QString& a, const QString& b) {
+            return QDir::cleanPath(QDir::fromNativeSeparators(a)).compare(QDir::cleanPath(QDir::fromNativeSeparators(b)), Qt::CaseInsensitive) == 0;
+        };
+        m_dirEdit->clear();
+        const bool dirOk = dropOnto(m_dirEdit, folder) && same(m_dirEdit->text(), folder);
+        m_dirEdit->clear();
+        const bool dirFromFileOk = dropOnto(m_dirEdit, file) && same(m_dirEdit->text(), folder);
+        m_logDirEdit->clear();
+        const bool logDirOk = dropOnto(m_logDirEdit, folder) && same(m_logDirEdit->text(), folder);
+        m_playFileEdit->clear();
+        const bool playOk = dropOnto(m_playFileEdit, file) && same(m_playFileEdit->text(), file);
+        m_playFileEdit->clear();
+        const bool viewOk = dropOnto(m_outputView, file) && same(m_playFileEdit->text(), file);
+        const bool folderRefused = !dropOnto(m_playFileEdit, folder);
+        m_dirEdit->clear();
+        m_playFileEdit->clear();
+        const bool windowOk = dropOnto(centralWidget(), folder) && same(m_dirEdit->text(), folder)
+                              && dropOnto(centralWidget(), file) && same(m_playFileEdit->text(), file);
+        m_dirEdit->setText(savedDir);
+        m_logDirEdit->setText(savedLogDir);
+        m_playFileEdit->setText(savedPlay);
+        check(QStringLiteral("Drag and drop sets folder and file paths"),
+              dirOk && dirFromFileOk && logDirOk && playOk && viewOk && folderRefused && windowOk,
+              QStringLiteral("dir=%1 dirFromFile=%2 logDir=%3 play=%4 outputView=%5 folderRefused=%6 window=%7")
+                  .arg(dirOk).arg(dirFromFileOk).arg(logDirOk).arg(playOk).arg(viewOk).arg(folderRefused).arg(windowOk));
+    }
 
     updateDerivedState();
     check(QStringLiteral("Summary and validation panels populate"),
