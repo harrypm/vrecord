@@ -1,0 +1,73 @@
+name: Build and Test
+
+# The core check for every commit and pull request (the vhs-decode model):
+# the script tests run first, then all three platform builds - each build also
+# runs its own package tests - and the commit / PR is good only when every
+# build passes. Releases are made by release.yml from the same build workflows.
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - '**'
+
+concurrency:
+  group: build-and-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  script-tests:
+    name: Script tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shell scripts parse (bash -n)
+        run: |
+          set -e
+          for f in vrecord vtest vplay Release/*.sh Release/ci/*.sh Release/vendor/dvpackager/dvpackager qt6/tests/*.sh ; do
+            [ -f "$f" ] || continue
+            bash -n "$f" && echo "ok  $f"
+          done
+
+      - name: Bash scripts keep LF line endings
+        run: |
+          set -e
+          for f in vrecord Release/vendor/dvpackager/dvpackager Release/build-ffmpeg-windows.sh Release/ci/*.sh ; do
+            if grep -q $'\r' "$f" ; then echo "::error file=$f::CRLF line endings (bash cannot run this)" ; exit 1 ; fi
+          done
+
+      - name: dvpackager bc stand-in (Windows has no bc)
+        run: bash Release/ci/test-dvpackager-bc.sh
+
+      - name: Vendored patch inventory is complete
+        run: |
+          set -e
+          test -s Release/vendor/ffmpeg-ma/series
+          test -s Release/vendor/ffmpeg-ma/PATCH_COMMIT
+          test -s Release/vendor/gtkdialog/0001-vrecord-windows.patch
+          test -s Release/vendor/decklink-win/DeckLinkAPIDispatch_win.cpp
+          test -s Release/vendor/dvpackager/LICENSE.txt
+          echo "vendored inputs present"
+
+  build-linux:
+    name: Build Linux
+    needs: script-tests
+    uses: ./.github/workflows/build-linux.yml
+    secrets: inherit
+
+  build-windows:
+    name: Build Windows
+    needs: script-tests
+    uses: ./.github/workflows/build-windows.yml
+    secrets: inherit
+
+  build-macos:
+    name: Build macOS
+    needs: script-tests
+    uses: ./.github/workflows/build-macos.yml
+    secrets: inherit

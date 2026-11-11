@@ -1,0 +1,821 @@
+--- a/src/actions.c
++++ b/src/actions.c
+@@ -1,7 +1,7 @@
+ /*
+  * actions.c:
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -38,6 +38,26 @@
+ #include "tag_attributes.h"
+ #include "config.h"
+ 
++/* --- vrecord instrumentation (env-gated, no-op unless GTKDIALOG_ACTION_LOG set) --- */
++static void vd_action_log(const char *tag, const char *cmd, long dur_us)
++{
++	const char *path = g_getenv("GTKDIALOG_ACTION_LOG");
++	FILE *f;
++	gint64 now;
++
++	if (path == NULL || *path == '\0')
++		return;
++	f = fopen(path, "a");
++	if (f == NULL)
++		return;
++	now = g_get_real_time();
++	fprintf(f, "%ld.%06ld %s %7ldus %s\n",
++		(long)(now / G_USEC_PER_SEC), (long)(now % G_USEC_PER_SEC),
++		tag, dur_us, cmd ? cmd : "(null)");
++	fclose(f);
++}
++
++
+ int gtkdialog_parse(void);
+ 
+ extern gchar *option_include_file;
+@@ -669,25 +689,36 @@
+ /* This fuction will export variables and run a shell command */
+ void action_shellcommand(GtkWidget *widget, char *string)
+ {
+-	char *command;
++	char *command = NULL;
++	gchar *argv[4];
++	GError *error = NULL;
++	gint exit_status = 0;
++	gint64 t0;
+ 
+ 	variables_export_all();
+ 
+ 	if (option_include_file == NULL) {
+-
+-		_action_shellcommand(string);
+-
++		command = g_strdup(string);
+ 	} else {
+-
+-		/* Debian 01_bashism patch: use dot rather than source.
+-		command = g_strdup_printf("source %s; %s", */
+-		command = g_strdup_printf(". %s; %s",
+-				option_include_file, string);
+-		_action_shellcommand(command);
+-		g_free(command);
+-
++		command = g_strdup_printf(". \"%s\"; %s", option_include_file, string);
+ 	}
+ 
++	argv[0] = "bash";
++	argv[1] = "-c";
++	argv[2] = command;
++	argv[3] = NULL;
++
++	t0 = g_get_monotonic_time();
++	vd_action_log("SPAWN", command, 0);
++	if (!g_spawn_sync(NULL, argv, NULL,
++	                  G_SPAWN_SEARCH_PATH | G_SPAWN_LEAVE_DESCRIPTORS_OPEN,
++	                  NULL, NULL, NULL, NULL, &exit_status, &error)) {
++		g_warning("action_shellcommand: %s", error ? error->message : "spawn failed");
++		if (error)
++			g_error_free(error);
++	}
++	vd_action_log("DONE_", command, (long)(g_get_monotonic_time() - t0));
++	g_free(command);
+ }
+ 
+ /***********************************************************************
+--- a/src/signals.c
++++ b/src/signals.c
+@@ -1694,7 +1694,7 @@
+ 					}
+ 
+ 					/* Close the file */
+-					pclose(infile);
++					widget_pclose(infile);
+ 				} else {
+ 					fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 						argument);
+--- a/src/stringman.c
++++ b/src/stringman.c
+@@ -1,7 +1,7 @@
+ /*
+  * stringman.c: Special string maniplutations.
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2012       Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -43,11 +43,35 @@
+ #define IN_SEPARATOR    2
+ 
+ #ifdef G_OS_WIN32
++/* vrecord Windows port: real getline (the stub returned 0 without touching
++ * *lineptr and callers dereferenced it -> segfault with --file=) */
+ ssize_t
+ getline(char **lineptr, size_t *n, FILE *stream)
+ {
+-	g_warning("%s(): Unimplemented", __func__);
+-	return 0;
++	size_t cap = (*n && *lineptr) ? *n : 128;
++	size_t len = 0;
++	int ch;
++
++	if (*lineptr == NULL)
++		*lineptr = g_malloc(cap);
++	else if (*n < 128)
++		cap = *n = 128;
++
++	while ((ch = fgetc(stream)) != EOF) {
++		if (len + 2 > cap) {
++			cap *= 2;
++			*lineptr = g_realloc(*lineptr, cap);
++			*n = cap;
++		}
++		(*lineptr)[len++] = (char) ch;
++		if (ch == '\n')
++			break;
++	}
++	if (len == 0 && ch == EOF)
++		return -1;
++	(*lineptr)[len] = '\0';
++	*n = cap;
++	return (ssize_t) len;
+ }
+ #endif
+ 
+--- a/src/widget_button.c
++++ b/src/widget_button.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_button.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -674,7 +674,7 @@
+ 				gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(var->Widget), is_active);
+ 			}
+ 			/* Close the file */
+-			pclose(infile);
++			widget_pclose(infile);
+ 		} else {
+ 			fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 				command);
+--- a/src/widget_checkbox.c
++++ b/src/widget_checkbox.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_checkbox.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -338,7 +338,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_chooser.c
++++ b/src/widget_chooser.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_chooser.c:
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * Copyright (C) 2021-2022  step https://github.com/step-
+  *
+@@ -435,7 +435,7 @@
+ 		g_string_free(text, TRUE);
+ 
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_colorbutton.c
++++ b/src/widget_colorbutton.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_colorbutton.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -405,7 +405,7 @@
+ 			if (values) list_t_free(values);
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_comboboxtext.c
++++ b/src/widget_comboboxtext.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_comboboxtext.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -703,7 +703,7 @@
+ #endif
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_entry.c
++++ b/src/widget_entry.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_entry.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -352,7 +352,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_expander.c
++++ b/src/widget_expander.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_expander.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -355,7 +355,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_fontbutton.c
++++ b/src/widget_fontbutton.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_fontbutton.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -319,7 +319,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_frame.c
++++ b/src/widget_frame.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_frame.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -392,7 +392,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_hscale.c
++++ b/src/widget_hscale.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_hscale.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -483,7 +483,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_list.c
++++ b/src/widget_list.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_list.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -428,7 +428,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			filename);
+--- a/src/widget_menuitem.c
++++ b/src/widget_menuitem.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_menuitem.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -740,7 +740,7 @@
+ 
+ 			}
+ 			/* Close the file */
+-			pclose(infile);
++			widget_pclose(infile);
+ 		} else {
+ 			fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n",
+ 				__func__, command);
+--- a/src/widget_notebook.c
++++ b/src/widget_notebook.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_notebook.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -363,7 +363,7 @@
+ 			gtk_notebook_set_current_page(GTK_NOTEBOOK(var->Widget), atoi(line));
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_radiobutton.c
++++ b/src/widget_radiobutton.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_radiobutton.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -345,7 +345,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_spinbutton.c
++++ b/src/widget_spinbutton.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_spinbutton.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -464,7 +464,7 @@
+ 			gtk_spin_button_set_value(GTK_SPIN_BUTTON(var->Widget), atof(line));
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_statusbar.c
++++ b/src/widget_statusbar.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_statusbar.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -342,7 +342,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_table.c
++++ b/src/widget_table.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_table.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -602,7 +602,7 @@
+ 			if (sliced) list_t_free(sliced);	/* Free linecutter memory */
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			filename);
+--- a/src/widget_terminal.c
++++ b/src/widget_terminal.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_terminal.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -586,7 +586,7 @@
+ 
+ 		g_string_free(text, TRUE);
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_text.c
++++ b/src/widget_text.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_text.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -326,7 +326,7 @@
+ 		g_string_free(text, TRUE);
+ 
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_timer.c
++++ b/src/widget_timer.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_timer.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -354,7 +354,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widget_tree.c
++++ b/src/widget_tree.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_tree.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -1170,7 +1170,7 @@
+ 		}
+ 
+ 		if (command_or_file) {
+-			pclose(infile);
++			widget_pclose(infile);
+ 		} else {
+ 			fclose(infile);
+ 		}
+--- a/src/widget_window.c
++++ b/src/widget_window.c
+@@ -1,7 +1,7 @@
+ /*
+  * widget_window.c: 
+  * Gtkdialog - A small utility for fast and easy GUI building.
+- * Copyright (C) 2003-2007  László Pere <pipas@linux.pte.hu>
++ * Copyright (C) 2003-2007  Lï¿½szlï¿½ Pere <pipas@linux.pte.hu>
+  * Copyright (C) 2011-2012  Thunor <thunorsif@hotmail.com>
+  * 
+  * This program is free software; you can redistribute it and/or modify
+@@ -205,16 +205,33 @@
+ 		border_width = atoi(value);
+ 	gtk_container_set_border_width(GTK_CONTAINER(widget), border_width);
+ 
+-	/* If we have geometry given in the command line, we set that */
++	/* vrecord Windows port: honor default_width/default_height (and the
++	 * GTK-standard width-request/height-request aliases) from the <window> tag */
++	if (attr) {
++		gchar *w = get_tag_attribute(attr, "default_width");
++		gchar *h = get_tag_attribute(attr, "default_height");
++		if (!w || !*w) w = get_tag_attribute(attr, "width-request");
++		if (!h || !*h) h = get_tag_attribute(attr, "height-request");
++		if ((w && *w) || (h && *h))
++			gtk_window_set_default_size(GTK_WINDOW(widget),
++				(w && *w) ? atoi(w) : -1, (h && *h) ? atoi(h) : -1);
++	}
++
++	/* If we have geometry given in the command line, we set that.
++	 * vrecord Windows port: set_default_size (not set_size_request) so the
++	 * initial size wins over the content's natural size - the content then
++	 * scrolls. set_size_request only sets a minimum and the window opened
++	 * larger than the screen (1446x1381). */
+ 	if (have_geometry_dxdy)
+-		/* gtk_widget_set_usize(widget, geometry_dx, geometry_dy);	Redundant */
+-		gtk_widget_set_size_request(widget, geometry_dx, geometry_dy);
++		gtk_window_set_default_size(GTK_WINDOW(widget), geometry_dx, geometry_dy);
+ 	if (have_geometry_xy)
+-		/* gtk_widget_set_uposition(widget, geometry_x, geometry_y);	Redundant */
+ 		gtk_window_move(GTK_WINDOW(widget), geometry_x, geometry_y);
+ 	if (option_centering)
++		/* CENTER_ALWAYS fights user resizing on Win32; when an explicit
++		 * size is given, center once and let the user move/resize freely. */
+ 		gtk_window_set_position(GTK_WINDOW(widget),
+-			GTK_WIN_POS_CENTER_ALWAYS);
++			have_geometry_dxdy ? GTK_WIN_POS_CENTER
++			: GTK_WIN_POS_CENTER_ALWAYS);
+ 
+ 	/* Pop the widgets that the window will contain and add them */
+ 	s = pop();
+@@ -485,7 +502,7 @@
+ 
+ 		}
+ 		/* Close the file */
+-		pclose(infile);
++		widget_pclose(infile);
+ 	} else {
+ 		fprintf(stderr, "%s(): Couldn't open '%s' for reading.\n", __func__,
+ 			command);
+--- a/src/widgets.c
++++ b/src/widgets.c
+@@ -70,6 +70,29 @@
+ #include "signals.h"
+ #include "tag_attributes.h"
+ #include "macros.h"
++#include <io.h>
++#include <fcntl.h>
++#include <windows.h>
++
++/* --- vrecord instrumentation (env-gated, no-op unless GTKDIALOG_ACTION_LOG set) --- */
++static void vd_action_log(const char *tag, const char *cmd, long dur_us)
++{
++	const char *path = g_getenv("GTKDIALOG_ACTION_LOG");
++	FILE *f;
++	gint64 now;
++
++	if (path == NULL || *path == '\0')
++		return;
++	f = fopen(path, "a");
++	if (f == NULL)
++		return;
++	now = g_get_real_time();
++	fprintf(f, "%ld.%06ld %s %7ldus %s\n",
++		(long)(now / G_USEC_PER_SEC), (long)(now % G_USEC_PER_SEC),
++		tag, dur_us, cmd ? cmd : "(null)");
++	fclose(f);
++}
++
+ 
+ /* Defines */
+ //#define DEBUG_CONTENT
+@@ -249,30 +272,136 @@
+  *                                                                     *
+  ***********************************************************************/
+ 
++/* --- vrecord Windows port -------------------------------------------------
++ * cmd.exe is broken/unavailable on some stations; _popen routes through
++ * "cmd /c" and the whole read pipe comes back empty (empty device lists).
++ * Spawn bash directly with CreateProcess instead and hand the caller a FILE*
++ * over an anonymous pipe. widget_pclose() pairs with it (fclose + reap).
++ * ------------------------------------------------------------------------- */
++static GHashTable *vd_pipe_procs = NULL;
++
++static gchar *vd_resolve_bash(void)
++{
++	gchar *hit = (gchar *)g_malloc0(MAX_PATH);
++	if (SearchPathA(NULL, "bash.exe", NULL, MAX_PATH, hit, NULL))
++		return hit;
++	g_free(hit);
++	return g_strdup("C:\\msys64\\usr\\bin\\bash.exe");
++}
++
+ FILE *widget_opencommand(const char *command)
+ {
+-	char *the_line;
+-	FILE *infile;
++	gchar *inner = NULL;
++	gchar *inner_esc = NULL;
++	gchar *cmdline = NULL;
++	gchar *bashpath = NULL;
++	gchar *inner_log = NULL;
++	SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
++	HANDLE out_r = NULL, out_w = NULL;
++	STARTUPINFOA si;
++	PROCESS_INFORMATION pi;
++	int fd = -1;
++	FILE *infile = NULL;
+ 
+ 	PIP_DEBUG("Opening command: '%s'", command);
+ 
+-	if (option_include_file != NULL) {
+-		/* Debian 01_bashism patch: use dot rather than source.
+-		the_line = g_strdup_printf("source %s; %s", */
+-		the_line = g_strdup_printf(". %s; %s",
+-				option_include_file, command);
+-		infile = popen(the_line, "r");
+-		g_free(the_line);
+-	} else {
+-		infile = popen(command, "r");
+-	}
+-	
+-	if (infile == NULL) 
+-		g_warning("%s(): %m", __func__);
+-	
++	if (option_include_file != NULL)
++		inner = g_strdup_printf(". \"%s\"; %s", option_include_file, command);
++	else
++		inner = g_strdup(command);
++
++	/* Windows command-line escaping for the -c payload (worst case every
++	 * char is a quote -> allocate 2x + NUL) */
++	inner_esc = g_malloc0(strlen(inner) * 2 + 2);
++	{
++		gchar *src = inner, *dst = inner_esc;
++		while (*src) {
++			if (*src == '"')
++				*dst++ = '\\';
++			*dst++ = *src++;
++		}
++		*dst = '\0';
++	}
++	bashpath = vd_resolve_bash();
++	cmdline = g_strdup_printf("\"%s\" -c \"%s\"", bashpath, inner_esc);
++
++	inner_log = g_strdup(inner);
++	if (!CreatePipe(&out_r, &out_w, &sa, 0)) {
++		g_warning("%s(): CreatePipe failed", __func__);
++		goto out;
++	}
++	SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
++
++	ZeroMemory(&si, sizeof(si));
++	si.cb = sizeof(si);
++	si.dwFlags = STARTF_USESTDHANDLES;
++	si.hStdInput  = NULL;
++	si.hStdOutput = out_w;
++	si.hStdError  = out_w;
++
++	ZeroMemory(&pi, sizeof(pi));
++	vd_action_log("POPN", inner_log, 0);
++	if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, CREATE_NO_WINDOW,
++			NULL, NULL, &si, &pi)) {
++		g_warning("%s(): CreateProcess failed for bash", __func__);
++		CloseHandle(out_r);
++		goto out;
++	}
++	vd_action_log("PEND", inner_log, 0);
++	CloseHandle(out_w);         /* child holds the write end now */
++	CloseHandle(pi.hThread);
++
++	fd = _open_osfhandle((intptr_t) out_r, _O_RDONLY);
++	if (fd < 0) {
++		g_warning("%s(): _open_osfhandle failed", __func__);
++		CloseHandle(out_r);
++		CloseHandle(pi.hProcess);
++		goto out;
++	}
++	infile = _fdopen(fd, "r");
++	if (infile == NULL) {
++		g_warning("%s(): _fdopen failed", __func__);
++		_close(fd);
++		CloseHandle(pi.hProcess);
++		goto out;
++	}
++	if (vd_pipe_procs == NULL)
++		vd_pipe_procs = g_hash_table_new(g_direct_hash, g_direct_equal);
++	g_hash_table_insert(vd_pipe_procs, infile, pi.hProcess);
++
++out:
++	g_free(inner);
++	g_free(inner_esc);
++	g_free(cmdline);
++	g_free(bashpath);
++	g_free(inner_log);
+ 	return infile;
+ }
+ 
++/* pclose() replacement for widget_opencommand streams: close + reap + status */
++gint widget_pclose(FILE *f)
++{
++	HANDLE proc;
++	gint ret = -1;
++
++	if (f == NULL)
++		return -1;
++	proc = (vd_pipe_procs != NULL)
++		? (HANDLE) g_hash_table_lookup(vd_pipe_procs, f)
++		: NULL;
++	fclose(f);
++	if (proc != NULL) {
++		DWORD code = 0;
++		WaitForSingleObject(proc, INFINITE);
++		GetExitCodeProcess(proc, &code);
++		CloseHandle(proc);
++		g_hash_table_remove(vd_pipe_procs, f);
++		ret = (gint) code;
++	}
++	return ret;
++}
++/* --- end vrecord Windows port -------------------------------------------- */
++
+ /***********************************************************************
+  *                                                                     *
+  ***********************************************************************/
+--- a/src/widgets.h
++++ b/src/widgets.h
+@@ -39,6 +39,7 @@
+ #include "automaton.h"
+ 
+ char *widget_get_text_value(GtkWidget *widget, int type);
++gint widget_pclose(FILE *f);
+ FILE *widget_opencommand(const char *command);
+ char *widgets_to_str(int itype);
+ gboolean widget_connect_signals(GtkWidget *widget, AttributeSet *Attr);

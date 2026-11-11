@@ -1,95 +1,89 @@
 name: Build Windows
 
-# NOTE: vrecord does not currently run on Windows. The vrecord main script
-# is a bash/gtkdialog application and depends on X11 (decklink via ffmpeg-ma,
-# gtkdialog GUI, mpv playback). This workflow lays out the packaging
-# infrastructure for a future Windows port (e.g., via WSL, MSYS2, or a
-# rewrite). It builds a placeholder portable zip and an NSIS installer
-# skeleton that will fail gracefully until real Windows binaries exist.
+# Windows portable package: the Qt6 frontend + the vrecord bash backend with
+# every tool it drives (ffmpeg-ma with DeckLink + drawtext, gtkdialog for the
+# legacy UI, xmlstarlet, deckcontrol, MediaInfo / MediaConch / DVRescue CLIs,
+# dvpackager, MKVToolNix, mpv), built in MSYS2 UCRT64 from pinned sources
+# (Release/ci/windows-build-deps.sh), then tested without capture hardware
+# (Release/ci/windows-package-tests.sh). Called by build-and-test.yml and
+# release.yml; can also be run on its own.
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      checkout_ref:
+        description: "Branch, tag or SHA to build (default: the selected ref)"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      checkout_ref:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
+    name: Build Windows portable (x86_64)
     runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      VRECORD_BUILD: /d/vrecord-build
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
 
-      - name: Check for Windows build prerequisites
-        id: check
-        shell: bash
-        run: |
-          # vrecord has no Windows port yet - check and report
-          echo "::warning::vrecord has no Windows build. This job lays out the CI scaffolding only."
-          echo "::group::Windows port notes"
-          cat Release/windows-port-notes.md 2>/dev/null || echo "No port notes found"
-          echo "::endgroup::"
+      - name: Set up MSYS2 (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make autoconf automake libtool bison flex texinfo patch
+            diffutils zip unzip p7zip perl
+          pacboy: >-
+            toolchain:p cmake:p ninja:p pkgconf:p nasm:p
+            qt6-base:p qt6-svg:p qt6-tools:p
+            SDL2:p x264:p openh264:p freetype:p harfbuzz:p fontconfig:p fribidi:p
+            gtk3:p libxml2:p libxslt:p mpv:p
 
-      - name: Build portable zip (placeholder)
-        shell: bash
+      # cached build inputs (ffmpeg-ma, gtkdialog, ...): keyed on the recipe
+      # AND the week, so binaries never drift far from the MSYS2 DLLs the
+      # package collects alongside them
+      - name: Cache key
+        id: key
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache build inputs
+        uses: actions/cache@v4
+        with:
+          path: D:\vrecord-build
+          key: windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}
+
+      - name: Build dependencies (pinned sources + vendored patches)
+        run: bash Release/ci/windows-build-deps.sh
+
+      - name: Build the portable package (Qt6 frontend + backend + tools)
+        run: bash Release/build-windows-portable.sh
+
+      - name: Test the package (no capture hardware)
         run: |
+          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          bash Release/ci/windows-package-tests.sh "Release/artifacts/vrecord_windows_${VERSION}"
+
+      - name: Collect artifact
+        run: |
+          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           mkdir -p artifacts
-          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
-          # placeholder: package the scripts + resources + docs for now
-          # (a future port would package real Windows binaries here)
-          mkdir -p "vrecord-windows-${VERSION}/Resources"
-          cp vrecord vtest vplay "vrecord-windows-${VERSION}/" 2>/dev/null || true
-          cp -a Resources/* "vrecord-windows-${VERSION}/Resources/"
-          cp README.md "vrecord-windows-${VERSION}/" 2>/dev/null || true
-          cat > "vrecord-windows-${VERSION}/NOT-WINDOWS-NATIVE.txt" << 'EOF'
-          vrecord does not currently run natively on Windows.
-          This is a CI scaffolding package. To use vrecord on Windows,
-          see the windows-port-notes.md or use WSL2 + X server.
-          EOF
-          cd "vrecord-windows-${VERSION}" && zip -qry "../artifacts/vrecord_${VERSION}_windows_portable.zip" . && cd ..
-          rm -rf "vrecord-windows-${VERSION}"
-
-      - name: Build NSIS installer (placeholder)
-        shell: bash
-        run: |
-          # download NSIS
-          curl -L "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.09/nsis-3.09-setup.exe" -o nsis-setup.exe || true
-          # placeholder: generate a minimal NSIS script for the future port
-          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
-          cat > installer.nsi << EOF
-          !define VERSION "${VERSION}"
-          Name "vrecord"
-          OutFile "artifacts/vrecord_\${VERSION}_setup.exe"
-          InstallDir "\$PROGRAMFILES64\vrecord"
-          Page directory
-          Page instfiles
-          Section ""
-            ; placeholder - a future Windows port installs real binaries here
-            SetOutPath "\$INSTDIR"
-            File /r "vrecord-windows-\${VERSION}\*"
-            CreateDirectory "\$SMPROGRAMS\vrecord"
-            CreateShortCut "\$SMPROGRAMS\vrecord\vrecord.lnk" "\$INSTDIR\vrecord" ""
-          SectionEnd
-          EOF
-          # try to build with NSIS if available (choco install nsis)
-          choco install nsis -y 2>/dev/null || true
-          if command -v makensis >/dev/null 2>&1; then
-            makensis installer.nsi || echo "::warning::NSIS build skipped (no real Windows binaries yet)"
-          else
-            echo "::warning::NSIS not available - installer skipped"
-          fi
+          cp "Release/artifacts/vrecord_${VERSION}_windows_portable.zip" "artifacts/vrecord_${VERSION}_windows_x86_64_portable.zip"
+          ls -la artifacts
 
       - uses: actions/upload-artifact@v7
         with:
-          name: vrecord-windows
+          name: vrecord-windows-x86_64
           path: artifacts/
-          if-no-files-found: warn
-
-      - name: Release (tag builds only)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: artifacts/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error

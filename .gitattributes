@@ -4,3 +4,9 @@ vrecord                                  text eol=lf
 Release/vendor/dvpackager/dvpackager     text eol=lf
 Release/vendor/dvpackager/dvpackager.orig text eol=lf
 Release/build-ffmpeg-windows.sh          text eol=lf
+Release/ci/*.sh                          text eol=lf
+*.sh                                     text eol=lf
+# vendored sources / patches / pinned lists must stay byte-exact on every
+# checkout (CRLF breaks patch application, sha256 lists and URLs)
+Release/vendor/**                        -text
+Release/patches/**                       -text

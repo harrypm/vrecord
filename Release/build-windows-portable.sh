@@ -48,6 +48,15 @@ if [[ -f "$ROOT/qt6/CMakeLists.txt" ]] && command -v cmake >/dev/null 2>&1 ; the
     elif command -v windeployqt.exe >/dev/null 2>&1 ; then
       windeployqt.exe --no-compiler-runtime --dir "$PKG" "$PKG/VrecordQt6.exe" >/dev/null 2>&1 || true
     fi
+    # headless platform plugin: lets `QT_QPA_PLATFORM=offscreen VrecordQt6.exe
+    # --self-test` run without a desktop (CI); windeployqt only adds qwindows
+    for QT_PLUGIN_ROOT in /ucrt64/share/qt6/plugins /ucrt64/lib/qt6/plugins ; do
+      if [[ -f "$QT_PLUGIN_ROOT/platforms/qoffscreen.dll" ]]; then
+        mkdir -p "$PKG/platforms"
+        cp -f "$QT_PLUGIN_ROOT/platforms/qoffscreen.dll" "$PKG/platforms/"
+        break
+      fi
+    done
   fi
 fi
 

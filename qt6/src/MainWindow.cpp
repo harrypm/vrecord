@@ -2062,7 +2062,27 @@ void MainWindow::applyVideoOutputConnection() {
 
 QStringList MainWindow::runSelfTest() {
     QStringList results;
+    // CI runners have no DeckLink card or driver: with
+    // VRECORD_SELFTEST_ALLOW_NO_HARDWARE=1 and no device found, the checks
+    // that need a card report SKIP instead of FAIL (without the variable a
+    // missing card still fails, as it should on a capture machine)
+    bool noHardware = false;
+    static const QStringList hardwareChecks{
+        QStringLiteral("Refresh Devices populates the card list"),
+        QStringLiteral("Play File to Output streams the file to the decklink output"),
+        QStringLiteral("Player step control seeks the playout"),
+        QStringLiteral("Output connector list matches the device hardware"),
+        QStringLiteral("Pause toggle holds the playout"),
+        QStringLiteral("Resume returns the playout to playing"),
+        QStringLiteral("Stop Output stops tracked outputs"),
+        QStringLiteral("Test signal checkbox starts the generator on the selected device"),
+        QStringLiteral("Test signal checkbox stop kills the tracked process"),
+        QStringLiteral("Video Output connector applies through the SDK")};
     const auto check = [&](const QString& name, bool ok, const QString& detail = QString()) {
+        if (!ok && noHardware && hardwareChecks.contains(name)) {
+            results << QStringLiteral("SKIP: %1 (no DeckLink device - CI mode)").arg(name);
+            return;
+        }
         results << QStringLiteral("%1: %2%3").arg(ok ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
                                                  name,
                                                  detail.isEmpty() ? QString() : QStringLiteral(" - %1").arg(detail));
@@ -2079,6 +2099,7 @@ QStringList MainWindow::runSelfTest() {
     BackendController::clearCaptured();
 
     refreshDeckLinkDevices();
+    noHardware = m_deckLinkCombo->count() == 0 && qEnvironmentVariableIntValue("VRECORD_SELFTEST_ALLOW_NO_HARDWARE") == 1;
     check(QStringLiteral("Refresh Devices populates the card list"),
           m_deckLinkCombo->count() > 0,
           QStringLiteral("%1 devices").arg(m_deckLinkCombo->count()));

@@ -37,6 +37,10 @@ cd "$B/ffmpeg-9.0.1" || { echo "missing $B/ffmpeg-9.0.1" ; exit 1 ; }
     --enable-libfribidi || exit 1
 make -j"$(nproc)" || exit 1
 make install || exit 1
+# the package (and vrecord) run the -ma names
+for prog in ffmpeg ffplay ffprobe ; do
+    cp -f "$B/ffmpeg-install/bin/${prog}.exe" "$B/ffmpeg-install/bin/${prog}-ma.exe"
+done
 # read the whole list (an early-exiting grep -q can leave ffplay blocked)
 FILTERS="$("$B/ffmpeg-install/bin/ffplay.exe" -hide_banner -filters 2>/dev/null)"
 if [[ "${FILTERS}" == *" drawtext "* ]] ; then
