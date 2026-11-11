@@ -2092,6 +2092,8 @@ QStringList MainWindow::runSelfTest() {
     bool noHardware = false;
     static const QStringList hardwareChecks{
         QStringLiteral("Refresh Devices populates the card list"),
+        // Record refuses without a card ("Select a DeckLink device first.")
+        QStringLiteral("Record action runs the backend with -r"),
         QStringLiteral("Play File to Output streams the file to the decklink output"),
         QStringLiteral("Player step control seeks the playout"),
         QStringLiteral("Output connector list matches the device hardware"),
