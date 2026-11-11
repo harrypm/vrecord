@@ -806,6 +806,13 @@ _setup_vrecord_input(){
 
 _setup_vrecord_process(){
     _setup_vrecord_input
+    # ffmpeg builds without freetype (the bundled Windows ffplay-ma) have no
+    # drawtext: one in a view's graph makes ffplay refuse the whole view
+    # ("Filter not found"). Swap each for the pass-through null filter, so
+    # the scopes still show, just without their text labels.
+    if [[ -n "${PLAYBACKFILTER}" && "${PLAYBACKFILTER}" == *drawtext=* ]] &&         ! "${FFPLAY_BIN}" -hide_banner -filters 2>/dev/null | grep -q " drawtext " ; then
+        PLAYBACKFILTER="$(printf '%s' "${PLAYBACKFILTER}" | sed 's/drawtext=[^],;[]*/null/g')"
+    fi
     if [[ "${DEVICE_INPUT_CHOICE}" = 0 ]] ; then
         WINDOW_NAME="mode:${RUNTYPE} - video:'${VIDEO_INPUT}' audio:'${AUDIO_INPUT}' - to end recording press q, esc, or close video window"
         # DEVICE_INPUT_CHOICE=0 is decklink, other DEVICE_INPUT_CHOICE values don't yet use such filtering
@@ -1065,6 +1072,13 @@ _setup_vrecord_process(){
         FFPLAY_OPTIONS+=(-stats)
         FFPLAY_OPTIONS+=(-autoexit)
         FFPLAY_OPTIONS+=(-window_title "${WINDOW_NAME}")
+        if [[ "${OS_TYPE}" = "windows" ]] ; then
+            # open the monitor smaller than native: only the height is set, so
+            # ffplay derives the width from the view's own aspect and the
+            # window fits the picture exactly (-x and -y together force that
+            # box and letterbox the view). Resizable / fullscreen as usual.
+            FFPLAY_OPTIONS+=(-y "${VRECORD_FFPLAY_HEIGHT:-720}")
+        fi
         if [[ "${DEVICE_INPUT_CHOICE}" = 0 ]] && [[ "${PLAYBACKVIEW_CHOICE_PASS}" = "Audio + Video" ]] && [[ "${RUNTYPE}" = "passthrough" || "${RUNTYPE}" = 'audiopassthrough' ]] ; then
             FFPLAY_OPTIONS+=(-f lavfi "amovie='pipe\:0':${PLAYBACKFILTER}")
         elif [[ "${DEVICE_INPUT_CHOICE}" = 0 ]] && [[ "${PLAYBACKVIEW_CHOICE}" = "Audio + Video" ]] && [[ "${RUNTYPE}" = "record" ]] ; then
@@ -4346,7 +4360,7 @@ _split_duration_to_fields(){
         elif [[ "${DURATION}" =~ ^[0-9]+([.][0-9]+)?$|^[.][0-9]+$ ]] ; then
             # legacy plain-minutes value: convert to whole seconds and split
             local SECS
-            SECS="$(bc <<< "scale=0; (${DURATION} * 60)/1" | sed 's/^\./0./')"
+            SECS="$(awk -v m="${DURATION}" 'BEGIN { printf "%d", m * 60 }')"
             DURATION_HOURS="$(printf '%02d' $(( SECS / 3600 )))"
             DURATION_MINUTES="$(printf '%02d' $(( (SECS % 3600) / 60 )))"
             DURATION_SECONDS="$(printf '%02d' $(( SECS % 60 )))"
@@ -4556,13 +4570,13 @@ if [[ -n "${DURATION}" ]] ; then
         DURATION_TEXT="Tape duration set to: ${DURATION} (HH:MM:SS)."
     elif [[ "${DURATION}" =~ ^[0-9]+([.][0-9]+)?$|^[.][0-9]+$ ]] ; then
         # legacy recording time entered as minutes (integer or decimal)
-        DUR_SECONDS=$(bc <<< "${DURATION} * 60" | sed "s/^\./0./")
+        DUR_SECONDS=$(awk -v m="${DURATION}" 'BEGIN { printf "%.3f", m * 60 }')
         DURATION_TEXT="Tape duration set to: ${DURATION} minutes (legacy minutes value; HH:MM:SS is the preferred format)."
     else
         _report -w "Error: Unrecognized recording time format ('${DURATION}'). Use HH:MM:SS (e.g. 00:33:00) or a number of minutes. Please restart ${SCRIPTNAME} in edit mode (${SCRIPTNAME} -e) or update the configuration file at ${CONFIG_FILE}."
         exit 2
     fi
-    if (( $(bc <<< "${DUR_SECONDS} <= 0") )) ; then
+    if awk -v s="${DUR_SECONDS}" 'BEGIN { exit !(s <= 0) }' ; then
         _report -w "Error: Illegal value for recording time. The duration must be a positive amount of time. Please restart ${SCRIPTNAME} in edit mode (${SCRIPTNAME} -e) or update the configuration file at ${CONFIG_FILE}."
         exit 2
     fi

@@ -116,10 +116,10 @@ QString packageRootForTest() {
 // Record with the ffplay window off: the shell session's monitor must reach
 // the GUI (frames + levels) and the recording must complete. outDir: where
 // the test recording goes.
-int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopEarly) {
+int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopEarly, bool ffplay, bool passthrough) {
     VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
     config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-monitortest.conf"));
-    config.setValue(QStringLiteral("FFPLAY_MONITOR_CHOICE"), QStringLiteral("false"));
+    config.setValue(QStringLiteral("FFPLAY_MONITOR_CHOICE"), ffplay ? QStringLiteral("true") : QStringLiteral("false"));
     config.setValue(QStringLiteral("DIR"), outDir.isEmpty() ? QDir::tempPath() : QDir::fromNativeSeparators(outDir));
     config.setValue(QStringLiteral("ID"), QStringLiteral("qt6monitortest"));
     config.setValue(QStringLiteral("DURATION_HOURS"), QStringLiteral("0"));
@@ -150,8 +150,8 @@ int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopE
         message = m;
     });
     QString error;
-    const bool started = backend.startRecord(config, &error);
-    std::cout << "record started: " << started << " " << error.toStdString()
+    const bool started = passthrough ? backend.startPassthrough(config, &error) : backend.startRecord(config, &error);
+    std::cout << (passthrough ? "passthrough started: " : "record started: ") << started << " " << error.toStdString()
               << "  in-pane monitor: " << backend.isSessionMonitorActive() << std::endl;
     QElapsedTimer t;
     t.start();
@@ -165,11 +165,18 @@ int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopE
             backend.stopShell();
         }
     }
-    std::cout << "finished=" << finished << " exit=" << exitCode << " monitor frames=" << frames << " level blocks=" << levelBlocks
+    std::cout << "elapsed=" << t.elapsed() << "ms finished=" << finished << " exit=" << exitCode << " monitor frames=" << frames << " level blocks=" << levelBlocks
               << " channels=" << channels << std::endl;
     std::cout << "backend says: " << message.toStdString() << std::endl;
     QFile::remove(config.configPath);
-    const bool ok = started && finished && exitCode == 0 && frames > 50 && levelBlocks > 20;
+    // ffplay window mode: the monitor is ffplay's, so check the recorded file instead
+    const QString recorded = QDir(config.value(QStringLiteral("DIR"))).filePath(QStringLiteral("qt6monitortest.mkv"));
+    const qint64 recordedBytes = QFileInfo(recorded).size();
+    std::cout << "recorded file: " << recordedBytes << " bytes" << std::endl;
+    // passthrough records nothing: it must run until stopped (no early exit)
+    const bool ok = started && finished && exitCode == 0
+                    && (passthrough ? (!stopEarly || t.elapsed() > 8500) && (ffplay || (frames > 50 && levelBlocks > 20))
+                                    : ffplay ? recordedBytes > 1000000 : (frames > 50 && levelBlocks > 20));
     std::cout << "MONITOR TEST: " << (ok ? "PASS" : "FAIL") << std::endl;
     return ok ? 0 : 1;
 }
@@ -609,7 +616,8 @@ int main(int argc, char** argv) {
         return runProbe();
     }
     if (command == QStringLiteral("monitortest")) {
-        return runMonitorTest(packageRootForTest(), arguments.value(2), arguments.value(3) == QStringLiteral("stop"));
+        return runMonitorTest(packageRootForTest(), arguments.value(2), arguments.contains(QStringLiteral("stop")), arguments.contains(QStringLiteral("ffplay")),
+                              arguments.contains(QStringLiteral("pass")));
     }
     if (command == QStringLiteral("signaltest")) {
         return runManagedSignalTest(packageRootForTest());
