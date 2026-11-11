@@ -94,8 +94,10 @@ if [[ ! -x "$B/gtkdialog-install/bin/gtkdialog.exe" ]] ; then
     patch -p1 -N -s -i "$ROOT/Release/vendor/gtkdialog/0001-vrecord-windows.patch"
     ./autogen.sh > /dev/null
     ./configure --prefix="$B/gtkdialog-install" --enable-gtk3 > /dev/null
-    make -j"$JOBS" > /dev/null
-    make install > /dev/null
+    # the program only: the texinfo manual needs a version.texi the release
+    # tarball lacks (the package ships no gtkdialog docs anyway)
+    make -C src -j"$JOBS" > /dev/null
+    make -C src install > /dev/null
     cd "$ROOT"
 fi
 

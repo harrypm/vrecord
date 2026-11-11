@@ -58,14 +58,28 @@ jobs:
         id: key
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache build inputs
-        uses: actions/cache@v4
+      # restore + save as separate steps: the save also runs when a later
+      # dependency fails, so finished ones (ffmpeg-ma takes the longest) are
+      # kept for the next run; each step in the deps script skips what exists
+      - name: Restore build inputs
+        id: deps-cache
+        uses: actions/cache/restore@v4
         with:
           path: D:\vrecord-build
           key: windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}
+          restore-keys: |
+            windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}-
 
       - name: Build dependencies (pinned sources + vendored patches)
+        id: deps
         run: bash Release/ci/windows-build-deps.sh
+
+      - name: Save build inputs
+        if: always() && steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\vrecord-build
+          key: windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Build the portable package (Qt6 frontend + backend + tools)
         run: bash Release/build-windows-portable.sh
