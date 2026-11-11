@@ -4,6 +4,17 @@
 # Open-source software for capturing a video signal and turning it into a digital file.
 
 VERSION="2026-03-03"
+# filter-argument escape for ':' (Windows drive letters in file= / fontfile=).
+# Kept in a variable: written inline in the substitution, bash 5.2
+# (patsub_replacement) drops the backslash and the path stays unescaped.
+COLON_ESC='\:'
+# For a path used UNQUOTED inside a filter (fontfile=..., textfile=...): wrap
+# it in single quotes with escaped colons. A bare C\: does not survive the
+# graph level (it reaches the option parser as C: and splits there);
+# 'C\:/...' does (tested against ffmpeg 9.0.1).
+_filter_path(){
+    FILTER_PATH="'${1//:/${COLON_ESC}}'"
+}
 SCRIPTNAME="$(basename "${0}")"
 SCRIPTDIR="$(dirname "${0}")"
 # Windows/MSYS2: disable automatic argument path conversion - filter_complex
@@ -346,8 +357,22 @@ _setup_env_variables(){
         else
             _report -wt "vrecord can't find a preferred font to use, please report this error to https://github.com/amiaopensource/vrecord/issues"
         fi
-        CORE_COUNT="$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-1}")"
-        COMPUTER_MODEL_NAME="$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).Model" 2>/dev/null | tr -d '\r' || echo "Windows PC")"
+        # native drive-letter form + filter escaping NOW: the views (timecode
+        # overlay, labels) are built during option review, before the later
+        # DIR/LOGDIR conversion runs (passthrough exits before it at all)
+        if [[ "${DEFAULTFONT}" =~ ^/([a-zA-Z])/(.*)$ ]] ; then
+            DEFAULTFONT="${BASH_REMATCH[1]^^}:/${BASH_REMATCH[2]}"
+        fi
+        _filter_path "${DEFAULTFONT}"
+        DEFAULTFONT_ESC="${FILTER_PATH}"
+        # no external programs here: each costs ~0.15 s under MSYS2 and a
+        # PowerShell query over a second on every start
+        CORE_COUNT="${NUMBER_OF_PROCESSORS:-$(nproc 2>/dev/null || echo 1)}"
+        COMPUTER_MODEL_NAME=""
+        if [[ -r /proc/registry/HKEY_LOCAL_MACHINE/HARDWARE/DESCRIPTION/System/BIOS/SystemProductName ]] ; then
+            IFS= read -r -d '' COMPUTER_MODEL_NAME < /proc/registry/HKEY_LOCAL_MACHINE/HARDWARE/DESCRIPTION/System/BIOS/SystemProductName
+        fi
+        COMPUTER_MODEL_NAME="${COMPUTER_MODEL_NAME:-Windows PC}"
         OPEN_COMMAND="cmd //c start"
         ZCAT_COMMAND="zcat"
         if ! command -v zcat >/dev/null 2>&1 ; then
@@ -825,6 +850,20 @@ _setup_vrecord_input(){
     fi
 }
 
+# sets NO_DRAWTEXT=Y once if the player lacks drawtext. Reads the whole
+# filter list into a variable: piping it to an early-exiting `grep -q` can
+# leave ffplay blocked for ever on the closed pipe (seen on Windows).
+_check_drawtext(){
+    if [[ -z "${DRAWTEXT_CHECKED}" ]] ; then
+        DRAWTEXT_CHECKED="Y"
+        local FILTER_LIST
+        FILTER_LIST="$("${FFPLAY_BIN}" -hide_banner -filters 2>/dev/null)"
+        if [[ "${FILTER_LIST}" != *" drawtext "* ]] ; then
+            NO_DRAWTEXT="Y"
+        fi
+    fi
+}
+
 # drawtext -> null when the player has no drawtext (NO_DRAWTEXT=Y); pure bash
 # (no sed / subshell) so building the view list costs nothing at start-up
 _strip_drawtext(){
@@ -865,8 +904,8 @@ _add_view_cycle(){
         [[ "${VIEW}" = "${CURRENT_VIEW}" ]] && continue
         PLAYBACKFILTER=""
         _lookup_choice "${VIEW}"
-        if [[ "${PLAYBACKFILTER}" == *drawtext=* && -z "${NO_DRAWTEXT}" ]] && ! "${FFPLAY_BIN}" -hide_banner -filters 2>/dev/null | grep -q " drawtext " ; then
-            NO_DRAWTEXT="Y"
+        if [[ "${PLAYBACKFILTER}" == *drawtext=* ]] ; then
+            _check_drawtext
         fi
         _strip_drawtext "${PLAYBACKFILTER}"
         _fit_view "${STRIPPED_FILTER}"
@@ -881,8 +920,8 @@ _setup_vrecord_process(){
     # drawtext: one in a view's graph makes ffplay refuse the whole view
     # ("Filter not found"). Swap each for the pass-through null filter, so
     # the scopes still show, just without their text labels.
-    if [[ "${PLAYBACKFILTER}" == *drawtext=* ]] && ! "${FFPLAY_BIN}" -hide_banner -filters 2>/dev/null | grep -q " drawtext " ; then
-        NO_DRAWTEXT="Y"
+    if [[ "${PLAYBACKFILTER}" == *drawtext=* ]] ; then
+        _check_drawtext
     fi
     _strip_drawtext "${PLAYBACKFILTER}"
     PLAYBACKFILTER="${STRIPPED_FILTER}"
@@ -909,7 +948,7 @@ _setup_vrecord_process(){
         if [[ "${STANDARD}" == "ntsc" ]] ; then
             CAPTION_TMP="$(_maketemp .eia608.txt)"
             # Windows drive-letter colons must be escaped inside filter args
-            CAPTION_TMP_ESC="${CAPTION_TMP//:/\\:}"
+            CAPTION_TMP_ESC="${CAPTION_TMP//:/${COLON_ESC}}"
             CAPTION_WRITE=",readeia608=lp=1:spw=0.27,metadata=mode=print:key=lavfi.readeia608.0.cc:file='${CAPTION_TMP_ESC}'"
         fi
 
@@ -924,7 +963,7 @@ _setup_vrecord_process(){
             MIDDLEOPTIONS_PRES+=(-map_metadata 0:s:v:0)
             if [[ "${CONTAINER_CHOICE}" != "Matroska" ]] ; then
                 TC_TMP=$(_maketemp .timecode.txt)
-                TC_TMP_ESC="${TC_TMP//:/\\:}"
+                TC_TMP_ESC="${TC_TMP//:/${COLON_ESC}}"
                 TC_WRITE=",metadata=mode=print:file='${TC_TMP_ESC}'"
             fi
             RECORD_COMMAND+=(-timecode_format all)
@@ -977,14 +1016,14 @@ _setup_vrecord_process(){
                 (( VIDEO_STREAM_IDX++ ))
                 EXTRAOPTIONS+=(-c:v:"${QC_THUMB_V_IDX}" mjpeg -pix_fmt:v:"${QC_THUMB_V_IDX}" yuvj420p -qmin:v:"${QC_THUMB_V_IDX}" 8 -qmax:v:"${QC_THUMB_V_IDX}" 12 -metadata:s:v:"${QC_THUMB_V_IDX}" title="Frame Thumbnails")
                 QC_VIDEO_DUMP="$(_maketemp .qc_video.txt)"
-                QC_VIDEO_DUMP_ESC="${QC_VIDEO_DUMP//:/\\:}"
+                QC_VIDEO_DUMP_ESC="${QC_VIDEO_DUMP//:/${COLON_ESC}}"
                 RECORD_COMMAND_QC_FILTER=";[${QC_SRC_V_PADNAME}]split=2[${QC_THUMB_PADNAME}_pre][QC_STATS_V]"
                 RECORD_COMMAND_QC_FILTER+=";[${QC_THUMB_PADNAME}_pre]scale=72:72[${QC_THUMB_PADNAME}]"
                 RECORD_COMMAND_QC_FILTER+=";[QC_STATS_V]signalstats=stat=tout+vrep+brng,metadata=mode=print:file='${QC_VIDEO_DUMP_ESC}',nullsink"
                 QC_AUDIO_DUMPS=()
                 for IDX in "${AUDIO_CHANNEL_IDX[@]}" ; do
                     QC_AUDIO_DUMP="$(_maketemp ".qc_audio${IDX}.txt")"
-                    QC_AUDIO_DUMP_ESC="${QC_AUDIO_DUMP//:/\\:}"
+                    QC_AUDIO_DUMP_ESC="${QC_AUDIO_DUMP//:/${COLON_ESC}}"
                     QC_AUDIO_DUMPS+=("${QC_AUDIO_DUMP}")
                     RECORD_COMMAND_QC_FILTER+=";[QC_A${IDX}]aformat=sample_fmts=flt|fltp,astats=metadata=1:reset=1:length=0.4,ametadata=mode=print:file='${QC_AUDIO_DUMP_ESC}',anullsink"
                 done
@@ -3631,7 +3670,7 @@ ${PLAYBACK_FILTER_ADJUSTMENT}split=6[a][b][c][d][e][f];\
 [b]field=top,${WAVEFORM_FILTER}[b1];\
 [c]field=bottom,${WAVEFORM_FILTER}[c1];\
 [d]${VECTORSCOPE_FILTER}[d1];\
-[e]signalstats=out=brng:stat=brng+vrep+tout,scale=512:ih,split[e1][e2];\
+[e]signalstats=out=brng:stat=brng+vrep+tout,scale=w=${NUMERICAL_PANEL_W}:h=ih,split[e1][e2];\
 [e2]format=yuv422p,geq=lum=60:cb=128:cr=128,\
 scale=180:ih+512,setsar=1/1,\
 drawtext=fontcolor=white:fontsize=22:\
@@ -3640,10 +3679,10 @@ drawtext=fontcolor=white:fontsize=17:\
 fontfile=${DEFAULTFONT_ESC}:textfile=${DRAWTEXT_TMP_2_ESC}:y=480,\
 drawtext=fontcolor=white:fontsize=52:\
 fontfile=${DEFAULTFONT_ESC}:textfile=${DRAWTEXT_TMP_3_ESC}:y=640[e3];\
-[f]scale=iw+512+180:82,format=yuv422p,geq=lum=60:cb=128:cr=128,drawtext=fontcolor=white:fontsize=22:\
+[f]scale=w=iw+${NUMERICAL_PANEL_W}+180:h=82,format=yuv422p,geq=lum=60:cb=128:cr=128,drawtext=fontcolor=white:fontsize=22:\
 fontfile=${DEFAULTFONT_ESC}:textfile=${VRECORD_INPUT_TMP_ESC}:\
 reload=1:y=82-th[f1];\
-[e3][a1][b1][c1][e1][d1][f1]xstack=inputs=7:layout=0_0|w0_0|w0_h1|w0_h1+h2|w0+w1_0|w0+w1_h1|0_h0" ;;
+[e3][a1][b1][c1][e1][d1][f1]xstack=inputs=7:layout=0_0|w0_0|w0_h1|w0_h1+h2|w0+w1_0|w0+w1_h1|0_h0:fill=black" ;;
       "Color Matrix")
           HUE=20
           SAT=0.3
@@ -3785,9 +3824,12 @@ _set_up_drawtext(){
     echo "BRNG
 %{metadata:lavfi.signalstats.BRNG}" > "${DRAWTEXT_TMP_3}"
     # escaped (colon-free) twins for use inside filter graphs on Windows
-    DRAWTEXT_TMP_1_ESC="${DRAWTEXT_TMP_1//:/\\:}"
-    DRAWTEXT_TMP_2_ESC="${DRAWTEXT_TMP_2//:/\\:}"
-    DRAWTEXT_TMP_3_ESC="${DRAWTEXT_TMP_3//:/\\:}"
+    _filter_path "${DRAWTEXT_TMP_1}"
+    DRAWTEXT_TMP_1_ESC="${FILTER_PATH}"
+    _filter_path "${DRAWTEXT_TMP_2}"
+    DRAWTEXT_TMP_2_ESC="${FILTER_PATH}"
+    _filter_path "${DRAWTEXT_TMP_3}"
+    DRAWTEXT_TMP_3_ESC="${FILTER_PATH}"
 }
 
 # select playback view
@@ -3812,6 +3854,7 @@ _set_scopes(){
     # no bars and nothing distorted (worked out inside the filter: no extra
     # process at start-up)
     RANGE_VIEW_SCALE="scale=512:ih"
+    NUMERICAL_PANEL_W="512"
     VIEW_ASPECT_EXPR=""
     if [[ "${OS_TYPE}" = "windows" || -n "${VRECORD_VIEW_ASPECT}" ]] ; then
         VIEW_ASPECT="${VRECORD_VIEW_ASPECT:-16:9}"
@@ -3822,6 +3865,7 @@ _set_scopes(){
             *) VIEW_ASPECT="16:9" ;;
         esac
         VIEW_ASPECT_EXPR="${VIEW_ASPECT%%:*}/${VIEW_ASPECT##*:}"
+        NUMERICAL_PANEL_W="max(512\\,trunc((${VIEW_ASPECT_EXPR}*(ih+512+82)-iw-180)/2)*2)"
         RANGE_VIEW_SCALE="scale=w=max(512\\,trunc((${VIEW_ASPECT%%:*}/${VIEW_ASPECT##*:}*(ih+512)-iw)/2)*2):h=ih"
     fi
     if [[ "${SIGNAL_VIEW_CHOICE}" == "Full Range" ]] ; then
@@ -4295,8 +4339,12 @@ elif [[ -n "${1}" ]] && [[ -z "${RUNTYPE}" ]] ; then
 fi
 
 VRECORD_INPUT_TMP="$(_maketemp .vrecord_input.log)"
+_filter_path "${VRECORD_INPUT_TMP}"
+VRECORD_INPUT_TMP_ESC="${FILTER_PATH}"
 FFREPORT_TMP="$(_maketemp .cffreport.txt)"
 CAP_DISPLAY_TMP="$(_maketemp .caption_scroll.txt)"
+_filter_path "${CAP_DISPLAY_TMP}"
+CAP_DISPLAY_TMP_ESC="${FILTER_PATH}"
 VRECORD_PREVIEW_TMP="$(_maketemp .vrecord_preview.jpg)"
 VRECORD_PREVIEW_PID_TMP="$(_maketemp .vrecord_preview.pid)"
 VRECORD_PREVIEW_STATUS_TMP="$(_maketemp .vrecord_preview.status.txt)"
@@ -4613,7 +4661,8 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     LOGDIR="$(_windows_native_path "${LOGDIR}")"
     if [[ -n "${DEFAULTFONT}" ]] ; then
         DEFAULTFONT="$(_windows_native_path "${DEFAULTFONT}")"
-        DEFAULTFONT_ESC="${DEFAULTFONT//:/\\:}"
+        _filter_path "${DEFAULTFONT}"
+        DEFAULTFONT_ESC="${FILTER_PATH}"
     fi
 fi
 
@@ -4731,8 +4780,11 @@ _writeingestlog "H264 encoder" "${H264_ENCODER}"
 _writeingestlog "datetime_start" "$(_get_iso8601)"
 
 if [[ -d "${DIR}" ]] ; then
-    MOUNT_PATH="$(df -Ph "${DIR}" 2>/dev/null | tail -n 1 | awk '{print $6}')"
+    # the mount point only feeds macOS's diskutil report. Under MSYS2, df
+    # walks every mount and a slow / sleeping / network drive stalled the
+    # start of a recording by 30 s+ - so only ask where it is used.
     if [[ "${OS_TYPE}" = "macOS" ]] ; then
+        MOUNT_PATH="$(df -Ph "${DIR}" 2>/dev/null | tail -n 1 | awk '{print $6}')"
         VOLUME_INFO="$(diskutil info "${MOUNT_PATH}")"
         PART_OF_WHOLE="/dev/$(_parse_report "Part of Whole" "${VOLUME_INFO}")"
         CAPTURE_DEVICE_INFO="$(diskutil info "${PART_OF_WHOLE}")"

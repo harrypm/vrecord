@@ -162,7 +162,8 @@ Run:
 
 Notes:
   - Output directories must be normal Windows paths (e.g. C:/Captures).
-  - ffmpeg-ma is a MinGW build with decklink indev/outdev enabled.
+  - ffmpeg-ma is a MinGW build with decklink indev/outdev and drawtext
+    (freetype/harfbuzz) enabled - see Release/build-ffmpeg-windows.sh.
   - gtkdialog GUI is GTK3-based; preview uses a Windows-safe image path.
   - Only the Desktop Video driver is a system install; everything else is bundled.
 EOF
