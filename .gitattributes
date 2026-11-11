@@ -1,0 +1,6 @@
+# bash scripts must keep LF on Windows checkouts (core.autocrlf=true would
+# write CRLF, which bash cannot run: "$'\r': command not found")
+vrecord                                  text eol=lf
+Release/vendor/dvpackager/dvpackager     text eol=lf
+Release/vendor/dvpackager/dvpackager.orig text eol=lf
+Release/build-ffmpeg-windows.sh          text eol=lf
