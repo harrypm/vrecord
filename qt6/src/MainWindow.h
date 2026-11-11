@@ -182,6 +182,7 @@ private:
     QGridLayout* m_componentsGrid = nullptr;
     QLabel* m_componentsSummary = nullptr;
     QPushButton* m_componentsRecheck = nullptr;
+    QGroupBox* m_dvPackagerBox = nullptr;
     bool m_componentsChecking = false;
     QPlainTextEdit* m_previewInfoText = nullptr;
     QPlainTextEdit* m_outputInfoText = nullptr;

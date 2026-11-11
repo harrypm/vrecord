@@ -2832,7 +2832,14 @@ _bench_plot() {
 _dvpackager(){
     _report -d "Please wait: running dvpackager on file."
     local TARGET="${1}"
-    dvpackager ${DV_RESCUE_OPTS[@]} -e "${DV_EXTENSION}" "${TARGET}"
+    # hand dvpackager the tools vrecord itself uses: it otherwise looks for a
+    # plain `ffmpeg` (the package ships ffmpeg-ma) or a DVRescue GUI install
+    local TOOL_OPTS=() TOOL
+    [[ -n "${FFMPEG_BIN}" ]] && TOOL_OPTS+=(-F "${FFMPEG_BIN}")
+    TOOL="$(command -v mediainfo 2>/dev/null)" && TOOL_OPTS+=(-M "${TOOL}")
+    TOOL="$(command -v dvrescue 2>/dev/null)" && TOOL_OPTS+=(-D "${TOOL}")
+    TOOL="$(command -v xmlstarlet 2>/dev/null)" && TOOL_OPTS+=(-X "${TOOL}")
+    dvpackager "${TOOL_OPTS[@]}" ${DV_RESCUE_OPTS[@]} -e "${DV_EXTENSION}" "${TARGET}"
 }
 
 _set_some_params(){

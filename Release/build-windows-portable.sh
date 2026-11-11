@@ -84,6 +84,9 @@ cp -f "$BUILD_DIR/mediainfo-cli/MediaInfo.exe" "$BUILD_DIR/mediainfo-cli/"*.dll 
 cp -f "$BUILD_DIR/deckcontrol-src/deckcontrol.exe" "$PKG/bin/" 2>/dev/null || true
 cp -f "$BUILD_DIR/mediaconch-x/MediaConch.exe" "$BUILD_DIR/mediaconch-x/LIBCURL.DLL" "$PKG/bin/" 2>/dev/null || true
 cp -f "$BUILD_DIR/dvrescue-x/DVRescue.exe" "$PKG/bin/" 2>/dev/null || true
+# dvpackager: vendored + patched for Windows (Release/vendor/dvpackager/PATCHES.md)
+cp -f "$RELEASE_DIR/vendor/dvpackager/dvpackager" "$PKG/bin/dvpackager"
+cp -f "$RELEASE_DIR/vendor/dvpackager/LICENSE.txt" "$PKG/bin/dvpackager-LICENSE.txt"
 cp -f "$BUILD_DIR/mpv-x/mpv.exe" "$BUILD_DIR/mpv-x/mpv.com" "$BUILD_DIR/mpv-x/d3dcompiler_43.dll" "$PKG/bin/" 2>/dev/null || true
 find "$BUILD_DIR/mkvtoolnix" -name mkvpropedit.exe -exec cp -f {} "$PKG/bin/" \; 2>/dev/null || true
 find "$BUILD_DIR/mkvtoolnix" -name mkvmerge.exe -exec cp -f {} "$PKG/bin/" \; 2>/dev/null || true

@@ -194,6 +194,6 @@ QVector<ComponentStatus> checkComponents(const QString& packageRoot) {
     list << tool(packageRoot, QStringLiteral("gnuplot"), QStringLiteral("graphs from QCTools reports"), false,
                  {QStringLiteral("gnuplot.exe")}, {QStringLiteral("--version")}, QStringLiteral("Not packaged - install gnuplot (gnuplot.info)."));
     list << tool(packageRoot, QStringLiteral("dvpackager"), QStringLiteral("splitting / wrapping DV captures"), false,
-                 {QStringLiteral("dvpackager"), QStringLiteral("dvpackager.exe")}, {}, QStringLiteral("Not available for Windows."));
+                 {QStringLiteral("dvpackager"), QStringLiteral("dvpackager.exe")}, {}, QStringLiteral("Not packaged - vendored copy: Release/vendor/dvpackager."));
     return list;
 }

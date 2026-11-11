@@ -387,6 +387,14 @@ void MainWindow::showComponents(const QVector<ComponentStatus>& components) {
         ++row;
     }
     m_componentsGrid->setColumnStretch(2, 1);
+    for (const ComponentStatus& component : components) {
+        if (component.name == QStringLiteral("dvpackager") && m_dvPackagerBox) {
+            m_dvPackagerBox->setEnabled(component.found);
+            m_dvPackagerBox->setToolTip(component.found
+                                            ? QStringLiteral("dvpackager splits / rewraps the DV capture afterwards (%1)").arg(component.path)
+                                            : QStringLiteral("dvpackager is not installed - DV is saved as captured."));
+        }
+    }
     m_componentsSummary->setText(requiredMissing == 0
                                      ? QStringLiteral("All required parts present - %1 of %2 optional tools").arg(optionalPresent).arg(optionalTotal)
                                      : QStringLiteral("%1 required part(s) missing").arg(requiredMissing));
@@ -761,6 +769,7 @@ void MainWindow::buildUi() {
     auto* dvDeviceForm = new QFormLayout();
     dvDeviceForm->addRow(QStringLiteral("Select a DV Device"), m_dvDeviceCombo);
     auto* dvPackagerBox = new QGroupBox(QStringLiteral("dvpackager options"), dvInputBox);
+    m_dvPackagerBox = dvPackagerBox;   // enabled by the component check
     auto* dvPackagerLayout = new QVBoxLayout(dvPackagerBox);
     dvPackagerLayout->addWidget(new QLabel(QStringLiteral("Split the output on:"), dvPackagerBox));
     dvPackagerLayout->addWidget(m_dvOptionSCheck);
