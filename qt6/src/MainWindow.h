@@ -30,6 +30,7 @@ public:
     QStringList runSelfTest();
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
 private slots:
@@ -71,6 +72,15 @@ private:
     void togglePlayPause();
     void stepPlayback(int frames);
     void seekToSlider();
+    void jumpToFrame(qint64 frame);
+    // drag and drop onto the folder / file boxes
+    struct DropTarget {
+        QLineEdit* target = nullptr;
+        bool wantsFolder = false;
+    };
+    void registerDropTarget(QWidget* widget, QLineEdit* target, bool wantsFolder);
+    QString dropPathFor(QObject* watched, const class QMimeData* mime) const;
+    QMap<QObject*, DropTarget> m_dropTargets;
     void refreshFeeds();
     void updateTransportUi();
 
@@ -151,6 +161,11 @@ private:
     QMap<QString, QRadioButton*> m_inputChoiceRadios;
     QStringList m_selfTestResults;
     bool m_populating = false;
+    QComboBox* m_captureChannelsCombo = nullptr;
+    QCheckBox* m_ffplayMonitorCheck = nullptr;
+    class LevelMeter* m_outputMeter = nullptr;
+    QComboBox* m_monitorPairCombo = nullptr;
+    class LevelMeter* m_previewMeter = nullptr;
     bool m_outputMirrorsInput = false;
     QComboBox* m_outputStandardCombo = nullptr;
     QTimer* m_autosaveTimer = nullptr;
@@ -160,6 +175,8 @@ private:
     QPushButton* m_recordButton = nullptr;
     QLabel* m_positionLabel = nullptr;
     QLabel* m_transportStateLabel = nullptr;
+    QLineEdit* m_timecodeEdit = nullptr;
+    class QSpinBox* m_frameSpin = nullptr;
     QLabel* m_outputNameLabel = nullptr;
     QSlider* m_seekSlider = nullptr;
     QPushButton* m_playPauseButton = nullptr;

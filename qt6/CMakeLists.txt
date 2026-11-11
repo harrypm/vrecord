@@ -24,6 +24,8 @@ add_executable(VrecordQt6 WIN32
   src/BackendController.cpp
   src/FrameFeed.cpp
   src/VideoView.cpp
+  src/LevelMeter.cpp
+  src/PipeFeed.cpp
   resources/vrecord.rc
   resources/vrecord.qrc
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
@@ -50,6 +52,7 @@ add_executable(vsignal
   src/DeckLinkDiscovery.cpp
   src/BackendController.cpp
   src/FrameFeed.cpp
+  src/PipeFeed.cpp
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
 )
 
@@ -72,6 +75,7 @@ add_executable(VrecordOutputTest
   src/DeckLinkDiscovery.cpp
   src/BackendController.cpp
   src/FrameFeed.cpp
+  src/PipeFeed.cpp
   ${DECKLINK_INCLUDE_DIR}/DeckLinkAPI_i.c
 )
 

@@ -1,10 +1,15 @@
 #include "MainWindow.h"
 
 #include "DeckLinkDiscovery.h"
+#include "LevelMeter.h"
 #include "VideoView.h"
 #include "VrecordOptions.h"
 
 #include <QApplication>
+#include <QUrl>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QCloseEvent>
 #include <QCheckBox>
 #include <QComboBox>
@@ -27,6 +32,7 @@
 #include <QRadioButton>
 #include <QScopeGuard>
 #include <QSlider>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStyleFactory>
 #include <QStyleHints>
@@ -148,10 +154,26 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
         appendActivity(QStringLiteral("output: %1").arg(message));
     });
     connect(&m_backend, &BackendController::inputModeDetected, this, &MainWindow::followInputMode);
+    connect(&m_backend, &BackendController::inputAudioLevels, this, [this](const QVector<float>& peak, const QVector<float>& rms) {
+        m_previewMeter->setLevels(peak, rms);
+        // relay: the output carries the monitored pair of the input
+        if (m_backend.isPreviewRelaying() && !m_backend.isFileOutputActive() && !m_backend.isManagedTestSignalRunning()) {
+            const int pair = m_monitorPairCombo->currentIndex();
+            m_outputMeter->setLevels({peak.value(pair * 2, -120.0f), peak.value(pair * 2 + 1, -120.0f)},
+                                     {rms.value(pair * 2, -120.0f), rms.value(pair * 2 + 1, -120.0f)});
+        }
+    });
+    connect(&m_backend, &BackendController::outputAudioLevels, m_outputMeter, &LevelMeter::setLevels);
     connect(&m_backend, &BackendController::shellStarted, this, [this](const QString& mode) {
-        m_inputView->clearFrame(mode == QStringLiteral("record")
-                                    ? QStringLiteral("Recording - monitor in the player window.\nClose that window (or press Stop Recording) to finish.")
-                                    : QStringLiteral("%1 running in the player window").arg(mode));
+        if (m_backend.isSessionMonitorActive()) {
+            m_inputView->clearFrame(QStringLiteral("%1 - monitoring here").arg(mode));
+            m_inputView->setCaption(mode == QStringLiteral("record") ? QStringLiteral("RECORDING - press Stop Recording to finish")
+                                                                     : QStringLiteral("%1 (in-pane monitor)").arg(mode));
+        } else {
+            m_inputView->clearFrame(mode == QStringLiteral("record")
+                                        ? QStringLiteral("Recording - monitor in the player window.\nClose that window (or press Stop Recording) to finish.")
+                                        : QStringLiteral("%1 running in the player window").arg(mode));
+        }
         m_recordButton->setText(mode == QStringLiteral("record") ? QStringLiteral("Stop Recording") : QStringLiteral("Stop %1").arg(mode));
         updatePreviewButton();
         appendActivity(QStringLiteral("backend: %1 started").arg(mode));
@@ -214,6 +236,55 @@ QString MainWindow::choiceValue(const QComboBox* combo) {
     return data.isValid() && !data.toString().isEmpty() ? data.toString() : combo->currentText();
 }
 
+void MainWindow::registerDropTarget(QWidget* widget, QLineEdit* target, bool wantsFolder) {
+    widget->setAcceptDrops(true);
+    widget->installEventFilter(this);
+    m_dropTargets.insert(widget, {target, wantsFolder});
+}
+
+// the local path a drop would set, or empty when the drop does not fit
+QString MainWindow::dropPathFor(QObject* watched, const QMimeData* mime) const {
+    const auto it = m_dropTargets.constFind(watched);
+    if (it == m_dropTargets.constEnd() || !mime || !mime->hasUrls() || mime->urls().isEmpty()) {
+        return {};
+    }
+    const QString local = mime->urls().constFirst().toLocalFile();
+    if (local.isEmpty()) {
+        return {};
+    }
+    const QFileInfo info(local);
+    if (it->wantsFolder) {
+        return info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+    }
+    return info.isFile() ? info.absoluteFilePath() : QString();
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (m_dropTargets.contains(watched)) {
+        if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
+            auto* drag = static_cast<QDropEvent*>(event);
+            if (!dropPathFor(watched, drag->mimeData()).isEmpty()) {
+                drag->acceptProposedAction();
+                return true;
+            }
+        } else if (event->type() == QEvent::Drop) {
+            auto* drop = static_cast<QDropEvent*>(event);
+            const QString path = dropPathFor(watched, drop->mimeData());
+            if (!path.isEmpty()) {
+                QLineEdit* target = m_dropTargets.value(watched).target;
+                target->setText(QDir::toNativeSeparators(path));
+                drop->acceptProposedAction();
+                statusBar()->showMessage(QStringLiteral("Set from drop: %1").arg(QDir::toNativeSeparators(path)), 4000);
+                if (target == m_playFileEdit) {
+                    appendActivity(QStringLiteral("playout file set by drop: %1 - press Play File to Output").arg(QFileInfo(path).fileName()));
+                }
+                return true;
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 QCheckBox* MainWindow::makeCheckBox(const QString& label) {
     return new QCheckBox(label, this);
 }
@@ -263,6 +334,16 @@ void MainWindow::buildUi() {
     m_timecodeVttCheck = makeCheckBox(QStringLiteral("Timecode VTT"));
     m_qcToolsCheck = makeCheckBox(QStringLiteral("Vrecord QCTools Report"));
 
+    // audio (GTK has these on its main page too): monitoring, the capture
+    // channel count, the DeckLink capture rate, and live level meters
+    m_monitorAudioCombo = makeCombo(VrecordOptions::monitorAudio());
+    m_captureChannelsCombo = makeCombo({QStringLiteral("8"), QStringLiteral("16")});
+    m_captureChannelsCombo->setToolTip(QStringLiteral("Embedded audio channels captured from the card (the channel mapping picks the tracks)"));
+    m_ffplayMonitorCheck = makeCheckBox(QStringLiteral("ffplay monitor window (scopes / views)"));
+    m_ffplayMonitorCheck->setToolTip(QStringLiteral("Ticked: Record and Passthrough open the ffplay monitor with the selected view.\n"
+                                                    "Unticked: they show in the Video Preview pane instead (no ffplay window)."));
+    m_previewMeter = new LevelMeter(this);
+
     auto* deckTab = new QWidget(this);
     auto* deckRoot = new QVBoxLayout(deckTab);
     auto* deckInputBox = new QGroupBox(QStringLiteral("Decklink Control Options"), deckTab);
@@ -298,6 +379,7 @@ void MainWindow::buildUi() {
     auto* deckLowerRow = new QHBoxLayout();
     auto* playbackBox = new QGroupBox(QStringLiteral("Playback options"), deckTab);
     auto* playbackLayout = new QFormLayout(playbackBox);
+    playbackLayout->addRow(m_ffplayMonitorCheck);
     playbackLayout->addRow(QStringLiteral("View (recording)"), m_playbackViewCombo);
     playbackLayout->addRow(QStringLiteral("View (passthrough)"), m_playbackPassCombo);
     auto* sidecarBox = new QGroupBox(QStringLiteral("Sidecar file options"), deckTab);
@@ -313,8 +395,20 @@ void MainWindow::buildUi() {
     deckLowerRow->addWidget(playbackBox);
     deckLowerRow->addWidget(sidecarBox);
     deckLowerRow->addWidget(rs422Box);
+    auto* deckAudioBox = new QGroupBox(QStringLiteral("Audio"), deckTab);
+    auto* deckAudioLayout = new QGridLayout(deckAudioBox);
+    deckAudioLayout->addWidget(new QLabel(QStringLiteral("Monitor Audio?"), deckAudioBox), 0, 0);
+    deckAudioLayout->addWidget(m_monitorAudioCombo, 1, 0);
+    deckAudioLayout->addWidget(new QLabel(QStringLiteral("Capture channels"), deckAudioBox), 0, 1);
+    deckAudioLayout->addWidget(m_captureChannelsCombo, 1, 1);
+    deckAudioLayout->addWidget(new QLabel(QStringLiteral("Sample rate"), deckAudioBox), 0, 2);
+    auto* rateLabel = new QLabel(QStringLiteral("48 kHz, 24-bit in a 32-bit word (DeckLink capture)"), deckAudioBox);
+    rateLabel->setToolTip(QStringLiteral("DeckLink cards capture embedded and analog audio at 48 kHz only"));
+    deckAudioLayout->addWidget(rateLabel, 1, 2);
+    deckAudioLayout->addWidget(new QLabel(QStringLiteral("Level meters and the monitored pair are on the Video Preview tab."), deckAudioBox), 2, 0, 1, 3);
     deckRoot->addWidget(deckInputBox);
     deckRoot->addWidget(deckOutputBox);
+    deckRoot->addWidget(deckAudioBox);
     deckRoot->addLayout(deckLowerRow);
     deckRoot->addStretch();
     m_tabs->addTab(deckTab, QStringLiteral("Decklink"));
@@ -376,7 +470,6 @@ void MainWindow::buildUi() {
     m_waveformScaleCombo = makeCombo(VrecordOptions::waveformScales());
     m_signalViewCombo = makeCombo(VrecordOptions::signalViews());
     m_signalIntCombo = makeCombo(VrecordOptions::signalInterlacements());
-    m_monitorAudioCombo = makeCombo(VrecordOptions::monitorAudio());
     m_ntsc43SarCombo = makeCombo(VrecordOptions::ntsc43Sars());
     m_ntsc169SarCombo = makeCombo(VrecordOptions::ntsc169Sars());
     m_pal43SarCombo = makeCombo(VrecordOptions::pal43Sars());
@@ -403,7 +496,7 @@ void MainWindow::buildUi() {
     playerForm->addRow(QStringLiteral("Select Waveform Scale"), m_waveformScaleCombo);
     playerForm->addRow(QStringLiteral("Select Video Scale"), m_signalViewCombo);
     playerForm->addRow(QStringLiteral("Force Interlacement"), m_signalIntCombo);
-    playerForm->addRow(QStringLiteral("Monitor Audio?"), m_monitorAudioCombo);
+    playerForm->addRow(new QLabel(QStringLiteral("Monitor Audio is on the Decklink page."), playerPage));
     prefTabs->addTab(playerPage, QStringLiteral("Player"));
     auto* aspectPage = new QWidget(prefTabs);
     auto* aspectForm = new QFormLayout(aspectPage);
@@ -511,9 +604,35 @@ void MainWindow::buildUi() {
     m_seekSlider->setRange(0, 10000);
     // fixed-format, monospace counter: the digits never move between play,
     // pause and halt; the state sits in its own fixed-width tag
-    m_positionLabel = new QLabel(QStringLiteral("00:00:00:00 / 00:00:00:00   frame 0"), outputDeviceBox);
-    m_positionLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    m_positionLabel->setMinimumWidth(QFontMetrics(m_positionLabel->font()).horizontalAdvance(QStringLiteral("00:00:00:00 / 00:00:00:00   frame 0000000")) + 8);
+    // counter: an editable timecode (type HH:MM:SS:FF + Enter to jump), the
+    // duration, and an editable frame number - fixed widths and a monospace
+    // face so nothing shifts between play, pause and halt
+    QFont counterFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    counterFont.setPointSizeF(counterFont.pointSizeF() * 1.35);
+    m_timecodeEdit = new QLineEdit(QStringLiteral("00:00:00:00"), outputDeviceBox);
+    m_timecodeEdit->setFont(counterFont);
+    m_timecodeEdit->setInputMask(QStringLiteral("99:99:99:99"));
+    m_timecodeEdit->setAlignment(Qt::AlignCenter);
+    m_timecodeEdit->setFixedWidth(QFontMetrics(counterFont).horizontalAdvance(QStringLiteral("00:00:00:00")) + 18);
+    m_timecodeEdit->setToolTip(QStringLiteral("Position (HH:MM:SS:FF). Type a timecode and press Enter to jump there."));
+    QFont durationFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    m_positionLabel = new QLabel(QStringLiteral("/ 00:00:00:00"), outputDeviceBox);
+    m_positionLabel->setFont(durationFont);
+    m_positionLabel->setFixedWidth(QFontMetrics(durationFont).horizontalAdvance(QStringLiteral("/ 00:00:00:00")) + 6);
+    {
+        QPalette dim = m_positionLabel->palette();
+        dim.setColor(QPalette::WindowText, dim.color(QPalette::PlaceholderText));
+        m_positionLabel->setPalette(dim);
+    }
+    m_frameSpin = new QSpinBox(outputDeviceBox);
+    m_frameSpin->setFont(durationFont);
+    m_frameSpin->setPrefix(QStringLiteral("frame "));
+    m_frameSpin->setRange(0, 0);
+    m_frameSpin->setKeyboardTracking(false);
+    m_frameSpin->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_frameSpin->setAlignment(Qt::AlignRight);
+    m_frameSpin->setFixedWidth(QFontMetrics(durationFont).horizontalAdvance(QStringLiteral("frame 0000000")) + 16);
+    m_frameSpin->setToolTip(QStringLiteral("Frame number. Type a frame and press Enter to jump there."));
     m_transportStateLabel = new QLabel(QStringLiteral("STOPPED"), outputDeviceBox);
     m_transportStateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     {
@@ -527,36 +646,6 @@ void MainWindow::buildUi() {
     m_activityText = new QPlainTextEdit(livePreviewBox);
     m_activityText->setReadOnly(true);
     m_activityText->setMaximumBlockCount(400);
-    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Input preview (native frame rate, straight from the capture)"), livePreviewBox));
-    livePreviewLayout->addWidget(m_inputView);
-    livePreviewLayout->addWidget(m_previewToggleButton);
-    livePreviewLayout->addStretch(1);
-    outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Hardware video output device"), outputDeviceBox));
-    outputDeviceLayout->addWidget(m_videoOutputDeviceCombo);
-    outputDeviceLayout->addWidget(m_previewRelayCheck);
-    outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox));
-    outputDeviceLayout->addWidget(m_relayDeviceCombo);
-    outputDeviceLayout->addWidget(new QLabel(QStringLiteral("Output standard (file playout / test signal)"), outputDeviceBox));
-    outputDeviceLayout->addWidget(m_outputStandardCombo);
-    outputDeviceLayout->addWidget(m_outputView);
-    auto* transportRow = new QHBoxLayout();
-    transportRow->addWidget(btnBack100);
-    transportRow->addWidget(btnBack1);
-    transportRow->addWidget(m_playPauseButton);
-    transportRow->addWidget(btnFwd1);
-    transportRow->addWidget(btnFwd100);
-    outputDeviceLayout->addLayout(transportRow);
-    outputDeviceLayout->addWidget(m_seekSlider);
-    auto* counterRow = new QHBoxLayout();
-    counterRow->addWidget(m_positionLabel);
-    counterRow->addStretch(1);
-    counterRow->addWidget(m_transportStateLabel);
-    outputDeviceLayout->addLayout(counterRow);
-    outputDeviceLayout->addStretch(1);
-    previewRoot->addWidget(livePreviewBox, 1);
-    previewRoot->addWidget(outputDeviceBox, 1);
-    m_tabs->addTab(previewTab, QStringLiteral("Video Preview"));
-
     m_testSignalOutputCheck = makeCheckBox(QStringLiteral("Test signal output"));
     m_testPatternCombo = makeCombo({QStringLiteral("SMPTE SD Bars (75%)"),
                                     QStringLiteral("SMPTE SD Bars (100%)"),
@@ -579,20 +668,76 @@ void MainWindow::buildUi() {
     m_testAudioCombo = makeCombo({QStringLiteral("1 kHz Tone"), QStringLiteral("Stereo 1k/440"), QStringLiteral("Silence")});
     m_outputInfoText = new QPlainTextEdit(this);
     m_outputInfoText->setReadOnly(true);
-    auto* outputTab = new QWidget(this);
-    auto* outputRoot = new QVBoxLayout(outputTab);
-    auto* testBox = new QGroupBox(QStringLiteral("Output options"), outputTab);
-    auto* testLayout = new QVBoxLayout(testBox);
-    testLayout->addWidget(new QLabel(QStringLiteral("Check the device chain with a test signal routed to the selected hardware output device and shaped by the selected standard."), testBox));
-    testLayout->addWidget(m_testSignalOutputCheck);
-    auto* testForm = new QFormLayout();
-    testForm->addRow(QStringLiteral("Test pattern"), m_testPatternCombo);
-    testForm->addRow(QStringLiteral("Test audio"), m_testAudioCombo);
-    testLayout->addLayout(testForm);
-    testLayout->addWidget(m_outputInfoText);
-    outputRoot->addWidget(testBox);
-    outputRoot->addStretch();
-    m_tabs->addTab(outputTab, QStringLiteral("Output"));
+    m_outputMeter = new LevelMeter(this);
+    m_outputMeter->setTitle(QStringLiteral("out"));
+    m_previewMeter->setTitle(QStringLiteral("in"));
+    m_monitorPairCombo = makeCombo({QStringLiteral("1/2"), QStringLiteral("3/4"), QStringLiteral("5/6"), QStringLiteral("7/8"),
+                                    QStringLiteral("9/10"), QStringLiteral("11/12"), QStringLiteral("13/14"), QStringLiteral("15/16")});
+    m_monitorPairCombo->setToolTip(QStringLiteral("Stereo pair to monitor: highlighted on the meters and sent to the relay output.\n"
+                                                  "1/2 is the usual stereo of most sources."));
+
+    // ---- input side: picture with its meters beside it
+    livePreviewLayout->addWidget(new QLabel(QStringLiteral("Input preview (native frame rate, straight from the capture)"), livePreviewBox));
+    auto* inputPictureRow = new QHBoxLayout();
+    inputPictureRow->addWidget(m_inputView, 1);
+    inputPictureRow->addWidget(m_previewMeter);
+    livePreviewLayout->addLayout(inputPictureRow);
+    auto* inputControlRow = new QHBoxLayout();
+    inputControlRow->addWidget(m_previewToggleButton, 1);
+    inputControlRow->addWidget(new QLabel(QStringLiteral("Monitor pair"), livePreviewBox));
+    inputControlRow->addWidget(m_monitorPairCombo);
+    livePreviewLayout->addLayout(inputControlRow);
+    livePreviewLayout->addStretch(1);
+
+    // ---- output side: devices side by side, the signal generator in one
+    // compact block with the output standard, then picture + meters + transport
+    auto* deviceGrid = new QGridLayout();
+    deviceGrid->addWidget(new QLabel(QStringLiteral("Hardware output device"), outputDeviceBox), 0, 0);
+    deviceGrid->addWidget(new QLabel(QStringLiteral("Relay output device"), outputDeviceBox), 0, 1);
+    deviceGrid->addWidget(m_videoOutputDeviceCombo, 1, 0);
+    deviceGrid->addWidget(m_relayDeviceCombo, 1, 1);
+    deviceGrid->addWidget(m_previewRelayCheck, 2, 0, 1, 2);
+    deviceGrid->setColumnStretch(0, 1);
+    deviceGrid->setColumnStretch(1, 1);
+    outputDeviceLayout->addLayout(deviceGrid);
+    auto* generatorBox = new QGroupBox(QStringLiteral("Signal / audio generator"), outputDeviceBox);
+    auto* generatorGrid = new QGridLayout(generatorBox);
+    generatorGrid->addWidget(new QLabel(QStringLiteral("Output standard"), generatorBox), 0, 0);
+    generatorGrid->addWidget(new QLabel(QStringLiteral("Test pattern"), generatorBox), 0, 1);
+    generatorGrid->addWidget(m_outputStandardCombo, 1, 0);
+    generatorGrid->addWidget(m_testPatternCombo, 1, 1);
+    generatorGrid->addWidget(new QLabel(QStringLiteral("Test audio"), generatorBox), 2, 0);
+    generatorGrid->addWidget(m_testAudioCombo, 3, 0);
+    generatorGrid->addWidget(m_testSignalOutputCheck, 3, 1);
+    generatorGrid->setColumnStretch(0, 1);
+    generatorGrid->setColumnStretch(1, 1);
+    m_outputStandardCombo->setToolTip(QStringLiteral("Standard sent to the hardware output for file playout and the test signal.\n"
+                                                     "Auto plays files in their native mode; relay on = the output follows the input."));
+    outputDeviceLayout->addWidget(generatorBox);
+    auto* outputPictureRow = new QHBoxLayout();
+    outputPictureRow->addWidget(m_outputView, 1);
+    outputPictureRow->addWidget(m_outputMeter);
+    outputDeviceLayout->addLayout(outputPictureRow);
+    auto* transportRow = new QHBoxLayout();
+    transportRow->addWidget(btnBack100);
+    transportRow->addWidget(btnBack1);
+    transportRow->addWidget(m_playPauseButton);
+    transportRow->addWidget(btnFwd1);
+    transportRow->addWidget(btnFwd100);
+    outputDeviceLayout->addLayout(transportRow);
+    outputDeviceLayout->addWidget(m_seekSlider);
+    auto* counterRow = new QHBoxLayout();
+    counterRow->addWidget(m_timecodeEdit);
+    counterRow->addWidget(m_positionLabel);
+    counterRow->addSpacing(12);
+    counterRow->addWidget(m_frameSpin);
+    counterRow->addStretch(1);
+    counterRow->addWidget(m_transportStateLabel);
+    outputDeviceLayout->addLayout(counterRow);
+    outputDeviceLayout->addStretch(1);
+    previewRoot->addWidget(livePreviewBox, 1);
+    previewRoot->addWidget(outputDeviceBox, 1);
+    m_tabs->addTab(previewTab, QStringLiteral("Video Preview"));
 
     root->addWidget(m_tabs);
 
@@ -621,6 +766,18 @@ void MainWindow::buildUi() {
     directoryRow->addWidget(dirBox);
     directoryRow->addWidget(logDirBox);
     directoryRow->addWidget(playFileBox);
+    // drag and drop: a folder (or a file - its folder is used) onto the
+    // recording / auxiliary folder boxes, a media file onto the playout box or
+    // straight onto the output picture
+    for (QWidget* widget : std::initializer_list<QWidget*>{dirBox, m_dirEdit, dirBrowseButton}) {
+        registerDropTarget(widget, m_dirEdit, true);
+    }
+    for (QWidget* widget : std::initializer_list<QWidget*>{logDirBox, m_logDirEdit, logDirBrowseButton}) {
+        registerDropTarget(widget, m_logDirEdit, true);
+    }
+    for (QWidget* widget : std::initializer_list<QWidget*>{playFileBox, m_playFileEdit, playFileBrowseButton, m_outputView}) {
+        registerDropTarget(widget, m_playFileEdit, false);
+    }
     root->addLayout(directoryRow);
 
     auto* eventRow = new QHBoxLayout();
@@ -720,9 +877,10 @@ void MainWindow::buildUi() {
     auto* activityBox = new QGroupBox(QStringLiteral("Activity (preview, playout, backend sessions)"), logsTab);
     auto* activityLayout = new QVBoxLayout(activityBox);
     activityLayout->addWidget(m_activityText);
-    auto* notesBox = new QGroupBox(QStringLiteral("Preview / playout notes"), logsTab);
-    auto* notesLayout = new QVBoxLayout(notesBox);
+    auto* notesBox = new QGroupBox(QStringLiteral("Preview / playout / test signal notes"), logsTab);
+    auto* notesLayout = new QHBoxLayout(notesBox);
     notesLayout->addWidget(m_previewInfoText);
+    notesLayout->addWidget(m_outputInfoText);
     logsSplitter->addWidget(activityBox);
     logsSplitter->addWidget(notesBox);
     logsSplitter->addWidget(summaryBox);
@@ -916,6 +1074,18 @@ void MainWindow::buildUi() {
     connect(m_videoInputCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
     connect(m_standardCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
     connect(m_aspectRatioCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
+    connect(m_captureChannelsCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
+    connect(m_monitorPairCombo, &QComboBox::activated, this, [this, restartPreviewIfRunning](int index) {
+        m_previewMeter->setMonitorPair(index);
+        // the relay carries this pair: relaunch it with the new mapping
+        if (m_backend.isPreviewRelaying()) {
+            restartPreviewIfRunning();
+        } else {
+            updateDerivedState();
+        }
+    });
+    connect(m_monitorAudioCombo, &QComboBox::activated, this, [this](int) { updateDerivedState(); });
+    connect(m_ffplayMonitorCheck, &QCheckBox::clicked, this, [this](bool) { updateDerivedState(); });
     connect(m_previewToggleButton, &QPushButton::clicked, this, &MainWindow::togglePreview);
     connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::togglePlayPause);
     connect(btnBack100, &QPushButton::clicked, this, [this] { stepPlayback(-100); });
@@ -924,6 +1094,24 @@ void MainWindow::buildUi() {
     connect(btnFwd100, &QPushButton::clicked, this, [this] { stepPlayback(100); });
     connect(m_seekSlider, &QSlider::sliderPressed, this, [this] { m_sliderDragging = true; });
     connect(m_seekSlider, &QSlider::sliderReleased, this, &MainWindow::seekToSlider);
+    connect(m_timecodeEdit, &QLineEdit::returnPressed, this, [this] {
+        // HH:MM:SS:FF at the nominal (rounded) rate, like the readout
+        const QStringList parts = m_timecodeEdit->text().split(QLatin1Char(':'));
+        const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;
+        const qint64 nominal = qRound64(fps);
+        if (parts.size() == 4 && nominal > 0) {
+            const qint64 frame = ((parts.at(0).toLongLong() * 60 + parts.at(1).toLongLong()) * 60 + parts.at(2).toLongLong()) * nominal
+                                 + qMin<qint64>(parts.at(3).toLongLong(), nominal - 1);
+            jumpToFrame(frame);
+        }
+        m_timecodeEdit->clearFocus();
+    });
+    connect(m_frameSpin, &QSpinBox::editingFinished, this, [this] {
+        if (m_frameSpin->hasFocus()) {
+            jumpToFrame(m_frameSpin->value());
+            m_frameSpin->clearFocus();
+        }
+    });
     connect(m_feedTimer, &QTimer::timeout, this, &MainWindow::refreshFeeds);
     m_feedTimer->start();
     m_outputNameLabel = outputNameLabel;
@@ -971,6 +1159,10 @@ void MainWindow::populateFromConfig() {
     setChoice(m_signalViewCombo, m_config.value(QStringLiteral("SIGNAL_VIEW_CHOICE")), QStringLiteral("Broadcast Range"));
     setChoice(m_signalIntCombo, m_config.value(QStringLiteral("SIGNAL_INT_CHOICE")), QStringLiteral("auto"));
     setChoice(m_monitorAudioCombo, m_config.value(QStringLiteral("MONITOR_AUDIO_CHOICE")), QStringLiteral("Yes"));
+    setChoice(m_captureChannelsCombo, m_config.value(QStringLiteral("DECKLINK_AUDIO_CHANNELS_CHOICE")), QStringLiteral("8"));
+    setChoice(m_monitorPairCombo, m_config.value(QStringLiteral("MONITOR_PAIR_CHOICE")), QStringLiteral("1/2"));
+    m_previewMeter->setMonitorPair(m_monitorPairCombo->currentIndex());
+    m_ffplayMonitorCheck->setChecked(m_config.value(QStringLiteral("FFPLAY_MONITOR_CHOICE"), QStringLiteral("true")) != QStringLiteral("false"));
     setChoice(m_ntsc43SarCombo, m_config.value(QStringLiteral("NTSC_43_SAR_CHOICE")), QStringLiteral("10/11"));
     setChoice(m_ntsc169SarCombo, m_config.value(QStringLiteral("NTSC_169_SAR_CHOICE")), QStringLiteral("40/33"));
     setChoice(m_pal43SarCombo, m_config.value(QStringLiteral("PAL_43_SAR_CHOICE")), QStringLiteral("12/11"));
@@ -1040,6 +1232,9 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("SIGNAL_VIEW_CHOICE"), m_signalViewCombo->currentText());
     m_config.setValue(QStringLiteral("SIGNAL_INT_CHOICE"), m_signalIntCombo->currentText());
     m_config.setValue(QStringLiteral("MONITOR_AUDIO_CHOICE"), m_monitorAudioCombo->currentText());
+    m_config.setValue(QStringLiteral("DECKLINK_AUDIO_CHANNELS_CHOICE"), m_captureChannelsCombo->currentText());
+    m_config.setValue(QStringLiteral("MONITOR_PAIR_CHOICE"), m_monitorPairCombo->currentText());
+    m_config.setValue(QStringLiteral("FFPLAY_MONITOR_CHOICE"), m_ffplayMonitorCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("NTSC_43_SAR_CHOICE"), m_ntsc43SarCombo->currentText());
     m_config.setValue(QStringLiteral("NTSC_169_SAR_CHOICE"), m_ntsc169SarCombo->currentText());
     m_config.setValue(QStringLiteral("PAL_43_SAR_CHOICE"), m_pal43SarCombo->currentText());
@@ -1151,16 +1346,17 @@ void MainWindow::rebuildConnectorCombos() {
     m_videoInputCombo->setCurrentIndex(inputIndex >= 0 ? inputIndex : 0);
 
     // output connectors: Auto always allowed, hardware list otherwise
-    const QString currentOutput = m_videoOutputConnectionCombo->currentText();
+    const QString currentOutput = m_videoOutputConnectionCombo->count() > 0 && !m_populating
+        ? m_videoOutputConnectionCombo->currentText()
+        : m_config.value(QStringLiteral("VIDEO_OUTPUT_CONNECTION_CHOICE"), QStringLiteral("Auto"));
     m_videoOutputConnectionCombo->clear();
     m_videoOutputConnectionCombo->addItem(QStringLiteral("Auto"));
     const QStringList outputNames = DeckLinkDiscovery::connectionNamesFromMask(outputMask);
     for (const QString& name : outputNames) {
         m_videoOutputConnectionCombo->addItem(name);
     }
-    if (m_videoOutputConnectionCombo->findText(currentOutput) < 0) {
-        m_videoOutputConnectionCombo->setCurrentIndex(0);
-    }
+    const int outputIndex = m_videoOutputConnectionCombo->findText(currentOutput);
+    m_videoOutputConnectionCombo->setCurrentIndex(outputIndex >= 0 ? outputIndex : 0);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -1391,6 +1587,18 @@ void MainWindow::stepPlayback(int frames) {
     updateTransportUi();
 }
 
+// playing keeps playing from there; paused stays paused on that frame (card
+// and pane); cued / halted moves the cue
+void MainWindow::jumpToFrame(qint64 frame) {
+    const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;
+    QString errorMessage;
+    if (!m_backend.seekFileOutput(double(qMax<qint64>(frame, 0)) / fps, &errorMessage)) {
+        showError(errorMessage);
+        return;
+    }
+    updateTransportUi();
+}
+
 void MainWindow::seekToSlider() {
     m_sliderDragging = false;
     const double duration = m_backend.fileOutputDurationSeconds();
@@ -1434,7 +1642,20 @@ void MainWindow::updateTransportUi() {
     const qint64 durationFrames = qRound64(duration * fps);
     const QString durationTc = QStringLiteral("%1:%2").arg(formatHms(framesPerSecond > 0 ? durationFrames / framesPerSecond : 0))
                                    .arg(framesPerSecond > 0 ? durationFrames % framesPerSecond : 0, 2, 10, QLatin1Char('0'));
-    m_positionLabel->setText(QStringLiteral("%1 / %2   frame %3").arg(tc, durationTc).arg(totalFrames));
+    // don't overwrite what the user is typing
+    if (!m_timecodeEdit->hasFocus()) {
+        m_timecodeEdit->setText(tc);
+    }
+    m_positionLabel->setText(QStringLiteral("/ %1").arg(durationTc));
+    if (!m_frameSpin->hasFocus()) {
+        m_frameSpin->blockSignals(true);
+        m_frameSpin->setRange(0, int(qMax<qint64>(0, durationFrames > 0 ? durationFrames - 1 : totalFrames)));
+        m_frameSpin->setValue(int(totalFrames));
+        m_frameSpin->blockSignals(false);
+    }
+    const bool haveFile = duration > 0;
+    m_timecodeEdit->setEnabled(haveFile);
+    m_frameSpin->setEnabled(haveFile);
     QString state;
     if (active && paused) {
         state = QStringLiteral("PAUSED");
@@ -1745,6 +1966,9 @@ void MainWindow::updateDerivedState() {
         return;
     }
     syncConfigFromUi();
+    const bool ffplayMonitor = m_ffplayMonitorCheck->isChecked();
+    m_playbackViewCombo->setEnabled(ffplayMonitor);
+    m_playbackPassCombo->setEnabled(ffplayMonitor);
     // relay copies the input to the output, so it overrides the output standard
     const bool relayOn = m_previewRelayCheck->isChecked();
     m_outputStandardCombo->setEnabled(!relayOn);

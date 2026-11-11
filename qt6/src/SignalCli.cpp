@@ -113,6 +113,116 @@ QString packageRootForTest() {
     return QCoreApplication::applicationDirPath();
 }
 
+// Record with the ffplay window off: the shell session's monitor must reach
+// the GUI (frames + levels) and the recording must complete. outDir: where
+// the test recording goes.
+int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopEarly) {
+    VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
+    config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-monitortest.conf"));
+    config.setValue(QStringLiteral("FFPLAY_MONITOR_CHOICE"), QStringLiteral("false"));
+    config.setValue(QStringLiteral("DIR"), outDir.isEmpty() ? QDir::tempPath() : QDir::fromNativeSeparators(outDir));
+    config.setValue(QStringLiteral("ID"), QStringLiteral("qt6monitortest"));
+    config.setValue(QStringLiteral("DURATION_HOURS"), QStringLiteral("0"));
+    config.setValue(QStringLiteral("DURATION_MINUTES"), QStringLiteral("0"));
+    config.setValue(QStringLiteral("DURATION_SECONDS"), stopEarly ? QString() : QStringLiteral("8"));
+    if (stopEarly) {
+        config.setValue(QStringLiteral("DURATION_MINUTES"), QString());
+        config.setValue(QStringLiteral("DURATION_HOURS"), QString());
+    }
+    config.setValue(QStringLiteral("CONTAINER_CHOICE"), QStringLiteral("Matroska"));
+    config.setValue(QStringLiteral("VIDEO_CODEC_CHOICE"), QStringLiteral("FFV1 version 3"));
+    BackendController backend(packageRoot);
+    backend.setManagedOutputs(true);
+    int frames = 0;
+    int levelBlocks = 0;
+    int channels = 0;
+    bool finished = false;
+    int exitCode = -99;
+    QString message;
+    QObject::connect(&backend, &BackendController::inputFrame, [&frames](const QImage&) { ++frames; });
+    QObject::connect(&backend, &BackendController::inputAudioLevels, [&](const QVector<float>& peak, const QVector<float>&) {
+        ++levelBlocks;
+        channels = int(peak.size());
+    });
+    QObject::connect(&backend, &BackendController::shellFinished, [&](const QString&, int code, const QString& m) {
+        finished = true;
+        exitCode = code;
+        message = m;
+    });
+    QString error;
+    const bool started = backend.startRecord(config, &error);
+    std::cout << "record started: " << started << " " << error.toStdString()
+              << "  in-pane monitor: " << backend.isSessionMonitorActive() << std::endl;
+    QElapsedTimer t;
+    t.start();
+    bool stopSent = false;
+    while (started && !finished && t.elapsed() < 120000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(10);
+        if (stopEarly && !stopSent && t.elapsed() > 9000) {
+            stopSent = true;
+            std::cout << "stopShell (closes the monitor pipe)" << std::endl;
+            backend.stopShell();
+        }
+    }
+    std::cout << "finished=" << finished << " exit=" << exitCode << " monitor frames=" << frames << " level blocks=" << levelBlocks
+              << " channels=" << channels << std::endl;
+    std::cout << "backend says: " << message.toStdString() << std::endl;
+    QFile::remove(config.configPath);
+    const bool ok = started && finished && exitCode == 0 && frames > 50 && levelBlocks > 20;
+    std::cout << "MONITOR TEST: " << (ok ? "PASS" : "FAIL") << std::endl;
+    return ok ? 0 : 1;
+}
+
+// The GUI's (managed) test signal across patterns: each must stay up, feed
+// the pane at the card rate, and put a mode the card supports on the output.
+int runManagedSignalTest(const QString& packageRoot) {
+    VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
+    config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-signaltest.conf"));
+    config.setValue(QStringLiteral("OUTPUT_STANDARD_CHOICE"), QStringLiteral("Auto (match file)"));
+    BackendController backend(packageRoot);
+    backend.setManagedOutputs(true);
+    const auto pump = [](int ms) {
+        QElapsedTimer t;
+        t.start();
+        while (t.elapsed() < ms) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(10);
+        }
+    };
+    int frames = 0;
+    QObject::connect(&backend, &BackendController::outputFrame, [&frames](const QImage&) { ++frames; });
+    QString lastStatus;
+    QObject::connect(&backend, &BackendController::outputStatus, [&lastStatus](const QString& m) { lastStatus = m; });
+    int failures = 0;
+    const QList<QPair<QString, QString>> cases{
+        {QStringLiteral("NTSC"), QStringLiteral("SMPTE SD Bars (75%)")},
+        {QStringLiteral("PAL"), QStringLiteral("EBU Bars (75%)")},
+        {QStringLiteral("Hp50 - 1080p50"), QStringLiteral("SMPTE RP 219 \"HDTV\" Bars (75%)")},
+        {QStringLiteral("Hp50 - 1080p50"), QStringLiteral("BT.2111 HDR Bars (PQ 2160p)")},
+        {QStringLiteral("Hp50 - 1080p50"), QStringLiteral("Test Pattern")},
+    };
+    for (const auto& c : cases) {
+        config.setValue(QStringLiteral("STANDARD_CHOICE"), c.first);
+        config.setValue(QStringLiteral("TEST_SIGNAL_PATTERN_CHOICE"), c.second);
+        QString error;
+        const bool started = backend.setTestSignalOutput(config, true, &error);
+        pump(1500);          // past start-up and the pane's preroll delay
+        frames = 0;
+        pump(3000);
+        const QString mode = DeckLinkDiscovery::activeOutputModeFourCC(config.value(QStringLiteral("VIDEO_OUTPUT_DEVICE_CHOICE")));
+        const bool ok = started && backend.isManagedTestSignalRunning() && frames > 10;   // liveness (this loop under-counts coalesced frames)
+        std::cout << (ok ? "PASS " : "FAIL ") << c.first.toStdString() << " | " << c.second.toStdString() << "  card=" << mode.toStdString()
+                  << " pane=" << frames / 3 << " fps  " << (started ? lastStatus : error).toStdString() << std::endl;
+        failures += ok ? 0 : 1;
+    }
+    backend.setTestSignalOutput(config, false, nullptr);
+    pump(300);
+    QFile::remove(config.configPath);
+    std::cout << "SIGNAL TEST: " << failures << " failures" << std::endl;
+    return failures == 0 ? 0 : 1;
+}
+
 // Hardware check of the frame-exact transport and the relay hand-over, on the
 // same BackendController code the GUI uses (managed outputs, throwaway config):
 // play -> pause holds the on-wire frame -> step +1 -> resume -> relay halts the
@@ -472,6 +582,12 @@ int main(int argc, char** argv) {
 
     if (command == QStringLiteral("probe")) {
         return runProbe();
+    }
+    if (command == QStringLiteral("monitortest")) {
+        return runMonitorTest(packageRootForTest(), arguments.value(2), arguments.value(3) == QStringLiteral("stop"));
+    }
+    if (command == QStringLiteral("signaltest")) {
+        return runManagedSignalTest(packageRootForTest());
     }
     if (command == QStringLiteral("transporttest")) {
         return runTransportTest(packageRootForTest(), arguments.value(2));

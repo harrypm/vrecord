@@ -16,6 +16,7 @@
 #include <QMutex>
 #include <QStringList>
 #include <QThread>
+#include <QVector>
 
 #include <atomic>
 #include <deque>
@@ -56,6 +57,8 @@ signals:
     void streaming(const QString& label);    // first frame of an attempt arrived
     void attemptFailed(const QString& label, const QString& message);
     void ended(bool hadFrames, const QString& message);  // process gone (not on stop())
+    // per-channel audio levels in dBFS (only for commands that meter audio)
+    void audioLevels(const QVector<float>& peakDb, const QVector<float>& rmsDb);
 
 protected:
     void run() override;
@@ -83,4 +86,7 @@ private:
     QString m_activeLabel;
     QByteArray m_stderrTail;
     std::deque<QImage> m_delayQueue;
+    QByteArray m_stderrLine;          // partial stderr line (worker thread only)
+    QVector<float> m_blockPeak;       // astats block being parsed
+    QVector<float> m_blockRms;
 };

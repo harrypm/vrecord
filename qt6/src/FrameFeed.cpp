@@ -89,12 +89,57 @@ QString FrameFeed::stderrTail() const {
     return QString::fromUtf8(m_stderrTail);
 }
 
+// stderr carries ffmpeg's messages and, when the command meters audio, the
+// astats blocks printed by ametadata (direct=1, so they arrive live):
+//   frame:12 pts:... / lavfi.astats.<ch>.Peak_level=-12.3 / ...RMS_level=...
+// Level lines become audioLevels(); everything else is kept as the tail.
 void FrameFeed::appendStderr(const QByteArray& data) {
     if (data.isEmpty()) {
         return;
     }
+    m_stderrLine.append(data);
+    QByteArray messages;
+    qsizetype start = 0;
+    for (;;) {
+        const qsizetype newline = m_stderrLine.indexOf('\n', start);
+        if (newline < 0) {
+            break;
+        }
+        const QByteArray line = m_stderrLine.mid(start, newline - start).trimmed();
+        start = newline + 1;
+        if (line.startsWith("lavfi.astats.")) {
+            // lavfi.astats.<ch>.<key>=<value>
+            const QList<QByteArray> parts = line.mid(13).split('=');
+            const QList<QByteArray> head = parts.value(0).split('.');
+            const int channel = head.value(0).toInt() - 1;
+            if (channel >= 0 && channel < 32 && parts.size() == 2) {
+                const QByteArray text = parts.at(1);
+                const float value = text.contains("inf") ? -120.0f : text.toFloat();
+                QVector<float>& target = head.value(1) == "RMS_level" ? m_blockRms : m_blockPeak;
+                if (target.size() <= channel) {
+                    target.resize(channel + 1, -120.0f);
+                }
+                target[channel] = value;
+            }
+        } else if (line.startsWith("frame:")) {
+            if (!m_blockPeak.isEmpty()) {
+                emit audioLevels(m_blockPeak, m_blockRms);
+            }
+            m_blockPeak.clear();
+            m_blockRms.clear();
+        } else if (!line.isEmpty()) {
+            messages.append(line).append('\n');
+        }
+    }
+    m_stderrLine.remove(0, start);
+    if (m_stderrLine.size() > 65536) {
+        m_stderrLine.clear();   // no newline in a long binary-ish blob: drop it
+    }
+    if (messages.isEmpty()) {
+        return;
+    }
     QMutexLocker lock(&m_mutex);
-    m_stderrTail.append(data);
+    m_stderrTail.append(messages);
     if (m_stderrTail.size() > 16384) {
         m_stderrTail = m_stderrTail.right(16384);
     }

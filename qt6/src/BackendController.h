@@ -8,6 +8,8 @@
 #include <QObject>
 #include <QPointer>
 #include <QProcess>
+#include <QProcessEnvironment>
+#include <QVector>
 #include <QString>
 
 class QTimer;
@@ -40,6 +42,8 @@ public:
     bool startAudioCheck(const VrecordConfig& config, QString* errorMessage = nullptr);
     bool stopShell();
     bool isShellRunning() const;
+    // the session's monitor shows in the input pane (ffplay window off)
+    bool isSessionMonitorActive() const;
     QString shellMode() const { return m_shellMode; }
     QString shellLogPath() const;
     bool openLegacyUi(QString* errorMessage = nullptr) const;
@@ -88,6 +92,10 @@ signals:
     void shellFinished(const QString& mode, int exitCode, const QString& message);
     // the driver reports a (new) mode on the live input, e.g. "Hp50"
     void inputModeDetected(const QString& formatCode);
+    // live input audio levels (dBFS per channel) from the preview / monitor
+    void inputAudioLevels(const QVector<float>& peakDb, const QVector<float>& rmsDb);
+    // what goes to the card: playout / held frame / test signal audio
+    void outputAudioLevels(const QVector<float>& peakDb, const QVector<float>& rmsDb);
 
 private:
     struct MediaInfo {
@@ -126,10 +134,14 @@ private:
     FrameFeed* startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames);
     void stopFeed(QPointer<FrameFeed>& feed);
     void followInputMode(const QString& detected);
+    void startSessionMonitor(const VrecordConfig& config, QProcessEnvironment* env);
+    void stopSessionMonitor();
+    void pollMonitorLevels();
     bool deviceIsFullDuplex(const QString& device) const;
     void claimOutputFromPreview(const QString& outputDevice);
     void releaseOutputClaim();
     VideoMode outputModeForTestSignal(const VrecordConfig& config) const;
+    VideoMode cardModeForTestSignal(const VrecordConfig& config, const QString& pattern, const QString& device, QString* note) const;
 
     QString m_packageRoot;
     bool m_managedOutputs = false;
@@ -146,6 +158,14 @@ private:
     QString m_lastReportedInputMode;
     VrecordConfig m_previewConfig;
     QTimer* m_inputModeTimer = nullptr;
+    // in-pane session monitor
+    class PipeFeed* m_monitorFeed = nullptr;
+    QTimer* m_monitorLevelsTimer = nullptr;
+    QString m_monitorLevelsPath;
+    qint64 m_monitorLevelsOffset = 0;
+    QByteArray m_levelText;
+    QVector<float> m_levelPeak;
+    QVector<float> m_levelRms;
     bool m_previewRelaying = false;   // the running preview also drives the output
     bool m_outputClaimed = false;     // playout / test signal owns the output
 

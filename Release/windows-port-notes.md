@@ -56,6 +56,21 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
   - **Relay re-enabled** while a file is loaded halts the file on its exact frame and gives the relay the output; Play resumes the file from that frame.
 - **Pane delay = muxer queue depth**: ffmpeg's decklink muxer schedules up to 2 x preroll frames ("frames buffer size") and blocks when that is full, so a frame reaches the wire 2 x preroll after ffmpeg emits it. Delaying the pane by only 1 x preroll made the pane and counter run ahead of the wire. Playout now passes `-preroll 0.25` (lower latency; 4K50 HEVC still holds a steady 50 fps) and delays the pane by 2 x preroll.
 - **Transport counter**: fixed-format monospace `HH:MM:SS:FF / HH:MM:SS:FF   frame N`, with the state (PLAYING / PAUSED / CUED / HALTED - RELAY ON OUTPUT / STOPPED) in a separate fixed-width tag, so nothing shifts on play/pause.
+- **Video Preview is the single output page** (the Output tab is gone): output and relay devices side by side, a compact *Signal / audio generator* block (output standard, test pattern, test audio, on/off), the output picture with its meter, the transport and the counter. Activity, preview/playout and test-signal notes are on the Logs tab.
+- **Counter**: an editable monospace timecode (`HH:MM:SS:FF` + Enter jumps) and an editable frame number. Playing keeps playing from there, paused stays paused on that frame, and cued/halted moves the cue.
+- **Audio meters** (`LevelMeter`): vertical, beside the input and output pictures, laid out in stereo pairs (1/2 ... 15/16).
+  - Levels come from ffmpeg itself: `asetnsamples=2400,astats=...,ametadata=mode=print:direct=1:file='pipe\:2'` on stderr. `direct=1` is essential, because without it the blocks arrive seconds late in one burst. FrameFeed parses them out of stderr.
+  - Input levels come from the preview capture (it now also captures audio, same input and channel count as a recording). Output levels come from the playout / hold / test-signal process.
+  - **Monitor pair** (`MONITOR_PAIR_CHOICE`, default 1/2): highlighted on the meters and sent to the relay output (`pan=stereo|c0=cN|c1=cN+1`, previously a downmix of every channel).
+- **Decklink page audio**: Monitor Audio (moved from Config), capture channels 8/16 (`DECKLINK_AUDIO_CHANNELS_CHOICE`, passed to the shell's `-channels`), and a readout of the fixed 48 kHz DeckLink capture rate.
+- **ffplay monitor checkbox** (`FFPLAY_MONITOR_CHOICE`): ticked runs Record/Passthrough with the ffplay window and the selected View/scopes, as GTK does. Unticked shows the session in the Video Preview pane instead:
+  - The shell's player becomes an ffmpeg that writes BGRA frames to a named pipe the GUI serves (`PipeFeed`, `VRECORD_MONITOR_PIPE` = `//./pipe/vrecord-monitor-<pid>`, `VRECORD_MONITOR_SIZE`).
+  - Levels go to a small file the GUI tails (`VRECORD_MONITOR_LEVELS`). `ametadata` cannot open a pipe path, hence the file.
+  - Stop closes the GUI's pipe end, which ends the capture exactly like closing ffplay; the file is finalised. Verified with `vsignal monitortest` (timed and stopped).
+- **Test signal**: the card mode comes from the modes the card lists. A locked HD/UHD pattern keeps its raster at the highest same-family rate the card has (PQ 2160p at 50 Hz → 4k25 on an Intensity Pro 4K, where it used to exit with "nothing was written"). There is no `-re`, a single scale feeds both card and pane, and the real ffmpeg error is shown.
+- **Output connector persistence**: rebuilding the connector list from the hardware used to drop the saved choice back to Auto. It now restores it, like the input connector.
+- **Drag and drop**: folders onto the recording / auxiliary folder boxes (a dropped file uses its folder); media files onto the playout box or straight onto the output picture.
+- **fps readout**: counts frames over the last second instead of averaging 1/dt, which overstated bursty feeds (70 "fps" on a 50p input).
 - **Icon**: `qt6/resources/vrecord.ico` (the GTK launcher's icon) is embedded as the exe icon (`vrecord.rc`, also for vsignal) and set as the window icon (`vrecord.qrc`).
 - **Native preview framing**: the input pane is sized from the detected mode (960x540 for 1080, 648x486 for NTSC 4:3, using the Display Aspect choice for SD). It relaunches when the live mode differs from the one it was sized for.
 
@@ -79,6 +94,8 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
 - `vsignal probe`: driver state (connections, pass-through mode, detected input, output mode, pixel format, busy).
 - `vsignal sdktest [MODE] [SECONDS]`: colour bars straight through SDK 16 with driver-allocated frames, to tell card or cabling problems from ffmpeg ones.
 - `vsignal setout <mask>`: write and read back the output connection.
+- `vsignal signaltest`: the GUI's test signal across SD/HD/UHD patterns; reports the mode the card actually outputs.
+- `vsignal monitortest <OUT_DIR> [stop]`: records 8 s (or until Stop with `stop`) with the ffplay window off, and checks that frames and levels reach the GUI and the recording completes.
 - `vsignal transporttest [FILE]`: on the card, with the GUI's backend code and a throwaway config, checks relay → playout alongside preview → pause holds the on-wire frame → step +1 → resume → relay halts the file → Play resumes from the halted frame. Close the GUI first, since it holds the card.
 
 ## Known gaps

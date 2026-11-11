@@ -11,6 +11,8 @@
 #include <QImage>
 #include <QWidget>
 
+#include <deque>
+
 class VideoView : public QWidget {
     Q_OBJECT
 public:
@@ -40,5 +42,6 @@ private:
     QElapsedTimer m_clock;
     qint64 m_lastFrameNs = 0;
     double m_fps = 0.0;
+    std::deque<qint64> m_frameTimes;   // arrival times (ns) of the last second
     double m_aspect = 16.0 / 9.0;   // of the current (or last) feed
 };

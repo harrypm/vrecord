@@ -1,6 +1,7 @@
 #include "BackendController.h"
 
 #include "DeckLinkDiscovery.h"
+#include "PipeFeed.h"
 #include "VrecordOptions.h"
 
 #include <QCoreApplication>
@@ -47,7 +48,9 @@ QString lockedPatternSize(const QString& pattern) {
 }
 
 QString testVideoSourceForPattern(const QString& pattern, const VideoMode& mode) {
-    const QString size = lockedPatternSize(pattern).isEmpty() ? mode.size() : lockedPatternSize(pattern);
+    // generated at the card mode's raster (cardModeForTestSignal applies the
+    // pattern's locked raster when the card can play it)
+    const QString size = mode.size();
     const QString rate = mode.rate();
     if (pattern.contains(QStringLiteral("black"), Qt::CaseInsensitive)) {
         return QStringLiteral("color=c=black:size=%1:rate=%2").arg(size, rate);
@@ -113,6 +116,20 @@ QStringList previewPipeOutput(const QString& filterPrefix, int width, int height
             QStringLiteral("-f"), QStringLiteral("rawvideo"),
             QStringLiteral("-flush_packets"), QStringLiteral("1"),
             QStringLiteral("pipe:1")};
+}
+
+// per-channel peak/RMS every 2400 samples (50 ms at 48 kHz), printed to
+// stderr unbuffered (direct=1) for FrameFeed::audioLevels
+QString audioMeterFilter() {
+    return QStringLiteral("asetnsamples=n=2400:p=0,astats=metadata=1:reset=1:measure_perchannel=Peak_level+RMS_level:measure_overall=none,"
+                          "ametadata=mode=print:direct=1:file='pipe\\:2'");
+}
+
+// monitored stereo pair: MONITOR_PAIR_CHOICE "1/2", "3/4", ... -> 0, 1, ...
+int monitorPair(const VrecordConfig& config) {
+    const QString choice = config.value(QStringLiteral("MONITOR_PAIR_CHOICE"), QStringLiteral("1/2"));
+    const int first = choice.section(QLatin1Char('/'), 0, 0).toInt();
+    return first >= 1 ? (first - 1) / 2 : 0;
 }
 
 QString describeMode(const QString& code) {
@@ -313,6 +330,13 @@ FrameFeed* BackendController::startFeed(const QString& kind, const QList<FrameFe
             emit outputFrame(frame);
         }
     });
+    connect(feed, &FrameFeed::audioLevels, feed, [this, feed, isInput](const QVector<float>& peak, const QVector<float>& rms) {
+        if (isInput && feed == m_previewFeed) {
+            emit inputAudioLevels(peak, rms);
+        } else if (!isInput && (feed == m_playoutFeed || feed == m_testSignalFeed)) {
+            emit outputAudioLevels(peak, rms);
+        }
+    });
     connect(feed, &FrameFeed::streaming, feed, [this, isInput](const QString& label) {
         QString message = QStringLiteral("streaming (%1)").arg(label);
         if (isInput) {
@@ -448,6 +472,16 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
     env.insert(QStringLiteral("MSYS2_ARG_CONV_EXCL"), QStringLiteral("*"));
     env.insert(QStringLiteral("MSYS_NO_PATHCONV"), QStringLiteral("1"));
 
+    // ffplay monitor off: the session's monitor stream comes to the input pane
+    // (frames over a named pipe, levels through a small file) instead of an
+    // ffplay window
+    const bool qtMonitor = mode != QStringLiteral("audio check")
+                           && config.value(QStringLiteral("FFPLAY_MONITOR_CHOICE"), QStringLiteral("true")) == QStringLiteral("false")
+                           && config.value(QStringLiteral("DEVICE_INPUT_CHOICE"), QStringLiteral("0")) == QStringLiteral("0");
+    if (qtMonitor) {
+        startSessionMonitor(config, &env);
+    }
+
     auto* process = new QProcess(this);
     hideConsole(process);
     process->setProcessEnvironment(env);
@@ -465,6 +499,7 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
             m_shellProcess = nullptr;
             m_shellMode.clear();
         }
+        stopSessionMonitor();
         process->deleteLater();
         emit shellFinished(mode, status == QProcess::CrashExit ? -1 : exitCode, message);
     });
@@ -473,6 +508,7 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
         if (errorMessage) {
             *errorMessage = QStringLiteral("Failed to start the vrecord backend (%1).").arg(process->errorString());
         }
+        stopSessionMonitor();
         process->deleteLater();
         return false;
     }
@@ -482,6 +518,100 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
     return true;
 }
 
+bool BackendController::isSessionMonitorActive() const {
+    return m_monitorFeed && m_monitorFeed->isRunning();
+}
+
+void BackendController::startSessionMonitor(const VrecordConfig& config, QProcessEnvironment* env) {
+    stopSessionMonitor();
+    const VideoMode mode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    int width = 0;
+    int height = 0;
+    VideoModes::previewSize(mode.isValid() ? mode.height : 486,
+                            VideoModes::displayAspect(mode, config.value(QStringLiteral("ASPECT_RATIO_CHOICE"))), &width, &height);
+    m_monitorFeed = new PipeFeed(QStringLiteral("vrecord-monitor-%1").arg(QCoreApplication::applicationPid()), width, height, this);
+    PipeFeed* feed = m_monitorFeed;
+    connect(feed, &PipeFeed::frameReady, feed, [this, feed] {
+        if (feed == m_monitorFeed) {
+            emit inputFrame(feed->takeFrame());
+        }
+    });
+    feed->start();
+    // levels: the monitor player appends astats blocks to this file
+    m_monitorLevelsPath = QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-monitor-levels.txt"));
+    QFile::remove(m_monitorLevelsPath);
+    QFile(m_monitorLevelsPath).open(QIODevice::WriteOnly);
+    m_monitorLevelsOffset = 0;
+    m_levelText.clear();
+    if (!m_monitorLevelsTimer) {
+        m_monitorLevelsTimer = new QTimer(this);
+        m_monitorLevelsTimer->setInterval(50);
+        connect(m_monitorLevelsTimer, &QTimer::timeout, this, &BackendController::pollMonitorLevels);
+    }
+    m_monitorLevelsTimer->start();
+    QString escaped = QDir::fromNativeSeparators(m_monitorLevelsPath);
+    escaped.replace(QLatin1Char(':'), QStringLiteral("\\:"));
+    env->insert(QStringLiteral("VRECORD_MONITOR_PIPE"), feed->clientPath());
+    env->insert(QStringLiteral("VRECORD_MONITOR_SIZE"), QStringLiteral("%1x%2").arg(width).arg(height));
+    env->insert(QStringLiteral("VRECORD_MONITOR_LEVELS"), escaped);
+}
+
+void BackendController::stopSessionMonitor() {
+    if (m_monitorLevelsTimer) {
+        m_monitorLevelsTimer->stop();
+    }
+    if (m_monitorFeed) {
+        PipeFeed* feed = m_monitorFeed;
+        m_monitorFeed = nullptr;
+        feed->stop();
+        feed->deleteLater();
+    }
+}
+
+// tail the levels file and turn its astats blocks into inputAudioLevels
+void BackendController::pollMonitorLevels() {
+    QFile file(m_monitorLevelsPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    if (file.size() <= m_monitorLevelsOffset) {
+        return;
+    }
+    file.seek(m_monitorLevelsOffset);
+    const QByteArray data = file.readAll();
+    m_monitorLevelsOffset += data.size();
+    m_levelText.append(data);
+    qsizetype start = 0;
+    for (;;) {
+        const qsizetype newline = m_levelText.indexOf('\n', start);
+        if (newline < 0) {
+            break;
+        }
+        const QByteArray line = m_levelText.mid(start, newline - start).trimmed();
+        start = newline + 1;
+        if (line.startsWith("lavfi.astats.")) {
+            const QList<QByteArray> parts = line.mid(13).split('=');
+            const QList<QByteArray> head = parts.value(0).split('.');
+            const int channel = head.value(0).toInt() - 1;
+            if (channel >= 0 && channel < 32 && parts.size() == 2) {
+                const float value = parts.at(1).contains("inf") ? -120.0f : parts.at(1).toFloat();
+                QVector<float>& target = head.value(1) == "RMS_level" ? m_levelRms : m_levelPeak;
+                if (target.size() <= channel) {
+                    target.resize(channel + 1, -120.0f);
+                }
+                target[channel] = value;
+            }
+        } else if (line.startsWith("frame:")) {
+            if (!m_levelPeak.isEmpty()) {
+                emit inputAudioLevels(m_levelPeak, m_levelRms);
+            }
+            m_levelPeak.clear();
+            m_levelRms.clear();
+        }
+    }
+    m_levelText.remove(0, start);
+}
+
 bool BackendController::stopShell() {
     if (!isShellRunning()) {
         return true;
@@ -489,7 +619,15 @@ bool BackendController::stopShell() {
     // end it the way the user would: close the player window (WM_CLOSE, not a
     // kill) so the tee muxer finishes and the recording gets its trailer.
     // (taskkill's WINDOWTITLE filter does not match these titles reliably.)
-    const int closed = closePlayerWindows();
+    // in-pane monitor: closing our end of the pipe ends the monitor player,
+    // which ends the capture exactly like closing the ffplay window
+    int closed = 0;
+    if (m_monitorFeed) {
+        m_monitorFeed->stop();
+        closed = 1;
+    } else {
+        closed = closePlayerWindows();
+    }
     if (closed > 0 && m_shellProcess && m_shellProcess->waitForFinished(20000)) {
         return true;
     }
@@ -600,25 +738,38 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
                                 QStringLiteral("-fflags"), QStringLiteral("nobuffer"),
                                 QStringLiteral("-probesize"), QStringLiteral("32"),
                                 QStringLiteral("-analyzeduration"), QStringLiteral("0")};
+    // audio is captured too (same input and channel count as a recording) so
+    // the level meters show what would be recorded
+    const QString audioChannels = config.value(QStringLiteral("DECKLINK_AUDIO_CHANNELS_CHOICE"), QStringLiteral("8")).trimmed();
     QStringList deviceOptions{QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
-                              QStringLiteral("-raw_format"), QStringLiteral("uyvy422")};
+                              QStringLiteral("-raw_format"), QStringLiteral("uyvy422"),
+                              QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE"))),
+                              QStringLiteral("-channels"), audioChannels};
     // relay: capture the card's native 10-bit 4:2:2 (raw_format yuv422p10 =
     // v210 on the wire) and re-pack it as v210 for the output - no colour or
     // bit-depth conversion, the output carries the input frames at the input rate
     QStringList relayDeviceOptions{QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
                                    QStringLiteral("-raw_format"), QStringLiteral("yuv422p10"),
-                                   QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE")))};
+                                   QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE"))),
+                                   QStringLiteral("-channels"), audioChannels};
     const QStringList pipeOut{QStringLiteral("-map"), QStringLiteral("0:v:0"),
                               QStringLiteral("-vf"), QStringLiteral("scale=%1:%2:flags=fast_bilinear,setsar=1,format=bgra").arg(width).arg(height),
                               QStringLiteral("-an"),
                               QStringLiteral("-f"), QStringLiteral("rawvideo"),
                               QStringLiteral("-flush_packets"), QStringLiteral("1"),
-                              QStringLiteral("pipe:1")};
+                              QStringLiteral("pipe:1"),
+                              // level meters: astats per 50 ms block, printed live on stderr
+                              QStringLiteral("-map"), QStringLiteral("0:a:0"),
+                              QStringLiteral("-af"), audioMeterFilter(),
+                              QStringLiteral("-f"), QStringLiteral("null"), QStringLiteral("-")};
+    // relay audio: the monitored stereo pair (1/2 unless chosen otherwise)
+    const int pair = qBound(0, monitorPair(config), qMax(0, audioChannels.toInt() / 2 - 1));
     const QStringList relayOut{QStringLiteral("-map"), QStringLiteral("0:v:0"), QStringLiteral("-map"), QStringLiteral("0:a:0"),
                                // re-pack rather than -c:v copy: a copied stream keeps the capture's
                                // 1/1000000 time base and the muxer then cannot derive the mode
                                QStringLiteral("-c:v"), QStringLiteral("v210"), QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"),
-                               QStringLiteral("-ar"), QStringLiteral("48000"), QStringLiteral("-ac"), QStringLiteral("2"),
+                               QStringLiteral("-af"), QStringLiteral("pan=stereo|c0=c%1|c1=c%2").arg(pair * 2).arg(pair * 2 + 1),
+                               QStringLiteral("-ar"), QStringLiteral("48000"),
                                QStringLiteral("-f"), QStringLiteral("decklink"), relayDevice};
 
     const auto makeAttempt = [&](bool detect, bool withRelay) {
@@ -1152,7 +1303,12 @@ bool BackendController::launchFileOutputProcess(qint64 frame, bool hold, QString
               << QStringLiteral("-an")
               << QStringLiteral("-f") << QStringLiteral("rawvideo")
               << QStringLiteral("-flush_packets") << QStringLiteral("1")
-              << QStringLiteral("pipe:1");
+              << QStringLiteral("pipe:1")
+              // output level meters: the card's audio, downmixed the same way
+              << QStringLiteral("-map") << (hold ? QStringLiteral("1:a:0") : QStringLiteral("0:a:0?"))
+              << QStringLiteral("-ac") << QStringLiteral("2")
+              << QStringLiteral("-af") << audioMeterFilter()
+              << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
 
     FrameFeed::Attempt attempt;
     attempt.label = QStringLiteral("%1 %2 frame %3").arg(hold ? QStringLiteral("hold") : QStringLiteral("playout"), m_playbackMode.formatCode).arg(frame);
@@ -1411,6 +1567,66 @@ VideoMode BackendController::outputModeForTestSignal(const VrecordConfig& config
     return mode.isValid() ? mode : VideoModes::forStandard(QStringLiteral("NTSC"));
 }
 
+// The test signal's card mode: the output standard (Auto: the capture
+// Standard), or the raster a locked HD/UHD pattern is specified at - always
+// one the card lists. A locked raster keeps its size at the highest rate of the
+// same family the card supports (2160p50 -> 2160p25 on an Intensity Pro 4K);
+// otherwise the playout fallback keeps the rate on a smaller raster.
+VideoMode BackendController::cardModeForTestSignal(const VrecordConfig& config, const QString& pattern, const QString& device, QString* note) const {
+    VideoMode wanted = outputModeForTestSignal(config);
+    const QString locked = lockedPatternSize(pattern);
+    if (!locked.isEmpty()) {
+        wanted.width = locked.section(QLatin1Char('x'), 0, 0).toInt();
+        wanted.height = locked.section(QLatin1Char('x'), 1, 1).toInt();
+        wanted.fieldOrder.clear();   // locked patterns are progressive
+        if (wanted.formatCode == QStringLiteral("ntsc") || wanted.formatCode == QStringLiteral("pal")) {
+            // SD standard + HD pattern: 25 / 29.97 fps family
+            wanted.rateNum = wanted.formatCode == QStringLiteral("pal") ? 25 : 30000;
+            wanted.rateDen = wanted.formatCode == QStringLiteral("pal") ? 1 : 1001;
+        }
+    }
+    const QStringList supported = DeckLinkDiscovery::outputModeCodes(device);
+    const auto same = [](const VideoMode& a, const VideoMode& b) {
+        return a.width == b.width && a.height == b.height && qint64(a.rateNum) * b.rateDen == qint64(b.rateNum) * a.rateDen
+               && a.fieldOrder.isEmpty() == b.fieldOrder.isEmpty();
+    };
+    VideoMode sameRaster;
+    for (const QString& code : supported) {
+        const VideoMode mode = VideoModes::forCode(code);
+        if (!mode.isValid()) {
+            continue;
+        }
+        if (same(mode, wanted)) {
+            VideoMode exact = mode;
+            exact.fieldOrder = wanted.fieldOrder;
+            return exact;
+        }
+        // same raster and scan, a rate of the same family no higher than wanted
+        if (mode.width == wanted.width && mode.height == wanted.height && mode.fieldOrder.isEmpty() == wanted.fieldOrder.isEmpty()
+            && mode.fps() <= wanted.fps() + 0.01 && std::fmod(wanted.fps() + 0.01, mode.fps()) < 0.05
+            && (!sameRaster.isValid() || mode.fps() > sameRaster.fps())) {
+            sameRaster = mode;
+        }
+    }
+    if (supported.isEmpty()) {
+        return wanted;   // no mode list: try as requested
+    }
+    if (sameRaster.isValid()) {
+        if (note) {
+            *note = QStringLiteral("%1x%2 @ %3 is not supported by this card").arg(wanted.width).arg(wanted.height).arg(wanted.fps(), 0, 'f', 2);
+        }
+        return sameRaster;
+    }
+    MediaInfo media;
+    media.width = wanted.width;
+    media.height = wanted.height;
+    media.rateNum = wanted.rateNum;
+    media.rateDen = wanted.rateDen;
+    media.fieldOrder = wanted.fieldOrder;
+    const VideoMode fallback = nativePlayoutMode(media, device, note);
+    return fallback.isValid() ? fallback : wanted;
+}
+
 bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool enabled, QString* errorMessage) {
     if (!saveConfig(config, errorMessage)) {
         return false;
@@ -1441,12 +1657,17 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
 
-    VideoMode signalMode = outputModeForTestSignal(config);
     const QString pattern = config.value(QStringLiteral("TEST_SIGNAL_PATTERN_CHOICE")).trimmed();
     const QString audio = config.value(QStringLiteral("TEST_SIGNAL_AUDIO_CHOICE")).trimmed();
-    const QString videoSource = testVideoSourceForPattern(pattern, signalMode);
+    // the mode the card actually gets: the output standard, or the raster a
+    // locked HD/UHD pattern is specified at - but only in a mode this card can
+    // play out (an Intensity Pro 4K has UHD up to 30p, so 2160p50 -> 2160p25)
+    QString modeNote;
+    const VideoMode signalMode = cardModeForTestSignal(config, pattern, outputDevice, &modeNote);
     const QString audioSource = testAudioSource(audio);
+    const QString videoSource = testVideoSourceForPattern(pattern, signalMode);
     const QStringList videoFilters = videoFilterChainForPattern(pattern, signalMode);
+    const QString requestedSize = signalMode.size();
 
     // the test signal owns the card output exclusively - tear the other
     // outputs down FIRST and let the driver settle, otherwise the connector
@@ -1465,27 +1686,25 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
         return false;
     }
 
-    QStringList arguments;
-    arguments << QStringLiteral("-nostdin")
-              << QStringLiteral("-hide_banner")
-              << QStringLiteral("-loglevel") << QStringLiteral("error")
-              << QStringLiteral("-re")
-              << QStringLiteral("-f") << QStringLiteral("lavfi")
-              << QStringLiteral("-i") << videoSource
-              << QStringLiteral("-f") << QStringLiteral("lavfi")
-              << QStringLiteral("-i") << audioSource
-              << QStringLiteral("-map") << QStringLiteral("0:v")
-              << QStringLiteral("-map") << QStringLiteral("1:a");
+    // no -re: the DeckLink muxer's backpressure paces lavfi to the card clock
+    QStringList head{QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
+                     QStringLiteral("-loglevel"), QStringLiteral("error"),
+                     QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"), videoSource,
+                     QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"), audioSource};
+    const QStringList cardOutput{QStringLiteral("-metadata"), QStringLiteral("comment=vrecord-test-signal"),
+                                 QStringLiteral("-c:v"), QStringLiteral("v210"),
+                                 QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"),
+                                 QStringLiteral("-ar"), QStringLiteral("48000"),
+                                 QStringLiteral("-ac"), QStringLiteral("2"),
+                                 QStringLiteral("-preroll"), QString::number(kPlayoutPreroll, 'f', 2),
+                                 QStringLiteral("-f"), QStringLiteral("decklink"), outputDevice};
+    // CLI (detached) form: card only
+    QStringList arguments = head;
+    arguments << QStringLiteral("-map") << QStringLiteral("0:v") << QStringLiteral("-map") << QStringLiteral("1:a");
     if (!videoFilters.isEmpty()) {
         arguments << QStringLiteral("-vf") << videoFilters.join(QLatin1Char(','));
     }
-    arguments << QStringLiteral("-metadata") << QStringLiteral("comment=vrecord-test-signal")
-              << QStringLiteral("-c:v") << QStringLiteral("v210")
-              << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le")
-              << QStringLiteral("-ar") << QStringLiteral("48000")
-              << QStringLiteral("-ac") << QStringLiteral("2")
-              << QStringLiteral("-f") << QStringLiteral("decklink")
-              << outputDevice;
+    arguments << cardOutput;
 
     if (s_testMode) {
         s_captured << (ffmpegPath() + QLatin1Char(' ') + arguments.join(QLatin1Char(' ')));
@@ -1493,35 +1712,43 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
     }
 
     const QString pidPath = testSignalPidPath();
-    const QString requestedSize = lockedPatternSize(pattern).isEmpty() ? signalMode.size() : lockedPatternSize(pattern);
     // launch, verify liveness, then verify the card actually locked the
     // requested raster: a silent connector revert (teardown race) would
     // stream the bars into a stale connector while the HDMI monitor stays dark
     const auto launchSignal = [&]() -> bool {
         if (m_managedOutputs) {
-            // GUI: one process for the card and the output pane
-            const QStringList sizeParts = requestedSize.split(QLatin1Char('x'));
-            const int srcW = sizeParts.value(0).toInt();
-            const int srcH = sizeParts.value(1).toInt();
+            // GUI: one process for the card and the output pane, both from
+            // the same generated (and conformed) frames
             const double aspect = (signalMode.formatCode == QStringLiteral("ntsc") || signalMode.formatCode == QStringLiteral("pal"))
-                                          && lockedPatternSize(pattern).isEmpty()
                                       ? VideoModes::displayAspect(signalMode, config.value(QStringLiteral("ASPECT_RATIO_CHOICE")))
-                                      : (srcH > 0 ? double(srcW) / srcH : 16.0 / 9.0);
+                                      : (signalMode.height > 0 ? double(signalMode.width) / signalMode.height : 16.0 / 9.0);
             int width = 0;
             int height = 0;
-            VideoModes::previewSize(srcH, aspect, &width, &height);
+            VideoModes::previewSize(signalMode.height, aspect, &width, &height);
+            QString chain = videoFilters.join(QLatin1Char(','));
+            chain += (chain.isEmpty() ? QString() : QStringLiteral(",")) + QStringLiteral("format=yuv422p10le");
             FrameFeed::Attempt attempt;
-            attempt.label = QStringLiteral("test signal %1").arg(requestedSize);
-            attempt.arguments = arguments;
-            attempt.arguments << previewPipeOutput(videoFilters.join(QLatin1Char(',')), width, height);
-            m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(2.0 * kDefaultPreroll * signalMode.fps()));
+            attempt.label = QStringLiteral("test signal %1 %2").arg(signalMode.formatCode, requestedSize);
+            attempt.arguments = head;
+            attempt.arguments << QStringLiteral("-filter_complex")
+                              << QStringLiteral("[0:v]%1,split=2[card][pane];[pane]scale=%2:%3:flags=fast_bilinear,format=bgra[view]")
+                                     .arg(chain).arg(width).arg(height)
+                              << QStringLiteral("-map") << QStringLiteral("[card]") << QStringLiteral("-map") << QStringLiteral("1:a")
+                              << cardOutput
+                              << QStringLiteral("-map") << QStringLiteral("[view]") << QStringLiteral("-an")
+                              << QStringLiteral("-f") << QStringLiteral("rawvideo") << QStringLiteral("-flush_packets") << QStringLiteral("1")
+                              << QStringLiteral("pipe:1")
+                              << QStringLiteral("-map") << QStringLiteral("1:a") << QStringLiteral("-af") << audioMeterFilter()
+                              << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
+            m_testSignalFeed = startFeed(QStringLiteral("output"), {attempt}, width, height, qRound(2.0 * kPlayoutPreroll * signalMode.fps()));
             QThread::msleep(1500);
             if (!m_testSignalFeed || !m_testSignalFeed->isRunning()) {
-                const QString tail = m_testSignalFeed ? m_testSignalFeed->stderrTail().trimmed().section(QLatin1Char('\n'), -1) : QString();
+                const QString tail = m_testSignalFeed ? m_testSignalFeed->stderrTail().trimmed() : QString();
                 stopFeed(m_testSignalFeed);
                 if (errorMessage) {
                     *errorMessage = tail.isEmpty() ? QStringLiteral("Test signal output exited immediately.")
-                                                   : QStringLiteral("Test signal output failed: %1").arg(tail);
+                                                   : QStringLiteral("Test signal output failed (%1): %2").arg(describeMode(signalMode.formatCode),
+                                                                                                             tail.section(QLatin1Char('\n'), -3));
                 }
                 return false;
             }
@@ -1570,7 +1797,8 @@ bool BackendController::setTestSignalOutput(const VrecordConfig& config, bool en
             }
         }
     }
-    emit outputStatus(QStringLiteral("test signal: %1, %2").arg(pattern, requestedSize));
+    emit outputStatus(QStringLiteral("test signal: %1, %2%3").arg(pattern, describeMode(signalMode.formatCode),
+                                                                   modeNote.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(modeNote)));
     return true;
 }
 

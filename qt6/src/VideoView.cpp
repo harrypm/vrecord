@@ -30,10 +30,16 @@ void VideoView::setFrame(const QImage& frame) {
         return;
     }
     const qint64 now = m_clock.nsecsElapsed();
-    if (m_lastFrameNs > 0) {
-        const double instant = 1e9 / double(qMax<qint64>(now - m_lastFrameNs, 1));
-        // smoothed for the on-screen readout only
-        m_fps = m_fps <= 0 ? instant : m_fps * 0.9 + instant * 0.1;
+    // frames counted over the last second: averaging instantaneous 1/dt
+    // overstates the rate when frames arrive in small bursts (70 "fps" for a
+    // 50p source), a windowed count does not
+    m_frameTimes.push_back(now);
+    while (m_frameTimes.size() > 2 && now - m_frameTimes.front() > 1000000000LL) {
+        m_frameTimes.pop_front();
+    }
+    if (m_frameTimes.size() >= 2) {
+        const qint64 span = m_frameTimes.back() - m_frameTimes.front();
+        m_fps = span > 0 ? double(m_frameTimes.size() - 1) * 1e9 / double(span) : m_fps;
     }
     m_lastFrameNs = now;
     // a feed with a new shape (another input mode, another file) re-shapes
@@ -54,6 +60,7 @@ void VideoView::clearFrame(const QString& message) {
     m_message = message;
     m_lastFrameNs = 0;
     m_fps = 0.0;
+    m_frameTimes.clear();
     update();
 }
 
