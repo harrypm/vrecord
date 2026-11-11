@@ -19,15 +19,20 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # a normal run takes ~15 min; a runner whose DNS died left apt retrying
+    # for 2 h 20 min (2026-11-11): cap the job and make apt fail fast instead
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Install build dependencies
+        timeout-minutes: 50
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          APT_NET="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get $APT_NET update
+          sudo apt-get $APT_NET install -y --no-install-recommends \
             build-essential curl libgtk2.0-dev libgtk-3-dev bison flex texinfo \
             git mkvtoolnix gnuplot xmlstarlet mpv mediaconch \
             libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools \
