@@ -115,3 +115,21 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
 ## Known gaps
 - FFV1 10-bit at 1080p50 encodes slower than real time on the test PC. A 10 s capture queued about 5 GB of frames in RAM before draining, so long HD FFV1 captures need a faster CPU or a lighter codec.
 - The shell's `_review_option` and STANDARD_OPTIONS still only accept HD standards with `HD_CHOICE=true`; the Qt frontend sets it on save.
+
+## Installer, portable package and updates (2026-11-13)
+- **Two Windows packages** per release: `vrecord_<tag>_windows_x86_64_setup.exe` (NSIS, `Release/windows-installer.nsi`, built by `Release/build-windows-installer.sh`) and `vrecord_<tag>_windows_x86_64_portable.zip`. The portable package carries `portable.txt`; the installer drops it, along with run logs and local settings from a developer's package folder.
+- **Installer**: per user, no admin rights, into `%LOCALAPPDATA%\Programs\vrecord`. It adds Start Menu shortcuts (Qt6, legacy GTK, uninstall), an optional desktop shortcut and an Apps & features entry, and warns when Desktop Video (DeckLink COM class) or a bash is missing. Silent mode: `setup.exe /S /D=<folder>` (`/D=` last, unquoted). The install folder always ends in `vrecord`, so the uninstaller's recursive delete can never hit a shared folder. The uninstaller removes a desktop shortcut only if the installer made it.
+- **Updater** (`qt6/src/UpdateManager.*`, Config > Updates): modes Off / notify (default) / download automatically and install on close, plus "Check for updates" and "Install and restart".
+  - It reads the latest *published* GitHub release of `VRECORD_UPDATE_REPO` (CMake cache variable; CI sets it to the building repository). It compares the release tag with `VERSION` from the `vrecord` script, which CMake stamps into the app, and checks at most once a day, 5 s after start.
+  - It picks the asset for this copy and refuses it unless `SHA256SUMS.txt` lists a matching hash.
+  - Portable copies unpack the zip with Windows' `tar.exe` into a staging folder.
+  - `apply-update.ps1` waits for vrecord to exit. It then runs the setup silently, or robocopies the staging folder over the package (user files stay), and restarts vrecord only for "Install and restart". It runs robocopy by full path through `Start-Process`: started from MSYS, PATH/PATHEXT can be missing, and then `& robocopy` is "a document".
+  - The updater never prompts during a recording and refuses to install while one runs.
+- **Release check**: `release.yml` fails when the tag's numbers don't match `VERSION`, since the updater would otherwise offer the release forever or never.
+- **Tests**: `VrecordQt6.exe --update-test <release JSON url> [--expect-fail] [--apply]` runs the updater headless (`VRECORD_UPDATE_API`). `Release/ci/windows-update-tests.sh <pkg> <zip> <setup>` (CI, and run locally) builds a fake v9999.1.1 release from file:// URLs and checks:
+  - the portable update, and that a wrong SHA256 is refused;
+  - the portable apply (files replaced, user files kept);
+  - silent install (files, no portable.txt, no logs, uninstall entry, Start Menu);
+  - the installed copy updating itself through the silent setup;
+  - silent uninstall (all removed, desktop untouched).
+- Gotcha: to MSYS `cp`, `vrecord` and `Vrecord.exe` are the same name, so cp skips the backend script. Copy package trees with robocopy (or tar).

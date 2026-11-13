@@ -5,6 +5,11 @@ name: Release
 # workflows build-and-test.yml uses, then upload every binary to a single
 # GitHub release (created as a draft with generated notes; publish it by hand).
 #
+# The Windows updater (VrecordQt6 > Config > Updates) offers only PUBLISHED
+# releases: nothing reaches users until the draft is published. The tag must
+# match VERSION in the vrecord script (checked below), and the release must
+# carry SHA256SUMS.txt (the updater refuses unverified downloads).
+#
 # Trigger: push a v* tag, or run manually with create_release + tag_name
 # (the tag must already exist). A manual run without create_release only
 # builds and tests (no release).
@@ -81,6 +86,28 @@ jobs:
           fi
           echo "publish_release=${PUBLISH}" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/checkout@v7
+        if: steps.resolve.outputs.publish_release == 'true'
+        with:
+          ref: ${{ steps.resolve.outputs.checkout_ref }}
+
+      # the Windows updater compares the release tag with the VERSION the app
+      # was built with: a tag that does not match VERSION would be offered
+      # as an update forever (or never)
+      - name: The tag matches the vrecord VERSION
+        if: steps.resolve.outputs.publish_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          TAG="${{ steps.resolve.outputs.release_tag }}"
+          digits() { echo "$1" | grep -oE '[0-9]+' | sed -E 's/^0+([0-9])/\1/' | tr '\n' '.' ; }
+          if [ "$(digits "$VERSION")" != "$(digits "$TAG")" ]; then
+            echo "::error::tag ${TAG} does not match VERSION=\"${VERSION}\" in vrecord - bump VERSION (or tag v${VERSION//-/.})"
+            exit 1
+          fi
+          echo "tag ${TAG} matches VERSION ${VERSION}"
+
   build-linux:
     name: Build Linux
     needs: resolve-tag
@@ -134,6 +161,7 @@ jobs:
           need "Linux .deb"            '*.deb'                          "vrecord_${T}_linux_amd64.deb"
           need "Linux AppImage"        '*.AppImage'                     "vrecord_${T}_linux_x86_64.AppImage"
           need "Windows portable zip"  '*_windows_x86_64_portable.zip'  "vrecord_${T}_windows_x86_64_portable.zip"
+          need "Windows installer"     '*_windows_x86_64_setup.exe'     "vrecord_${T}_windows_x86_64_setup.exe"
           for arch in x86_64 arm64 universal; do
             dmg="$(find "dist/vrecord-macos-${arch}" -type f -name '*.dmg' | head -n 1)"
             app="$(find "dist/vrecord-macos-${arch}" -type f -name '*.app.zip' | head -n 1)"

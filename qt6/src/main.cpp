@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -42,12 +43,67 @@ int main(int argc, char* argv[]) {
 
     bool selfTestMode = false;
     QString startTab;
+    QString updateTestApi;
+    bool updateTestExpectFail = false;
+    bool updateTestApply = false;
     for (int i = 1; i < argc; ++i) {
         if (QByteArray(argv[i]) == QByteArray("--self-test")) {
             selfTestMode = true;
         } else if (QByteArray(argv[i]) == QByteArray("--tab") && i + 1 < argc) {
             startTab = QString::fromLocal8Bit(argv[++i]);
+        } else if (QByteArray(argv[i]) == QByteArray("--update-test") && i + 1 < argc) {
+            updateTestApi = QString::fromLocal8Bit(argv[++i]);
+        } else if (QByteArray(argv[i]) == QByteArray("--expect-fail")) {
+            updateTestExpectFail = true;
+        } else if (QByteArray(argv[i]) == QByteArray("--apply")) {
+            updateTestApply = true;
         }
+    }
+    // --update-test <release JSON url> [--expect-fail] [--apply]: the updater
+    // end to end without a window - check, download, SHA256 verify, unpack
+    // (portable); --apply then starts the real install helper. Report:
+    // VrecordQt6-update-test.log; exit 0 when the outcome is the expected one.
+    if (!updateTestApi.isEmpty()) {
+        qputenv("VRECORD_UPDATE_API", updateTestApi.toUtf8());
+        QFile reportFile(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-update-test.log")));
+        reportFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate);
+        QTextStream report(&reportFile);
+        const auto say = [&report](const QString& line) { report << line << '\n'; report.flush(); };
+        UpdateManager updates(packageRoot);
+        say(QStringLiteral("version=%1 kind=%2 api=%3").arg(UpdateManager::currentVersion(), updates.installKind(), updateTestApi));
+        bool succeeded = false;
+        QEventLoop loop;
+        QObject::connect(&updates, &UpdateManager::checkFinished, &loop,
+                         [&](bool ok, bool available, const UpdateInfo& info, const QString& message) {
+            say(QStringLiteral("check ok=%1 available=%2 tag=%3 asset=%4: %5")
+                    .arg(int(ok)).arg(int(available)).arg(info.tag, info.assetName, message));
+            if (ok && available) {
+                updates.download(info);
+            } else {
+                loop.quit();
+            }
+        });
+        QObject::connect(&updates, &UpdateManager::downloadFinished, &loop, [&](bool ok, const QString& message) {
+            say(QStringLiteral("download ok=%1: %2").arg(int(ok)).arg(message));
+            succeeded = ok;
+            if (ok && updateTestApply) {
+                QString error;
+                const bool started = updates.launchInstall(QCoreApplication::applicationPid(), false, &error);
+                say(QStringLiteral("apply started=%1 %2").arg(int(started)).arg(error));
+                say(QStringLiteral("apply-log=%1").arg(QDir::fromNativeSeparators(updates.applyLogPath())));
+                succeeded = started;
+            }
+            loop.quit();
+        });
+        QTimer::singleShot(0, &updates, [&updates] { updates.check(true); });
+        QTimer::singleShot(600000, &loop, [&] { say(QStringLiteral("timed out")); loop.quit(); });
+        loop.exec();
+        const bool expected = updateTestExpectFail ? !succeeded : succeeded;
+        say(QStringLiteral("%1: update %2 (expected %3)")
+                .arg(expected ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
+                     succeeded ? QStringLiteral("succeeded") : QStringLiteral("refused/failed"),
+                     updateTestExpectFail ? QStringLiteral("refusal") : QStringLiteral("success")));
+        return expected ? 0 : 1;
     }
     if (selfTestMode) {
         // test mode BEFORE the window exists: its constructor must not start

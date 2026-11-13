@@ -36,7 +36,8 @@ if [[ -f "$ROOT/qt6/CMakeLists.txt" ]] && command -v cmake >/dev/null 2>&1 ; the
   rm -rf "$QT_BUILD_DIR"
   cmake -S "$ROOT/qt6" -B "$QT_BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DDECKLINK_INCLUDE_DIR="$BUILD_DIR/decklink-include"
+    -DDECKLINK_INCLUDE_DIR="$BUILD_DIR/decklink-include" \
+    -DVRECORD_UPDATE_REPO="${VRECORD_UPDATE_REPO:-harrypm/vrecord}"
   cmake --build "$QT_BUILD_DIR" --config Release
   if [[ -f "$QT_BUILD_DIR/VrecordQt6.exe" ]]; then
     cp -f "$QT_BUILD_DIR/VrecordQt6.exe" "$PKG/"
@@ -179,12 +180,39 @@ Run:
   vrecord.cmd -s testid
   vrecord.cmd mytape
 
+Install or portable:
+  - vrecord_<version>_windows_x86_64_setup.exe installs for the current user
+    (no administrator rights) into %LOCALAPPDATA%\\Programs\\vrecord, with
+    Start Menu shortcuts and an Apps & features entry.
+  - vrecord_<version>_windows_x86_64_portable.zip runs from any folder
+    (portable.txt marks it as portable).
+
+Updates (VrecordQt6 > Config > Updates):
+  - Off / tell me when an update is available (default) / download
+    automatically and install when vrecord closes. "Check for updates" and
+    "Install and restart" work in every mode.
+  - Only published GitHub releases are offered. Every download is checked
+    against the release's SHA256SUMS.txt and refused when it does not match.
+  - Installed copies run the new setup silently; portable copies unpack the
+    new zip over this folder (files the zip does not carry, such as your
+    logs, stay). Nothing is installed while a recording is running.
+  - The install helper's log: %TEMP%\\vrecord-update\\<tag>\\apply-update.log
+
 Notes:
   - Output directories must be normal Windows paths (e.g. C:/Captures).
   - ffmpeg-ma is a MinGW build with decklink indev/outdev and drawtext
     (freetype/harfbuzz) enabled - see Release/build-ffmpeg-windows.sh.
   - gtkdialog GUI is GTK3-based; preview uses a Windows-safe image path.
   - Only the Desktop Video driver is a system install; everything else is bundled.
+EOF
+
+# marks a portable copy: its updater replaces the files in place from the
+# portable zip (the installer deletes this file; an installed copy updates
+# with the setup)
+cat > "$PKG/portable.txt" << EOF
+vrecord ${VERSION} portable package.
+Updates (Config > Updates) unpack the new portable zip over this folder.
+Delete this file only if this folder was installed with the vrecord setup.
 EOF
 
 (

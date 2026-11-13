@@ -27,6 +27,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPlainTextEdit>
 #include <QPair>
 #include <QPixmap>
@@ -244,7 +245,164 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
     }
     // indicator lights: checked in the background once the window is up
     QTimer::singleShot(300, this, &MainWindow::refreshComponents);
+    // update check: a few seconds after start, at most once a day (never in
+    // the self-test)
+    if (!BackendController::testMode() && m_updates->mode() != UpdateManager::Mode::Off && m_updates->checkDue()) {
+        QTimer::singleShot(5000, this, [this] { m_updates->check(false); });
+    }
     selfTestTrace(QStringLiteral("ctor: done"));
+}
+
+// ---------------------------------------------------------------- updates
+
+QWidget* MainWindow::buildUpdatesPage(QWidget* parent) {
+    m_updates = new UpdateManager(m_backend.packageRoot(), this);
+    auto* page = new QWidget(parent);
+    auto* layout = new QVBoxLayout(page);
+    auto* form = new QFormLayout();
+    auto* versionLabel = new QLabel(QStringLiteral("%1 (%2 copy, updates from github.com/%3)")
+                                        .arg(UpdateManager::currentVersion(), m_updates->installKind(), UpdateManager::repository()),
+                                    page);
+    versionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(QStringLiteral("This version"), versionLabel);
+    m_updateModeCombo = new QComboBox(page);
+    m_updateModeCombo->addItem(QStringLiteral("Off"), int(UpdateManager::Mode::Off));
+    m_updateModeCombo->addItem(QStringLiteral("Tell me when an update is available"), int(UpdateManager::Mode::Notify));
+    m_updateModeCombo->addItem(QStringLiteral("Download automatically, install when vrecord closes"), int(UpdateManager::Mode::Auto));
+    m_updateModeCombo->setCurrentIndex(m_updateModeCombo->findData(int(m_updates->mode())));
+    form->addRow(QStringLiteral("Automatic updates"), m_updateModeCombo);
+    layout->addLayout(form);
+
+    auto* buttons = new QHBoxLayout();
+    m_updateCheckButton = new QPushButton(QStringLiteral("Check for updates"), page);
+    m_updateInstallButton = new QPushButton(QStringLiteral("Install and restart"), page);
+    m_updateInstallButton->setEnabled(false);
+    m_updateInstallButton->setToolTip(QStringLiteral("Close vrecord, install the downloaded update and start it again"));
+    buttons->addWidget(m_updateCheckButton);
+    buttons->addWidget(m_updateInstallButton);
+    buttons->addStretch(1);
+    layout->addLayout(buttons);
+    m_updateProgress = new QProgressBar(page);
+    m_updateProgress->setVisible(false);
+    layout->addWidget(m_updateProgress);
+    m_updateStatus = new QLabel(QStringLiteral("Not checked yet."), page);
+    m_updateStatus->setWordWrap(true);
+    m_updateStatus->setTextFormat(Qt::RichText);
+    m_updateStatus->setOpenExternalLinks(true);
+    layout->addWidget(m_updateStatus);
+    layout->addStretch(1);
+
+    connect(m_updateModeCombo, &QComboBox::currentIndexChanged, this, [this] {
+        m_updates->setMode(UpdateManager::Mode(m_updateModeCombo->currentData().toInt()));
+    });
+    connect(m_updateCheckButton, &QPushButton::clicked, this, [this] {
+        if (m_updates->isReady()) {
+            setUpdateStatus(QStringLiteral("Update %1 is downloaded and ready to install.").arg(m_updates->pendingInfo().tag));
+            return;
+        }
+        m_updateCheckButton->setEnabled(false);
+        setUpdateStatus(QStringLiteral("Checking ..."));
+        m_updateCheckUserInitiated = true;
+        m_updates->check(true);
+    });
+    connect(m_updateInstallButton, &QPushButton::clicked, this, &MainWindow::installUpdateNow);
+    connect(m_updates, &UpdateManager::checkFinished, this, &MainWindow::onUpdateCheckFinished);
+    connect(m_updates, &UpdateManager::downloadProgress, this, [this](qint64 received, qint64 total) {
+        m_updateProgress->setVisible(true);
+        m_updateProgress->setRange(0, total > 0 ? 1000 : 0);
+        if (total > 0) {
+            m_updateProgress->setValue(int(received * 1000 / total));
+        }
+        m_updateProgress->setFormat(QStringLiteral("%1 of %2 MB").arg(received / 1048576).arg(total / 1048576));
+    });
+    connect(m_updates, &UpdateManager::downloadFinished, this, &MainWindow::onUpdateDownloaded);
+    return page;
+}
+
+void MainWindow::setUpdateStatus(const QString& text) {
+    m_updateStatus->setText(text.toHtmlEscaped());
+}
+
+void MainWindow::onUpdateCheckFinished(bool ok, bool available, const UpdateInfo& info, const QString& message) {
+    const bool userInitiated = m_updateCheckUserInitiated;
+    m_updateCheckUserInitiated = false;
+    m_updateCheckButton->setEnabled(true);
+    if (!ok || !available) {
+        setUpdateStatus(message);
+        if (userInitiated && !ok) {
+            appendActivity(QStringLiteral("update check: %1").arg(message));
+        }
+        return;
+    }
+    appendActivity(QStringLiteral("update: %1").arg(message));
+    m_updateStatus->setText(QStringLiteral("%1 <a href=\"%2\">Release notes</a>")
+                                .arg(message.toHtmlEscaped(), info.pageUrl.toString(QUrl::FullyEncoded).toHtmlEscaped()));
+    if (m_updates->mode() == UpdateManager::Mode::Auto) {
+        startUpdateDownload(info);
+        return;
+    }
+    statusBar()->showMessage(QStringLiteral("vrecord %1 is available - Config > Updates").arg(info.tag), 15000);
+    // never interrupt a recording with a prompt: the status line says it
+    if (m_backend.isShellRunning()) {
+        return;
+    }
+    auto* box = new QMessageBox(QMessageBox::Information, QStringLiteral("vrecord update"),
+                                QStringLiteral("vrecord %1 is available (this copy: %2).\n\nDownload and install it?")
+                                    .arg(info.tag, UpdateManager::currentVersion()),
+                                QMessageBox::NoButton, this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    if (!info.notes.isEmpty()) {
+        box->setDetailedText(info.notes.left(4000));
+    }
+    QPushButton* downloadButton = box->addButton(QStringLiteral("Download"), QMessageBox::AcceptRole);
+    box->addButton(QStringLiteral("Later"), QMessageBox::RejectRole);
+    QPushButton* skipButton = box->addButton(QStringLiteral("Skip this version"), QMessageBox::DestructiveRole);
+    connect(box, &QMessageBox::finished, this, [this, box, downloadButton, skipButton, info] {
+        if (box->clickedButton() == downloadButton) {
+            startUpdateDownload(info);
+        } else if (box->clickedButton() == skipButton) {
+            m_updates->setSkippedTag(info.tag);
+            setUpdateStatus(QStringLiteral("Update %1 skipped - Check for updates still offers it.").arg(info.tag));
+        }
+    });
+    box->open();   // non-modal: the window keeps working
+}
+
+void MainWindow::startUpdateDownload(const UpdateInfo& info) {
+    setUpdateStatus(QStringLiteral("Downloading %1 ...").arg(info.assetName));
+    m_updateCheckButton->setEnabled(false);
+    m_updateProgress->setVisible(true);
+    m_updateProgress->setRange(0, 0);
+    m_updates->download(info);
+}
+
+void MainWindow::onUpdateDownloaded(bool ok, const QString& message) {
+    m_updateCheckButton->setEnabled(true);
+    m_updateProgress->setVisible(false);
+    appendActivity(QStringLiteral("update: %1").arg(message));
+    if (!ok) {
+        setUpdateStatus(message);
+        return;
+    }
+    const QString tag = m_updates->pendingInfo().tag;
+    m_updateInstallButton->setEnabled(true);
+    // installs when the window closes; "Install and restart" does it now
+    m_installUpdateOnExit = true;
+    setUpdateStatus(QStringLiteral("Update %1 is ready. It installs when vrecord closes, or now with Install and restart.").arg(tag));
+    statusBar()->showMessage(QStringLiteral("Update %1 ready - installs when vrecord closes").arg(tag), 15000);
+}
+
+void MainWindow::installUpdateNow() {
+    if (!m_updates->isReady()) {
+        return;
+    }
+    if (m_backend.isShellRunning()) {
+        showError(QStringLiteral("A %1 session is running - stop it before installing the update.").arg(m_backend.shellMode()));
+        return;
+    }
+    m_restartAfterUpdate = true;
+    close();   // closeEvent cleans up and starts the installer
+    m_restartAfterUpdate = false;   // still open: the close was cancelled
 }
 
 // ---------------------------------------------------------------- deck control
@@ -892,6 +1050,7 @@ void MainWindow::buildUi() {
     auto* themeForm = new QFormLayout(themePage);
     themeForm->addRow(QStringLiteral("Select Theme"), m_themeCombo);
     prefTabs->addTab(themePage, QStringLiteral("Themes"));
+    prefTabs->addTab(buildUpdatesPage(prefTabs), QStringLiteral("Updates"));
 
     auto* lowerConfigRow = new QHBoxLayout();
     auto* invertBox = new QGroupBox(QStringLiteral("Invert Audio Phase"), configTab);
@@ -1772,6 +1931,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     m_backend.stopVideoPreview();
     QString ignored;
     m_backend.stopAllOutputs(m_config, &ignored);
+    // a verified update installs once this process has exited (the helper
+    // waits for it); it restarts vrecord only for "Install and restart"
+    if (m_updates && m_updates->isReady() && (m_installUpdateOnExit || m_restartAfterUpdate)) {
+        QString updateError;
+        if (!m_updates->launchInstall(QCoreApplication::applicationPid(), m_restartAfterUpdate, &updateError)) {
+            QMessageBox::warning(this, QStringLiteral("vrecord update"), updateError);
+        }
+    }
     QMainWindow::closeEvent(event);
 }
 

@@ -3,6 +3,7 @@
 #include "BackendController.h"
 #include "ComponentStatus.h"
 #include "DeckLinkDiscovery.h"
+#include "UpdateManager.h"
 #include "VrecordConfig.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -26,6 +27,7 @@ class VideoView;
 class DeckControl;
 class QGridLayout;
 class QProcess;
+class QProgressBar;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -52,6 +54,7 @@ private slots:
     void setTestSignalOutput();
     void applyVideoOutputConnection();
     void openLegacyUi();
+    void installUpdateNow();
     void updateDerivedState();
 
 private:
@@ -182,6 +185,21 @@ private:
     QGridLayout* m_componentsGrid = nullptr;
     QLabel* m_componentsSummary = nullptr;
     QPushButton* m_componentsRecheck = nullptr;
+    // updates (Config > Updates)
+    QWidget* buildUpdatesPage(QWidget* parent);
+    void setUpdateStatus(const QString& text);
+    void onUpdateCheckFinished(bool ok, bool available, const UpdateInfo& info, const QString& message);
+    void startUpdateDownload(const UpdateInfo& info);
+    void onUpdateDownloaded(bool ok, const QString& message);
+    UpdateManager* m_updates = nullptr;
+    QComboBox* m_updateModeCombo = nullptr;
+    QPushButton* m_updateCheckButton = nullptr;
+    QPushButton* m_updateInstallButton = nullptr;
+    QProgressBar* m_updateProgress = nullptr;
+    QLabel* m_updateStatus = nullptr;
+    bool m_updateCheckUserInitiated = false;
+    bool m_installUpdateOnExit = false;
+    bool m_restartAfterUpdate = false;
     QGroupBox* m_dvPackagerBox = nullptr;
     bool m_componentsChecking = false;
     QPlainTextEdit* m_previewInfoText = nullptr;
