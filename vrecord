@@ -676,8 +676,16 @@ _gtk_vbox_list() {
     # comboboxtext only treats <input> as a shell command with the explicit
     # "command:" prefix - without it the value is read as a FILE name and the
     # dropdown never fills (decklink detection appeared dead on Windows)
+    # the Video Preview page uses compact one-line dropdowns (label beside a
+    # native dropdown) so its output column fits without scrolling
+    local GUI_INLINE=false
+    case "${VARIABLE_NAME}" in
+        PREVIEW_RELAY_DEV_CHOICE|TEST_SIGNAL_PATTERN_CHOICE|TEST_SIGNAL_AUDIO_CHOICE) GUI_INLINE=true ;;
+    esac
+    local GUI_DROPDOWN="${GUI_INLINE}"
+    [[ "${OS_TYPE}" = "windows" ]] && GUI_DROPDOWN=true
     local INPUT_PREFIX=""
-    [[ "${OS_TYPE}" = "windows" ]] && INPUT_PREFIX="command:"
+    "${GUI_DROPDOWN}" && INPUT_PREFIX="command:"
     if [[ "${VARIABLE_NAME}" == "DECKLINK_INPUT_CHOICE" ]] ; then
         LIST="<input>${INPUT_PREFIX}_get_decklink_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "PREVIEW_RELAY_DEV_CHOICE" ]] ; then
@@ -766,13 +774,15 @@ _gtk_vbox_list() {
     local GUI_LIST_CLOSE="</list>"
     local GUI_LIST_LABEL="<label>${LABEL}</label>"
     local GUI_LIST_DEFAULT=""
-    if [[ "${OS_TYPE}" = "windows" ]] ; then
+    if "${GUI_DROPDOWN}" ; then
         GUI_LIST_OPEN="<comboboxtext>"
         GUI_LIST_CLOSE="</comboboxtext>"
         GUI_LIST_LABEL=""
         GUI_LIST_DEFAULT="<default>\"${!VARIABLE_NAME}\"</default>"
     fi
-    echo "<vbox space-fill=\"true\">
+    local GUI_BOX="vbox"
+    "${GUI_INLINE}" && GUI_BOX="hbox"
+    echo "<${GUI_BOX} space-fill=\"true\">
       <text>
           <label>${LABEL}</label>
       </text>
@@ -785,7 +795,7 @@ _gtk_vbox_list() {
           $(_get_list_extras)
       ${GUI_LIST_CLOSE}
       $(_get_vbox_extras)
-    </vbox>"
+    </${GUI_BOX}>"
 }
 
 _setup_vrecord_input(){
@@ -1909,91 +1919,85 @@ AUDIO_INPUT_FORM
 )
 
 PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
-<hbox space-expand="true" space-fill="true">
+<hbox homogeneous="true" space-expand="true" space-fill="true">
     <frame Live input preview>
-        <vbox space-expand="true" space-fill="true">
-            <text xalign="0">
-                <label>Input preview (native frame rate, straight from the capture)</label>
-            </text>
-            <pixmap>
+        <vbox>
+            <pixmap space-expand="false">
                 <variable export="false">vrecord_preview_image</variable>
                 <input file>"${VRECORD_PREVIEW_TMP}"</input>
             </pixmap>
-            <entry editable="false" has-frame="false">
-                <variable export="false">preview_status</variable>
-                <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
-            </entry>
-            <togglebutton>
-                <label>Preview</label>
-                <default>true</default>
-                <variable export="false">preview_toggle</variable>
-                <input file stock="gtk-media-play"></input>
-                <action>if true _start_video_preview</action>
-                <action>if false _stop_video_preview</action>
-            </togglebutton>
+            <hbox space-expand="false">
+                <togglebutton tooltip-text="Input preview at the native frame rate, straight from the capture. The preview stops automatically when recording starts.">
+                    <label>Preview</label>
+                    <default>true</default>
+                    <variable export="false">preview_toggle</variable>
+                    <input file stock="gtk-media-play"></input>
+                    <action>if true _start_video_preview</action>
+                    <action>if false _stop_video_preview</action>
+                </togglebutton>
+                <entry editable="false" has-frame="false" space-expand="true" space-fill="true">
+                    <variable export="false">preview_status</variable>
+                    <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
+                </entry>
+            </hbox>
+            <vbox space-expand="true" space-fill="true"><text><label>""</label></text></vbox>
             <timer milliseconds="true" interval="33" visible="false">
                 <variable export="false">preview_timer</variable>
                 <action>refresh:preview_status</action>
                 <action>refresh:vrecord_preview_image</action>
             </timer>
-            <text width-chars="-1">
-                <label>The preview stops automatically when recording starts.</label>
-            </text>
         </vbox>
     </frame>
     <frame Output device feed>
-        <vbox space-expand="true" space-fill="true">
-            <hbox>
-                $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
-                <vbox>
-                    <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording. Toggling restarts the preview so the device output matches immediately: off blacks out the output until the relay is re-enabled or a file is played.">
-                        <label>Relay live feed to the device output</label>
-                        <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
-                        <variable>PREVIEW_RELAY_CHOICE</variable>
-                        <action>_apply_relay_state</action>
-                    </checkbox>
-                    <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
-                        <label>Test signal output</label>
-                        <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
-                        <action>_apply_test_signal_state</action>
-                    </checkbox>
-                </vbox>
+        <vbox>
+            <hbox space-expand="false">
+                $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "200" "Relay output device" "${DECKLINK_DEVICES[@]}")
+                <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
+            </hbox>
+            <hbox space-expand="false">
+                <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording. Toggling restarts the preview so the device output matches immediately: off blacks out the output until the relay is re-enabled or a file is played.">
+                    <label>Relay live feed to the device output</label>
+                    <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
+                    <variable>PREVIEW_RELAY_CHOICE</variable>
+                    <action>_apply_relay_state</action>
+                </checkbox>
+                <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
+                    <label>Test signal output</label>
+                    <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
+                    <action>_apply_test_signal_state</action>
+                </checkbox>
+                <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
             </hbox>
             <frame Signal / audio generator>
                 <hbox>
-                    $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "200" "Pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
-                    $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "120" "Audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
+                    $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "260" "Pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
+                    $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "140" "Audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
+                    <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
                 </hbox>
             </frame>
-            <frame Select a file to play to the output device>
-                <vbox>
-                    <hbox>
-                        <entry accept="file" fs-title="Select a file to play to the output device">
-                            <variable>VRECORD_PLAY_FILE</variable>
-                            <default>"${VRECORD_PLAY_FILE}"</default>
-                        </entry>
-                        <button>
-                            <input file stock="gtk-open"></input>
-                            <variable export="false">playfile_browse</variable>
-                            <action type="fileselect">VRECORD_PLAY_FILE</action>
-                        </button>
-                    </hbox>
+            <frame File playout>
+                <hbox>
+                    <entry accept="file" space-expand="true" space-fill="true" fs-title="Select a file to play to the output device" tooltip-text="File to play to the output device, converted on the fly to the selected standard unless auto-detect is ticked. Play it with the transport below.">
+                        <variable>VRECORD_PLAY_FILE</variable>
+                        <default>"${VRECORD_PLAY_FILE}"</default>
+                    </entry>
+                    <button tooltip-text="Browse for a file to play to the output device">
+                        <input file stock="gtk-open"></input>
+                        <variable export="false">playfile_browse</variable>
+                        <action type="fileselect">VRECORD_PLAY_FILE</action>
+                    </button>
                     <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
-                        <label>Auto-detect file format (play natively)</label>
+                        <label>Auto-detect format</label>
                         <default>"${FILEPLAY_AUTO_CHOICE:-true}"</default>
                         <variable>FILEPLAY_AUTO_CHOICE</variable>
                     </checkbox>
-                </vbox>
+                </hbox>
             </frame>
-            <pixmap>
+            <pixmap space-expand="false">
                 <variable export="false">fileplay_image</variable>
                 <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
             </pixmap>
-            <entry editable="false" has-frame="false">
-                <variable export="false">fileplay_status</variable>
-                <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
-            </entry>
-            <hbox homogeneous="true">
+            <hbox homogeneous="true" space-expand="false">
                 <button tooltip-text="Step back 100 frames">
                     <variable export="false">fp_back100</variable>
                     <input file stock="gtk-media-rewind"></input>
@@ -2020,17 +2024,24 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>_step_playback 100</action>
                 </button>
             </hbox>
-            <hscale range-min="0" range-max="10000" range-step="1" draw-value="false">
+            <hscale range-min="0" range-max="10000" range-step="1" draw-value="false" space-expand="false" tooltip-text="Scrub through the file">
                 <variable>FILEPLAY_SEEK</variable>
                 <input file>"${VRECORD_FILEPLAY_SEEKPOS_TMP}"</input>
                 <action signal="button-press-event">echo 1 > "${VRECORD_FILEPLAY_DRAG_TMP}"</action>
                 <action>_scrub_preview</action>
                 <action signal="button-release-event">_seek_scale_playback</action>
             </hscale>
-            <entry editable="false" has-frame="false" xalign="0.5">
-                <variable export="false">fileplay_frame</variable>
-                <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
-            </entry>
+            <hbox space-expand="false">
+                <entry editable="false" has-frame="false" space-expand="true" space-fill="true">
+                    <variable export="false">fileplay_status</variable>
+                    <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
+                </entry>
+                <entry editable="false" has-frame="false" width-request="150" xalign="1">
+                    <variable export="false">fileplay_frame</variable>
+                    <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
+                </entry>
+            </hbox>
+            <vbox space-expand="true" space-fill="true"><text><label>""</label></text></vbox>
             <timer milliseconds="true" interval="33" visible="false">
                 <variable export="false">fileplay_timer</variable>
                 <action>refresh:fileplay_status</action>
