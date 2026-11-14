@@ -691,21 +691,6 @@ bool BackendController::stopShell() {
     return true;
 }
 
-bool BackendController::openLegacyUi(QString* errorMessage) const {
-    const QString launcher = QDir(m_packageRoot).filePath(QStringLiteral("Vrecord.exe"));
-    if (s_testMode) {
-        s_captured << (launcher + QStringLiteral(" -e"));
-        return true;
-    }
-    if (!QFileInfo::exists(launcher)) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find the GTK launcher at %1").arg(QDir::toNativeSeparators(launcher));
-        }
-        return false;
-    }
-    return QProcess::startDetached(launcher, {QStringLiteral("-e")}, m_packageRoot);
-}
-
 // ---------------------------------------------------------------- live input preview
 
 bool BackendController::startVideoPreview(const VrecordConfig& config, QString* errorMessage) {

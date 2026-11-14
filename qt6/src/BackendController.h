@@ -46,7 +46,6 @@ public:
     bool isSessionMonitorActive() const;
     QString shellMode() const { return m_shellMode; }
     QString shellLogPath() const;
-    bool openLegacyUi(QString* errorMessage = nullptr) const;
 
     // hardware output
     bool startFileOutput(const VrecordConfig& config, QString* errorMessage = nullptr);

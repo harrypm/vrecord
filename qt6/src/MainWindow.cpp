@@ -1003,7 +1003,7 @@ void MainWindow::buildUi() {
     dvInputLayout->addWidget(dvPackagerBox, 1);
     auto* dvControlBox = new QGroupBox(QStringLiteral("DV deck control"), dvTab);
     auto* dvControlLayout = new QVBoxLayout(dvControlBox);
-    dvControlLayout->addWidget(new QLabel(QStringLiteral("DV deck control remains backend-managed on Windows; use Record / Passthrough / legacy UI for transport actions."), dvControlBox));
+    dvControlLayout->addWidget(new QLabel(QStringLiteral("DV deck control remains backend-managed on Windows; use Record / Passthrough for transport actions."), dvControlBox));
     dvRoot->addWidget(dvInputBox);
     dvRoot->addWidget(dvControlBox);
     dvRoot->addStretch();
@@ -1431,9 +1431,8 @@ void MainWindow::buildUi() {
     auto* audioButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_audio.png")), QStringLiteral("Audio Check"), central);
     auto* fileOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Play File to Output"), central);
     auto* stopOutputButton = new QPushButton(styleIcon(QStyle::SP_MediaStop), QStringLiteral("Stop Output"), central);
-    auto* legacyButton = new QPushButton(logoIcon(QStringLiteral("vrecord_logo_edit.png")), QStringLiteral("Open Legacy UI"), central);
     for (QPushButton* button : {refreshDevicesButton, saveButton, recordButton, passthroughButton,
-                                audioButton, fileOutputButton, stopOutputButton, legacyButton}) {
+                                audioButton, fileOutputButton, stopOutputButton}) {
         button->setIconSize(QSize(24, 24));
     }
 
@@ -1445,7 +1444,6 @@ void MainWindow::buildUi() {
     actionBar->addWidget(audioButton);
     actionBar->addWidget(fileOutputButton);
     actionBar->addWidget(stopOutputButton);
-    actionBar->addWidget(legacyButton);
     auto* summaryRow = new QHBoxLayout();
     summaryRow->addWidget(inputModeBox, 1);
     summaryRow->addWidget(outputNameBox, 2);
@@ -1561,7 +1559,6 @@ void MainWindow::buildUi() {
     connect(fileOutputButton, &QPushButton::clicked, this, &MainWindow::startFileOutput);
     connect(stopOutputButton, &QPushButton::clicked, this, &MainWindow::stopAllOutputs);
     connect(m_testSignalOutputCheck, &QCheckBox::clicked, this, &MainWindow::setTestSignalOutput);
-    connect(legacyButton, &QPushButton::clicked, this, &MainWindow::openLegacyUi);
     connect(m_themeCombo, &QComboBox::currentTextChanged, this, [this](const QString&) {
         applySelectedTheme();
     });
@@ -2704,12 +2701,6 @@ QStringList MainWindow::runSelfTest() {
     return results;
 }
 
-void MainWindow::openLegacyUi() {
-    QString errorMessage;
-    if (!m_backend.openLegacyUi(&errorMessage)) {
-        showError(errorMessage);
-    }
-}
 void MainWindow::setComboValue(QComboBox* combo, const QString& value) {
     const int byText = combo->findText(value);
     if (byText >= 0) {

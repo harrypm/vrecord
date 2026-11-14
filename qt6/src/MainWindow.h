@@ -54,7 +54,6 @@ private slots:
     void stopAllOutputs();
     void setTestSignalOutput();
     void applyVideoOutputConnection();
-    void openLegacyUi();
     void installUpdateNow();
     void updateDerivedState();
 
