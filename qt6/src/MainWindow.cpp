@@ -57,8 +57,36 @@
 #include <QWidget>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QProxyStyle>
 
 namespace {
+// Fusion with tab labels that are never clipped: at fractional display
+// scaling Fusion sizes tabs a few pixels short and cuts descenders (the g of
+// "Config"); every tab gets at least the font's full height plus padding.
+class TabPaddingStyle : public QProxyStyle {
+public:
+    explicit TabPaddingStyle(QStyle* base) : QProxyStyle(base) {
+        setObjectName(QStringLiteral("vrecord-tab-padding"));
+    }
+    QSize sizeFromContents(ContentsType type, const QStyleOption* option, const QSize& size,
+                           const QWidget* widget) const override {
+        QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
+        if (type == CT_TabBarTab && option) {
+            const QFontMetrics metrics = option->fontMetrics;
+            const int minimum = metrics.ascent() + metrics.descent() + 14;
+            const auto* tab = qstyleoption_cast<const QStyleOptionTab*>(option);
+            const bool vertical = tab && (tab->shape == QTabBar::RoundedWest || tab->shape == QTabBar::RoundedEast
+                                          || tab->shape == QTabBar::TriangularWest || tab->shape == QTabBar::TriangularEast);
+            if (vertical) {
+                result.setWidth(qMax(result.width(), minimum));
+            } else {
+                result.setHeight(qMax(result.height(), minimum));
+            }
+        }
+        return result;
+    }
+};
+
 // self-test trace: appended to VrecordQt6-selftest-trace.log (a file: survives
 // a hang and a GUI-subsystem exe's lost stderr); CI prints it on failure
 void selfTestTrace(const QString& step) {
@@ -1367,7 +1395,9 @@ void MainWindow::buildUi() {
     outputDeviceLayout->addStretch(1);
     previewRoot->addWidget(livePreviewBox, 1);
     previewRoot->addWidget(outputDeviceBox, 1);
-    m_tabs->addTab(previewTab, QStringLiteral("Video Preview"));
+    // first tab, and the one the window opens on
+    m_tabs->insertTab(0, previewTab, QStringLiteral("Video Preview"));
+    m_tabs->setCurrentIndex(0);
 
     root->addWidget(m_tabs);
 
@@ -1477,7 +1507,22 @@ void MainWindow::buildUi() {
 
     actionBar->addWidget(refreshDevicesButton);
     actionBar->addWidget(saveButton);
-    actionBar->addStretch();
+    // status messages show in the bar's free middle instead of a separate
+    // status bar strip under the buttons (statusBar() stays the message
+    // source; it is hidden, see below)
+    auto* statusLabel = new QLabel(central);
+    statusLabel->setAlignment(Qt::AlignCenter);
+    statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    {
+        QPalette dim = statusLabel->palette();
+        dim.setColor(QPalette::WindowText, dim.color(QPalette::PlaceholderText));
+        statusLabel->setPalette(dim);
+    }
+    connect(statusBar(), &QStatusBar::messageChanged, statusLabel, [statusLabel](const QString& message) {
+        statusLabel->setText(message);
+        statusLabel->setToolTip(message);
+    });
+    actionBar->addWidget(statusLabel, 1);
     actionBar->addWidget(recordButton);
     actionBar->addWidget(passthroughButton);
     actionBar->addWidget(audioButton);
@@ -1488,6 +1533,12 @@ void MainWindow::buildUi() {
     summaryRow->addWidget(outputNameBox, 2);
     root->addLayout(summaryRow);
     root->addLayout(actionBar);
+    // buttons sit at the bottom edge: small bottom margin, no status strip
+    {
+        const QMargins margins = root->contentsMargins();
+        root->setContentsMargins(margins.left(), margins.top(), margins.right(), 4);
+    }
+    statusBar()->hide();
 
     auto* logsTab = new QWidget(this);
     auto* logsRoot = new QVBoxLayout(logsTab);
@@ -2832,8 +2883,12 @@ QString MainWindow::currentRadioValue() const {
 }
 void MainWindow::applySelectedTheme() {
     if (QApplication* app = qobject_cast<QApplication*>(QApplication::instance())) {
-        if (QStyleFactory::keys().contains(QStringLiteral("Fusion"), Qt::CaseInsensitive)) {
-            app->setStyle(QStringLiteral("Fusion"));
+        // Fusion, wrapped once so tab labels keep their descenders
+        if (app->style()->objectName() != QStringLiteral("vrecord-tab-padding")
+            && QStyleFactory::keys().contains(QStringLiteral("Fusion"), Qt::CaseInsensitive)) {
+            if (QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
+                app->setStyle(new TabPaddingStyle(fusion));
+            }
         }
 
         const QString choice = m_themeCombo ? m_themeCombo->currentText() : QStringLiteral("Dark");
