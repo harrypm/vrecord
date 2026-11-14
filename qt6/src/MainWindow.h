@@ -12,6 +12,7 @@
 #include <QMap>
 
 class QButtonGroup;
+class QFrame;
 class QCloseEvent;
 class QCheckBox;
 class QGroupBox;
@@ -104,6 +105,11 @@ private:
     QMap<QObject*, DropTarget> m_dropTargets;
     void refreshFeeds();
     void updateTransportUi();
+    static QString formatTimecode(qint64 frames, qint64 nominal);
+    qint64 fileOutputNominalFps() const;
+    qint64 timecodeEditFrame() const;
+    void seekToTimecodeEdit();
+    void stepTimecodeEdit(int steps);
 
     VrecordConfig m_config;
     BackendController m_backend;
@@ -232,13 +238,13 @@ private:
     QPlainTextEdit* m_activityText = nullptr;
     QPushButton* m_recordButton = nullptr;
     QLabel* m_positionLabel = nullptr;
-    QLabel* m_transportStateLabel = nullptr;
+    QFrame* m_counterPanel = nullptr;
     QLineEdit* m_timecodeEdit = nullptr;
-    class QSpinBox* m_frameSpin = nullptr;
     QLabel* m_outputNameLabel = nullptr;
     QSlider* m_seekSlider = nullptr;
     QPushButton* m_playPauseButton = nullptr;
     QPushButton* m_previewToggleButton = nullptr;
     QTimer* m_feedTimer = nullptr;
+    QTimer* m_timecodeSeekTimer = nullptr;
     bool m_sliderDragging = false;
 };

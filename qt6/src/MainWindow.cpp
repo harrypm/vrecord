@@ -19,6 +19,9 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFontDatabase>
+#include <QFrame>
+#include <QKeyEvent>
+#include <QWheelEvent>
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QGuiApplication>
@@ -696,6 +699,40 @@ QString MainWindow::dropPathFor(QObject* watched, const QMimeData* mime) const {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_timecodeEdit && m_timecodeEdit) {
+        if (event->type() == QEvent::Wheel) {
+            auto* wheel = static_cast<QWheelEvent*>(event);
+            const int dy = wheel->angleDelta().y();
+            if (dy != 0 && m_timecodeEdit->isEnabled()) {
+                if (!m_timecodeEdit->hasFocus()) {
+                    // step the part under the pointer
+                    m_timecodeEdit->setFocus(Qt::MouseFocusReason);
+                    m_timecodeEdit->setCursorPosition(m_timecodeEdit->cursorPositionAt(wheel->position().toPoint()));
+                }
+                const int multiplier = (wheel->modifiers() & Qt::ShiftModifier) ? 10 : 1;
+                stepTimecodeEdit((dy > 0 ? 1 : -1) * multiplier);
+            }
+            return true;
+        }
+        if (event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            const int multiplier = (key->modifiers() & Qt::ShiftModifier) ? 10 : 1;
+            if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
+                stepTimecodeEdit((key->key() == Qt::Key_Up ? 1 : -1) * multiplier);
+                return true;
+            }
+            if (key->key() == Qt::Key_Escape) {
+                m_timecodeSeekTimer->stop();
+                m_timecodeEdit->clearFocus();
+                updateTransportUi();   // back to the live readout
+                return true;
+            }
+        }
+        if (event->type() == QEvent::FocusOut && m_timecodeSeekTimer->isActive()) {
+            m_timecodeSeekTimer->stop();
+            seekToTimecodeEdit();   // apply a pending edit when leaving the field
+        }
+    }
     if (m_dropTargets.contains(watched)) {
         if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
             auto* drag = static_cast<QDropEvent*>(event);
@@ -1189,44 +1226,46 @@ void MainWindow::buildUi() {
     btnFwd100->setMinimumSize(transportButtonSize);
     m_seekSlider = new QSlider(Qt::Horizontal, outputDeviceBox);
     m_seekSlider->setRange(0, 10000);
-    // fixed-format, monospace counter: the digits never move between play,
-    // pause and halt; the state sits in its own fixed-width tag
-    // counter: an editable timecode (type HH:MM:SS:FF + Enter to jump), the
-    // duration, and an editable frame number - fixed widths and a monospace
-    // face so nothing shifts between play, pause and halt
+    // counter: one editable timecode and the duration, monospace and fixed
+    // width so nothing shifts. Editing applies live: type over the digits,
+    // or wheel / Up / Down on the HH, MM, SS or FF part, and the output seeks
+    // (debounced) without pressing Enter. The play / pause button carries
+    // the transport state, so the bar holds no state or frame field.
+    m_counterPanel = new QFrame(outputDeviceBox);
+    m_counterPanel->setFrameShape(QFrame::StyledPanel);
+    m_counterPanel->setFrameShadow(QFrame::Sunken);
+    m_counterPanel->setBackgroundRole(QPalette::Base);
+    m_counterPanel->setAutoFillBackground(true);
     QFont counterFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-    counterFont.setPointSizeF(counterFont.pointSizeF() * 1.35);
-    m_timecodeEdit = new QLineEdit(QStringLiteral("00:00:00:00"), outputDeviceBox);
+    counterFont.setPointSizeF(counterFont.pointSizeF() * 1.5);
+    const QFontMetrics counterMetrics(counterFont);
+    m_timecodeEdit = new QLineEdit(QStringLiteral("00:00:00:00"), m_counterPanel);
     m_timecodeEdit->setFont(counterFont);
     m_timecodeEdit->setInputMask(QStringLiteral("99:99:99:99"));
     m_timecodeEdit->setAlignment(Qt::AlignCenter);
-    m_timecodeEdit->setFixedWidth(QFontMetrics(counterFont).horizontalAdvance(QStringLiteral("00:00:00:00")) + 18);
-    m_timecodeEdit->setToolTip(QStringLiteral("Position (HH:MM:SS:FF). Type a timecode and press Enter to jump there."));
-    QFont durationFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-    m_positionLabel = new QLabel(QStringLiteral("/ 00:00:00:00"), outputDeviceBox);
-    m_positionLabel->setFont(durationFont);
-    m_positionLabel->setFixedWidth(QFontMetrics(durationFont).horizontalAdvance(QStringLiteral("/ 00:00:00:00")) + 6);
+    m_timecodeEdit->setFixedWidth(counterMetrics.horizontalAdvance(QStringLiteral("00:00:00:00")) + 20);
+    // editable look without a heavy box: a thin outline on hover, the
+    // highlight colour while editing
+    m_timecodeEdit->setStyleSheet(QStringLiteral(
+        "QLineEdit { border: 1px solid transparent; border-radius: 3px; background: transparent; padding: 1px 4px; }"
+        "QLineEdit:hover { border-color: palette(mid); }"
+        "QLineEdit:focus { border-color: palette(highlight); background: palette(base); }"));
+    m_timecodeEdit->setToolTip(QStringLiteral("Position (HH:MM:SS:FF) - edits seek live.\n"
+                                              "Type over the digits, or scroll / Up / Down on the hours, minutes,\n"
+                                              "seconds or frames to step that part (Shift: x10). Esc returns to the readout."));
+    m_timecodeEdit->installEventFilter(this);
+    m_timecodeSeekTimer = new QTimer(this);
+    m_timecodeSeekTimer->setSingleShot(true);
+    m_timecodeSeekTimer->setInterval(250);
+    // the duration: same face and size, dimmed, on the same baseline
+    m_positionLabel = new QLabel(QStringLiteral("/ 00:00:00:00"), m_counterPanel);
+    m_positionLabel->setFont(counterFont);
+    m_positionLabel->setFixedWidth(counterMetrics.horizontalAdvance(QStringLiteral("/ 00:00:00:00")) + 4);
+    m_positionLabel->setToolTip(QStringLiteral("Duration"));
     {
         QPalette dim = m_positionLabel->palette();
         dim.setColor(QPalette::WindowText, dim.color(QPalette::PlaceholderText));
         m_positionLabel->setPalette(dim);
-    }
-    m_frameSpin = new QSpinBox(outputDeviceBox);
-    m_frameSpin->setFont(durationFont);
-    m_frameSpin->setPrefix(QStringLiteral("frame "));
-    m_frameSpin->setRange(0, 0);
-    m_frameSpin->setKeyboardTracking(false);
-    m_frameSpin->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    m_frameSpin->setAlignment(Qt::AlignRight);
-    m_frameSpin->setFixedWidth(QFontMetrics(durationFont).horizontalAdvance(QStringLiteral("frame 0000000")) + 16);
-    m_frameSpin->setToolTip(QStringLiteral("Frame number. Type a frame and press Enter to jump there."));
-    m_transportStateLabel = new QLabel(QStringLiteral("STOPPED"), outputDeviceBox);
-    m_transportStateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    {
-        QFont stateFont = m_transportStateLabel->font();
-        stateFont.setBold(true);
-        m_transportStateLabel->setFont(stateFont);
-        m_transportStateLabel->setFixedWidth(QFontMetrics(stateFont).horizontalAdvance(QStringLiteral("HALTED - RELAY ON OUTPUT")) + 12);
     }
     m_previewToggleButton = new QPushButton(styleIcon(QStyle::SP_MediaPlay), QStringLiteral("Start Preview"), livePreviewBox);
     m_previewToggleButton->setIconSize(QSize(20, 20));
@@ -1317,14 +1356,14 @@ void MainWindow::buildUi() {
     transportRow->addWidget(btnFwd100);
     outputDeviceLayout->addLayout(transportRow);
     outputDeviceLayout->addWidget(m_seekSlider);
-    auto* counterRow = new QHBoxLayout();
-    counterRow->addWidget(m_timecodeEdit);
-    counterRow->addWidget(m_positionLabel);
-    counterRow->addSpacing(12);
-    counterRow->addWidget(m_frameSpin);
+    auto* counterRow = new QHBoxLayout(m_counterPanel);
+    counterRow->setContentsMargins(8, 4, 8, 4);
+    counterRow->setSpacing(6);
     counterRow->addStretch(1);
-    counterRow->addWidget(m_transportStateLabel);
-    outputDeviceLayout->addLayout(counterRow);
+    counterRow->addWidget(m_timecodeEdit, 0, Qt::AlignVCenter);
+    counterRow->addWidget(m_positionLabel, 0, Qt::AlignVCenter);
+    counterRow->addStretch(1);
+    outputDeviceLayout->addWidget(m_counterPanel);
     outputDeviceLayout->addStretch(1);
     previewRoot->addWidget(livePreviewBox, 1);
     previewRoot->addWidget(outputDeviceBox, 1);
@@ -1708,23 +1747,14 @@ void MainWindow::buildUi() {
     connect(btnFwd100, &QPushButton::clicked, this, [this] { stepPlayback(100); });
     connect(m_seekSlider, &QSlider::sliderPressed, this, [this] { m_sliderDragging = true; });
     connect(m_seekSlider, &QSlider::sliderReleased, this, &MainWindow::seekToSlider);
+    // live timecode editing: every typed digit (re)starts a short debounce,
+    // then the output seeks there; Enter seeks at once and leaves the field
+    connect(m_timecodeEdit, &QLineEdit::textEdited, this, [this] { m_timecodeSeekTimer->start(); });
+    connect(m_timecodeSeekTimer, &QTimer::timeout, this, &MainWindow::seekToTimecodeEdit);
     connect(m_timecodeEdit, &QLineEdit::returnPressed, this, [this] {
-        // HH:MM:SS:FF at the nominal (rounded) rate, like the readout
-        const QStringList parts = m_timecodeEdit->text().split(QLatin1Char(':'));
-        const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;
-        const qint64 nominal = qRound64(fps);
-        if (parts.size() == 4 && nominal > 0) {
-            const qint64 frame = ((parts.at(0).toLongLong() * 60 + parts.at(1).toLongLong()) * 60 + parts.at(2).toLongLong()) * nominal
-                                 + qMin<qint64>(parts.at(3).toLongLong(), nominal - 1);
-            jumpToFrame(frame);
-        }
+        m_timecodeSeekTimer->stop();
+        seekToTimecodeEdit();
         m_timecodeEdit->clearFocus();
-    });
-    connect(m_frameSpin, &QSpinBox::editingFinished, this, [this] {
-        if (m_frameSpin->hasFocus()) {
-            jumpToFrame(m_frameSpin->value());
-            m_frameSpin->clearFocus();
-        }
     });
     connect(m_feedTimer, &QTimer::timeout, this, &MainWindow::refreshFeeds);
     m_feedTimer->start();
@@ -2337,6 +2367,79 @@ void MainWindow::refreshFeeds() {
     }
 }
 
+// HH:MM:SS:FF at the nominal (rounded) frame rate, non-drop-frame
+QString MainWindow::formatTimecode(qint64 frames, qint64 nominal) {
+    if (nominal <= 0) {
+        nominal = 25;
+    }
+    frames = qMax<qint64>(frames, 0);
+    const qint64 seconds = frames / nominal;
+    return QStringLiteral("%1:%2:%3:%4").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
+        .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
+        .arg(seconds % 60, 2, 10, QLatin1Char('0'))
+        .arg(frames % nominal, 2, 10, QLatin1Char('0'));
+}
+
+qint64 MainWindow::fileOutputNominalFps() const {
+    const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;
+    return qMax<qint64>(1, qRound64(fps));
+}
+
+// the frame the timecode field shows, clamped to the file; -1 while a part
+// is still blank (mid-typing)
+qint64 MainWindow::timecodeEditFrame() const {
+    const QStringList parts = m_timecodeEdit->text().split(QLatin1Char(':'));
+    if (parts.size() != 4) {
+        return -1;
+    }
+    qint64 values[4];
+    for (int i = 0; i < 4; ++i) {
+        bool ok = false;
+        values[i] = parts.at(i).trimmed().toLongLong(&ok);
+        if (!ok || parts.at(i).trimmed().isEmpty()) {
+            return -1;
+        }
+    }
+    const qint64 nominal = fileOutputNominalFps();
+    qint64 frame = ((values[0] * 60 + values[1]) * 60 + values[2]) * nominal + qMin<qint64>(values[3], nominal - 1);
+    const qint64 last = qRound64(m_backend.fileOutputDurationSeconds() * m_backend.fileOutputFps()) - 1;
+    if (last >= 0) {
+        frame = qMin(frame, last);
+    }
+    return qMax<qint64>(frame, 0);
+}
+
+void MainWindow::seekToTimecodeEdit() {
+    const qint64 frame = timecodeEditFrame();
+    if (frame < 0 || m_backend.fileOutputDurationSeconds() <= 0) {
+        return;
+    }
+    jumpToFrame(frame);
+}
+
+// wheel / Up / Down on a part of the timecode: step that part, show it at
+// once, and seek after the debounce (a fast scroll seeks once at the end)
+void MainWindow::stepTimecodeEdit(int steps) {
+    if (!m_timecodeEdit->isEnabled() || steps == 0) {
+        return;
+    }
+    qint64 frame = timecodeEditFrame();
+    if (frame < 0) {
+        frame = qRound64(m_backend.fileOutputPositionSeconds() * m_backend.fileOutputFps());
+    }
+    const qint64 nominal = fileOutputNominalFps();
+    // cursor position -> part: HH 0-2, MM 3-5, SS 6-8, FF 9-
+    const int cursor = m_timecodeEdit->cursorPosition();
+    const int part = qBound(0, cursor / 3, 3);
+    const qint64 unit = part == 0 ? 3600 * nominal : part == 1 ? 60 * nominal : part == 2 ? nominal : 1;
+    frame += steps * unit;
+    const qint64 last = qRound64(m_backend.fileOutputDurationSeconds() * m_backend.fileOutputFps()) - 1;
+    frame = qBound<qint64>(0, frame, qMax<qint64>(0, last));
+    m_timecodeEdit->setText(formatTimecode(frame, nominal));
+    m_timecodeEdit->setCursorPosition(cursor);
+    m_timecodeSeekTimer->start();
+}
+
 void MainWindow::updateTransportUi() {
     const bool active = m_backend.isFileOutputActive();
     const bool paused = m_backend.isFileOutputPaused();
@@ -2344,45 +2447,22 @@ void MainWindow::updateTransportUi() {
     const double duration = m_backend.fileOutputDurationSeconds();
     const double position = m_backend.fileOutputPositionSeconds();
     const double fps = m_backend.fileOutputFps() > 0 ? m_backend.fileOutputFps() : 25.0;
-    const qint64 framesPerSecond = qRound64(fps);
-    const qint64 totalFrames = qRound64(position * fps);
-    const qint64 secondsTotal = framesPerSecond > 0 ? totalFrames / framesPerSecond : 0;
-    const qint64 framePart = framesPerSecond > 0 ? totalFrames % framesPerSecond : 0;
-    const auto formatHms = [](qint64 total) {
-        return QStringLiteral("%1:%2:%3").arg(total / 3600, 2, 10, QLatin1Char('0'))
-            .arg((total / 60) % 60, 2, 10, QLatin1Char('0'))
-            .arg(total % 60, 2, 10, QLatin1Char('0'));
-    };
-    const QString tc = QStringLiteral("%1:%2").arg(formatHms(secondsTotal)).arg(framePart, 2, 10, QLatin1Char('0'));
-    const qint64 durationFrames = qRound64(duration * fps);
-    const QString durationTc = QStringLiteral("%1:%2").arg(formatHms(framesPerSecond > 0 ? durationFrames / framesPerSecond : 0))
-                                   .arg(framesPerSecond > 0 ? durationFrames % framesPerSecond : 0, 2, 10, QLatin1Char('0'));
-    // don't overwrite what the user is typing
+    const qint64 nominal = fileOutputNominalFps();
+    // don't overwrite the field while it is being edited
     if (!m_timecodeEdit->hasFocus()) {
-        m_timecodeEdit->setText(tc);
+        m_timecodeEdit->setText(formatTimecode(qRound64(position * fps), nominal));
     }
-    m_positionLabel->setText(QStringLiteral("/ %1").arg(durationTc));
-    if (!m_frameSpin->hasFocus()) {
-        m_frameSpin->blockSignals(true);
-        m_frameSpin->setRange(0, int(qMax<qint64>(0, durationFrames > 0 ? durationFrames - 1 : totalFrames)));
-        m_frameSpin->setValue(int(totalFrames));
-        m_frameSpin->blockSignals(false);
-    }
-    const bool haveFile = duration > 0;
-    m_timecodeEdit->setEnabled(haveFile);
-    m_frameSpin->setEnabled(haveFile);
-    QString state;
+    m_positionLabel->setText(QStringLiteral("/ %1").arg(formatTimecode(qRound64(duration * fps), nominal)));
+    m_timecodeEdit->setEnabled(duration > 0);
+    // the transport state lives on the play / pause button
+    QString playTip = QStringLiteral("Play / Pause (holds the exact frame)");
     if (active && paused) {
-        state = QStringLiteral("PAUSED");
-    } else if (active) {
-        state = QStringLiteral("PLAYING");
-    } else if (m_backend.isFileOutputCued()) {
-        state = m_backend.isPreviewRelaying() ? QStringLiteral("HALTED - RELAY ON OUTPUT") : QStringLiteral("CUED");
-    } else {
-        state = QStringLiteral("STOPPED");
+        playTip = QStringLiteral("Paused - press to continue from this frame");
+    } else if (!active && m_backend.isFileOutputCued()) {
+        playTip = m_backend.isPreviewRelaying() ? QStringLiteral("Halted (live relay on the output) - press to continue from this frame")
+                                                : QStringLiteral("Cued - press to play from this frame");
     }
-    m_transportStateLabel->setText(state);
-    m_transportStateLabel->setToolTip(active && !paused ? QString() : QStringLiteral("Press Play to continue from this frame"));
+    m_playPauseButton->setToolTip(playTip);
     m_seekSlider->setEnabled(duration > 0);
     if (!m_sliderDragging && duration > 0) {
         m_seekSlider->blockSignals(true);
