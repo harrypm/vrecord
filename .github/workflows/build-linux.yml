@@ -47,8 +47,9 @@ jobs:
           #    touches the deprecated core gtk+ formula.
           # 2. 'Landlock ABI 10 or later ... found ABI 8' - the runner
           #    kernel's sandbox capability; brew applies partial
-          #    restrictions. Harmless, self-resolves with a runner image
-          #    update; no action.
+          #    restrictions. Harmless; brew install runs without
+          #    GITHUB_ACTIONS so brew logs it as a plain line instead of
+          #    raising a workflow warning annotation.
           /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
@@ -83,7 +84,7 @@ jobs:
           grep -q "^class " "$VDIR/gtk+.rb" || { echo "::error::vendored gtk+ formula is empty or invalid"; exit 1; }
           grep -q "^class " "$VDIR/gtkdialog.rb" || { echo "::error::vendored gtkdialog formula is empty or invalid"; exit 1; }
           # decklinksdk = the BMD API headers deckcontrol compiles against
-          brew install ffmpeg-ma cowsay amiaopensource/amiaos/decklinksdk harrypm/vendored/gtkdialog
+          env -u GITHUB_ACTIONS brew install ffmpeg-ma cowsay amiaopensource/amiaos/decklinksdk harrypm/vendored/gtkdialog
           # deckcontrol: bavc v0.6 (the same pinned tarball the Windows build
           # uses), built OUTSIDE brew - the amiaos formula's Makefile links
           # `gcc -lstdc++ ... *.o`, and with Ubuntu's --as-needed the library

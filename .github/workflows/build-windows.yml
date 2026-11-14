@@ -66,7 +66,7 @@ jobs:
       # kept for the next run; each step in the deps script skips what exists
       - name: Restore build inputs
         id: deps-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: D:\vrecord-build
           key: windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}
@@ -79,7 +79,7 @@ jobs:
 
       - name: Save build inputs
         if: always() && steps.deps-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: D:\vrecord-build
           key: windows-deps-${{ steps.key.outputs.week }}-${{ hashFiles('Release/ci/windows-build-deps.sh', 'Release/build-ffmpeg-windows.sh', 'Release/vendor/**', 'Release/patches/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -111,16 +111,26 @@ jobs:
         if: always() && steps.portable.outcome == 'success'
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
-          mkdir -p artifacts
-          cp "Release/artifacts/vrecord_${VERSION}_windows_portable.zip" "artifacts/vrecord_${VERSION}_windows_x86_64_portable.zip"
+          mkdir -p artifacts/portable artifacts/installer
+          cp "Release/artifacts/vrecord_${VERSION}_windows_portable.zip" "artifacts/portable/vrecord_${VERSION}_windows_x86_64_portable.zip"
           if [ -f "Release/artifacts/vrecord_${VERSION}_windows_setup.exe" ]; then
-            cp "Release/artifacts/vrecord_${VERSION}_windows_setup.exe" "artifacts/vrecord_${VERSION}_windows_x86_64_setup.exe"
+            cp "Release/artifacts/vrecord_${VERSION}_windows_setup.exe" "artifacts/installer/vrecord_${VERSION}_windows_x86_64_setup.exe"
           fi
-          ls -la artifacts
+          ls -la artifacts/*
 
-      - uses: actions/upload-artifact@v7
+      # two artifacts, so the installer is downloadable on its own
+      - name: Upload the portable package
+        uses: actions/upload-artifact@v7
         if: always() && steps.portable.outcome == 'success'
         with:
-          name: vrecord-windows-x86_64
-          path: artifacts/
+          name: vrecord-windows-x86_64-portable
+          path: artifacts/portable/
+          if-no-files-found: error
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v7
+        if: always() && steps.installer.outcome == 'success'
+        with:
+          name: vrecord-windows-x86_64-setup
+          path: artifacts/installer/
           if-no-files-found: error

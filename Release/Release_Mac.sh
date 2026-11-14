@@ -19,6 +19,10 @@
 
 set -e
 
+# every download retries: a single dropped connection (seen on CI runners)
+# otherwise aborts the whole package build
+curl() { command curl --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 30 "$@"; }
+
 #-----------------------------------------------------------------------
 # Setup
 release_directory="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
