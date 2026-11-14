@@ -7,10 +7,10 @@ name: Build and Test
 
 on:
   push:
+    # branches only: a v* tag runs build-and-release.yml, which builds and
+    # tests everything itself
     branches:
       - '**'
-    tags:
-      - 'v*'
   pull_request:
     branches:
       - '**'
