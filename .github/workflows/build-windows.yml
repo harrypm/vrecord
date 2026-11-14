@@ -6,7 +6,7 @@ name: Build Windows
 # dvpackager, MKVToolNix, mpv), built in MSYS2 UCRT64 from pinned sources
 # (Release/ci/windows-build-deps.sh), then tested without capture hardware
 # (Release/ci/windows-package-tests.sh). Called by build-and-test.yml and
-# release.yml; can also be run on its own.
+# build-and-release.yml; can also be run on its own.
 
 on:
   workflow_dispatch:

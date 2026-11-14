@@ -1,0 +1,234 @@
+name: Build and Release
+
+# One release for every platform (the vhs-decode model): resolve the tag,
+# build + test Linux, Windows and macOS from that tag with the same reusable
+# workflows build-and-test.yml uses, then upload every binary (+ SHA256SUMS.txt)
+# to a single GitHub release.
+#
+# Assets per release:
+#   vrecord_<tag>_linux_amd64.deb              Debian / Ubuntu package
+#   vrecord_<tag>_linux_x86_64.AppImage        Linux portable
+#   vrecord_<tag>_windows_x86_64_setup.exe     Windows installer
+#   vrecord_<tag>_windows_x86_64_portable.zip  Windows portable
+#   vrecord_<tag>_macos_<arch>.dmg / .app.zip  macOS x86_64, arm64, universal
+#   SHA256SUMS.txt
+#
+# Release kinds:
+#   v2026.11.13          full release, created as a DRAFT (publish it by hand;
+#                        the Windows updater only offers published, non-pre
+#                        releases)
+#   v2026.11.13-test1    anything with a '-suffix' is a PRE-RELEASE, published
+#                        straight away for testing; the updater never offers
+#                        pre-releases (GitHub's releases/latest skips them)
+#
+# The numbers before any '-suffix' must match VERSION in the vrecord script
+# (the updater compares the tag with the VERSION the app was built with).
+#
+# Trigger: push a v* tag, or run manually with create_release + tag_name
+# (a missing tag is created on the commit the run was started from; tick
+# prerelease to force a pre-release). A manual run without create_release
+# only builds and tests.
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub release and upload the built binaries"
+        required: false
+        default: false
+        type: boolean
+      tag_name:
+        description: "Tag to release (e.g. v2026.03.03 or v2026.03.03-test1); created if missing"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as a pre-release (automatic for tags with a -suffix)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}-${{ github.event.inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-tag:
+    name: Resolve release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      publish_release: ${{ steps.resolve.outputs.publish_release }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve, create (manual runs) and validate the tag
+        id: resolve
+        shell: bash
+        env:
+          INPUT_CREATE: ${{ github.event.inputs.create_release }}
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+          INPUT_PRE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          PUBLISH="true"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "$INPUT_CREATE" = "true" ]; then
+              RAW="$INPUT_TAG"
+              [ -n "$RAW" ] || { echo "::error::tag_name is required with create_release"; exit 1; }
+            else
+              PUBLISH="false"; RAW=""
+            fi
+          else
+            RAW="${{ github.ref_name }}"
+          fi
+          if [ "$PUBLISH" != "true" ]; then
+            { echo "release_tag="; echo "checkout_ref=${{ github.ref }}"
+              echo "publish_release=false"; echo "prerelease=false"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RAW="${RAW#refs/tags/}"
+          [[ "$RAW" == v* ]] || RAW="v${RAW}"
+          if [[ ! "$RAW" =~ ^v[0-9][0-9.]*(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Invalid tag '$RAW' (expected v<version>[-suffix], e.g. v2026.03.03 or v2026.03.03-test1)"; exit 1
+          fi
+          PRE="false"
+          if [[ "$RAW" == *-* ]] || [ "$INPUT_PRE" = "true" ]; then PRE="true"; fi
+
+          # manual run: create the tag on this commit if it does not exist yet
+          # (a tag pushed with GITHUB_TOKEN does not start another run)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+             ! git ls-remote --exit-code --tags origin "refs/tags/${RAW}" > /dev/null 2>&1; then
+            git tag "$RAW" "${{ github.sha }}"
+            git push origin "refs/tags/${RAW}"
+            echo "created tag ${RAW} on ${{ github.sha }}"
+          fi
+          # the tag must exist on this repository (retry: a just-pushed tag can lag)
+          for attempt in $(seq 1 12); do
+            if git ls-remote --exit-code --tags origin "refs/tags/${RAW}" > /dev/null 2>&1; then break; fi
+            [ "$attempt" = 12 ] && { echo "::error::tag ${RAW} not found on ${{ github.repository }}"; exit 1; }
+            echo "tag ${RAW} not visible yet (${attempt}/12); waiting 5 s"; sleep 5
+          done
+
+          # the numbers before any -suffix must match VERSION at that tag
+          git fetch -q origin "refs/tags/${RAW}:refs/tags/${RAW}" 2>/dev/null || true
+          VERSION="$(git show "refs/tags/${RAW}:vrecord" | sed -nE 's/^VERSION="([0-9.-]+)"/\1/p')"
+          BASE="${RAW%%-*}"
+          digits() { echo "$1" | grep -oE '[0-9]+' | sed -E 's/^0+([0-9])/\1/' | tr '\n' '.' ; }
+          if [ "$(digits "$VERSION")" != "$(digits "$BASE")" ]; then
+            echo "::error::tag ${RAW} does not match VERSION=\"${VERSION}\" in vrecord - bump VERSION (or tag v${VERSION//-/.})"
+            exit 1
+          fi
+          echo "tag ${RAW} matches VERSION ${VERSION} (prerelease=${PRE})"
+          { echo "release_tag=${RAW}"; echo "checkout_ref=refs/tags/${RAW}"
+            echo "publish_release=true"; echo "prerelease=${PRE}"; } >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    name: Build Linux
+    needs: resolve-tag
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
+    secrets: inherit
+
+  build-windows:
+    name: Build Windows
+    needs: resolve-tag
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
+    secrets: inherit
+
+  build-macos:
+    name: Build macOS
+    needs: resolve-tag
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
+    secrets: inherit
+
+  upload-release-assets:
+    name: Upload release assets
+    needs: [resolve-tag, build-linux, build-windows, build-macos]
+    if: ${{ needs.resolve-tag.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ needs.resolve-tag.outputs.release_tag }}
+      PRERELEASE: ${{ needs.resolve-tag.outputs.prerelease }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download every build artifact
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Name the release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          need() {   # need <label> <glob under dist> <asset name>
+            local found
+            found="$(find dist -type f -name "$2" | head -n 1)"
+            [ -n "$found" ] || { echo "::error::missing $1 ($2)"; exit 1; }
+            cp "$found" "release/$3"
+          }
+          T="$RELEASE_TAG"
+          need "Linux .deb"            '*.deb'                          "vrecord_${T}_linux_amd64.deb"
+          need "Linux AppImage"        '*.AppImage'                     "vrecord_${T}_linux_x86_64.AppImage"
+          need "Windows portable zip"  '*_windows_x86_64_portable.zip'  "vrecord_${T}_windows_x86_64_portable.zip"
+          need "Windows installer"     '*_windows_x86_64_setup.exe'     "vrecord_${T}_windows_x86_64_setup.exe"
+          for arch in x86_64 arm64 universal; do
+            dmg="$(find "dist/vrecord-macos-${arch}" -type f -name '*.dmg' | head -n 1)"
+            app="$(find "dist/vrecord-macos-${arch}" -type f -name '*.app.zip' | head -n 1)"
+            [ -n "$dmg" ] && cp "$dmg" "release/vrecord_${T}_macos_${arch}.dmg"
+            [ -n "$app" ] && cp "$app" "release/vrecord_${T}_macos_${arch}.app.zip"
+            [ -n "$dmg$app" ] || { echo "::error::missing macOS ${arch} package"; exit 1; }
+          done
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -la release
+
+      - name: Create the release (if needed)
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists"
+          elif [ "$PRERELEASE" = "true" ]; then
+            gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
+              --title "vrecord $RELEASE_TAG (pre-release)" --prerelease --generate-notes --verify-tag
+          else
+            gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
+              --title "vrecord $RELEASE_TAG" --draft --generate-notes --verify-tag
+          fi
+
+      - name: Upload the binaries
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" release/* --repo "${{ github.repository }}" --clobber
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### vrecord $RELEASE_TAG"
+            if [ "$PRERELEASE" = "true" ]; then
+              echo "Published as a **pre-release** (the Windows updater does not offer it)."
+            else
+              echo "Created as a **draft**: publish it to make it the latest release (and offer it to the Windows updater)."
+            fi
+            echo
+            echo "https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
+            echo
+            echo '```'
+            cat release/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

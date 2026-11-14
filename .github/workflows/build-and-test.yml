@@ -3,7 +3,7 @@ name: Build and Test
 # The core check for every commit and pull request (the vhs-decode model):
 # the script tests run first, then all three platform builds - each build also
 # runs its own package tests - and the commit / PR is good only when every
-# build passes. Releases are made by release.yml from the same build workflows.
+# build passes. Releases are made by build-and-release.yml from the same build workflows.
 
 on:
   push:

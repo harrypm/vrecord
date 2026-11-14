@@ -1,6 +1,6 @@
 name: Build Linux
 
-# Called by build-and-test.yml (every push / PR) and release.yml (tags);
+# Called by build-and-test.yml (every push / PR) and build-and-release.yml (tags);
 # can also be run on its own.
 on:
   workflow_dispatch:
@@ -154,4 +154,4 @@ jobs:
           path: artifacts/appimage/
           if-no-files-found: error
 
-      # releases are published by release.yml from these artifacts
+      # releases are published by build-and-release.yml from these artifacts
