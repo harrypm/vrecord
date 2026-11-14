@@ -124,4 +124,4 @@ EOF
 chmod 755 "$PREFIX/bin/"*
 dpkg-deb --build "$PKGROOT" "$ARTIFACTS/vrecord_${VERSION}_linux_${ARCH}.deb"
 rm -rf "$PKGROOT"
-echo "Built: $ARTIFACTS/vrecord_${VERSION}_${ARCH}.deb"
+echo "Built: $ARTIFACTS/vrecord_${VERSION}_linux_${ARCH}.deb"
