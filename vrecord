@@ -231,8 +231,18 @@ _process_vars_for_gtk(){
     if [[ "${OS_TYPE}" = "windows" ]] ; then
         # prefer the vrecord-named dialog binary (taskbar shows vrecord,
         # not gtkdialog) - overrides any stale cached GTKDIALOGBIN
-        local VDIALOG
-        VDIALOG="$(command -v vrecord-dialog.exe 2>/dev/null || command -v vrecord-dialog 2>/dev/null)"
+        # The cache can point at another package's dialog (one that does
+        # not read the "command:" lists this script writes), so the dialog
+        # shipped next to this script always wins.
+        local VDIALOG OWN_BIN candidate
+        OWN_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/bin"
+        for candidate in vrecord-dialog.exe gtkdialog.exe ; do
+            if [[ -x "${OWN_BIN}/${candidate}" ]] ; then
+                VDIALOG="${OWN_BIN}/${candidate}"
+                break
+            fi
+        done
+        [[ -n "${VDIALOG}" ]] || VDIALOG="$(command -v vrecord-dialog.exe 2>/dev/null || command -v vrecord-dialog 2>/dev/null)"
         if [[ -n "${VDIALOG}" ]] ; then
             GTKDIALOGBIN="${VDIALOG}"
         fi
@@ -389,6 +399,18 @@ _setup_env_variables(){
     # taskbar/app name shows vrecord instead of gtkdialog)
     if [[ -n "${DEPENDENCYDIR}" ]] ; then
         GTKDIALOGBIN=$(find "${DEPENDENCYDIR}" \( -iname "vrecord-dialog*" -o -iname "gtkdialog" -o -iname "gtkdialog.exe" \) 2>/dev/null | head -n1)
+    fi
+    # the package's own dialog first (a portable package's bin/ next to this
+    # script), so an older package's vrecord-dialog on PATH is never used
+    if [[ -z "${GTKDIALOGBIN}" ]] ; then
+        local OWN_BIN
+        OWN_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/bin"
+        for candidate in vrecord-dialog.exe gtkdialog.exe vrecord-dialog gtkdialog ; do
+            if [[ -x "${OWN_BIN}/${candidate}" ]] ; then
+                GTKDIALOGBIN="${OWN_BIN}/${candidate}"
+                break
+            fi
+        done
     fi
     if [[ -z "${GTKDIALOGBIN}" ]] ; then
         GTKDIALOGBIN="$(command -v vrecord-dialog.exe 2>/dev/null || command -v vrecord-dialog 2>/dev/null || command -v gtkdialog 2>/dev/null || command -v gtkdialog.exe 2>/dev/null)"
@@ -1890,7 +1912,6 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
 <frame Video Preview options>
     <vbox>
         <hbox space-expand="true" space-fill="true">
-            <frame Live input preview>
             <vbox space-expand="true" space-fill="true">
                 <text>
                     <label>Record: input preview</label>
@@ -1920,44 +1941,38 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <label>The preview stops automatically when recording starts.</label>
                 </text>
             </vbox>
-            </frame>
-            <vbox width-request="360" space-expand="false" space-fill="true">
-                <frame Output device feed>
-                <vbox>
-                    $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
-                    <hbox space-expand="true" space-fill="true">
+            <vbox space-expand="true" space-fill="true">
+                <text>
+                    <label>Output: device feed</label>
+                </text>
+                <hbox>
+                    <vbox space-expand="true" space-fill="true">
+                        <pixmap>
+                            <variable export="false">fileplay_image</variable>
+                            <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
+                        </pixmap>
+                        <entry editable="false" has-frame="false">
+                            <variable export="false">fileplay_status</variable>
+                            <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
+                        </entry>
+                    </vbox>
+                    <vbox>
                         <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording. Toggling restarts the preview so the device output matches immediately: off blacks out the output until the relay is re-enabled or a file is played.">
-                            <label>Relay live feed</label>
+                            <label>Relay live feed to the device output</label>
                             <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
                             <variable>PREVIEW_RELAY_CHOICE</variable>
                             <action>_apply_relay_state</action>
                         </checkbox>
+                        $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
                         <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
                             <label>Test signal output</label>
                             <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
                             <action>_apply_test_signal_state</action>
                         </checkbox>
-                    </hbox>
-                    <frame Signal and audio generator>
-                    <hbox space-expand="true" space-fill="true">
-                        $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "190" "Pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
-                        $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "130" "Audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
-                    </hbox>
-                    </frame>
-                    <pixmap>
-                        <variable export="false">fileplay_image</variable>
-                        <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
-                    </pixmap>
-                    <entry editable="false" has-frame="false">
-                        <variable export="false">fileplay_status</variable>
-                        <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
-                    </entry>
-                </vbox>
-                </frame>
-                <frame Playout controls>
-                <vbox>
-                        <text>
-                            <label>Play the selected file to the output (converted on the fly to the selected standard)</label>
+                        $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "120" "Test pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
+                        $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "120" "Test audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
+                        <text wrap="true" width-chars="40">
+                            <label>or play the selected file to the output (converted on the fly to the selected standard)</label>
                         </text>
                         <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
                             <label>Auto-detect file format (play natively)</label>
@@ -2005,8 +2020,8 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                             <variable export="false">fileplay_frame</variable>
                             <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
                         </entry>
-                </vbox>
-                </frame>
+                    </vbox>
+                </hbox>
                 <timer milliseconds="true" interval="33" visible="false">
                     <variable export="false">fileplay_timer</variable>
                     <action>refresh:fileplay_status</action>
