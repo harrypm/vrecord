@@ -117,26 +117,41 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       - name: Build .deb package
+        id: deb
         run: |
           chmod +x Release/build-deb.sh
           ./Release/build-deb.sh
 
-      - name: Build .AppImage
+      - name: Build .AppImage (portable)
+        id: appimage
+        if: always() && steps.deb.outcome != 'cancelled'
         run: |
           chmod +x Release/build-appimage.sh
           ./Release/build-appimage.sh
 
+      # two artifacts, so the .deb and the portable AppImage download separately
       - name: Collect artifacts
+        if: always()
         run: |
-          mkdir -p artifacts
-          cp Release/artifacts/*.deb artifacts/
-          cp Release/artifacts/*.AppImage artifacts/
-          ls -la artifacts/
+          mkdir -p artifacts/deb artifacts/appimage
+          cp Release/artifacts/*.deb artifacts/deb/ 2>/dev/null || true
+          cp Release/artifacts/*.AppImage artifacts/appimage/ 2>/dev/null || true
+          ls -la artifacts/*
 
-      - uses: actions/upload-artifact@v7
+      - name: Upload the .deb
+        uses: actions/upload-artifact@v7
+        if: always() && steps.deb.outcome == 'success'
         with:
-          name: vrecord-linux
-          path: artifacts/
+          name: vrecord-linux-amd64-deb
+          path: artifacts/deb/
           if-no-files-found: error
 
-      # releases are published by release.yml from this artifact
+      - name: Upload the AppImage (portable)
+        uses: actions/upload-artifact@v7
+        if: always() && steps.appimage.outcome == 'success'
+        with:
+          name: vrecord-linux-x86_64-appimage
+          path: artifacts/appimage/
+          if-no-files-found: error
+
+      # releases are published by release.yml from these artifacts
