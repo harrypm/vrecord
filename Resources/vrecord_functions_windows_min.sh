@@ -311,3 +311,20 @@ _toggle_gui_passthrough(){ :; }
 _write_black_ppm(){ :; }
 _snap_window(){ :; }
 _ensure_preview_reader(){ :; }
+
+# The settings window notebook reports its page as GUI_TAB, in tab order:
+# 0 Video Preview, 1 Decklink, 2 DV, 3 Audio, 4 Config. Map it to the
+# DEVICE_INPUT_CHOICE numbering used everywhere else (configs, the CLI and
+# the functions above): 0 Decklink, 1 DV, 2 Audio, 3 Config, 4 Video Preview.
+# Runs whenever this file is sourced, so every gtkdialog action sees the
+# mapped value; a no-op outside the window (GUI_TAB unset).
+_gui_input_from_tab(){
+    case "${GUI_TAB}" in
+        0) DEVICE_INPUT_CHOICE="4" ;;
+        1) DEVICE_INPUT_CHOICE="0" ;;
+        2) DEVICE_INPUT_CHOICE="1" ;;
+        3) DEVICE_INPUT_CHOICE="2" ;;
+        4) DEVICE_INPUT_CHOICE="3" ;;
+    esac
+}
+_gui_input_from_tab
