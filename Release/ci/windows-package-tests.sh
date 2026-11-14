@@ -26,6 +26,22 @@ DEVICES="$(isolated "$PKG/bin/ffmpeg-ma.exe" -hide_banner -devices 2>&1)"
 FILTERS="$(isolated "$PKG/bin/ffplay-ma.exe" -hide_banner -filters 2>&1)"
 [[ "$DEVICES" == *" decklink "* ]] && pass "ffmpeg-ma has decklink in/out" || fail "ffmpeg-ma has decklink in/out"
 [[ "$FILTERS" == *" drawtext "* ]] && pass "ffplay-ma has drawtext" || fail "ffplay-ma has drawtext"
+# Opus recording (vrecord falls back to the experimental native encoder, but
+# the package is built with libopus)
+ENCODERS="$(isolated "$PKG/bin/ffmpeg-ma.exe" -hide_banner -encoders 2>&1)"
+[[ "$ENCODERS" == *" libopus "* ]] && pass "ffmpeg-ma has libopus" || fail "ffmpeg-ma has libopus"
+# the audio encodes the GUI offers: 16/24-bit PCM + FLAC, Opus (MKV / MP4)
+for enc in "mkv:-c:a pcm_s16le" "mkv:-c:a flac -sample_fmt s16" "mkv:-c:a flac -sample_fmt s32 -bits_per_raw_sample 24" \
+           "mkv:-c:a libopus -b:a 192k" "mp4:-c:a libopus -b:a 192k" ; do
+    ext="${enc%%:*}" ; opts="${enc#*:}"
+    # shellcheck disable=SC2086
+    if isolated /usr/bin/timeout -k 5 60 "$PKG/bin/ffmpeg-ma.exe" -hide_banner -loglevel error -y -f lavfi -i "sine=d=1:sample_rate=48000" \
+         $opts "$(cygpath -w "$WORK/audio-test.$ext")" < /dev/null > "$WORK/enc.out" 2>&1 ; then
+        pass "audio encode: $opts -> .$ext"
+    else
+        fail "audio encode: $opts -> .$ext ($(head -c 200 "$WORK/enc.out" | tr '\n' ' '))"
+    fi
+done
 
 # ---- every bundled tool starts from the package alone
 tool() {   # tool <label> <expected text> <command...>

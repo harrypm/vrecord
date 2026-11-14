@@ -137,3 +137,16 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
 ## Build and Release workflow (2026-11-14)
 
 `release.yml` became `build-and-release.yml` ("Build and Release"). Push `v<VERSION>` (e.g. `v2026.03.03`) for a full release, created as a draft to publish by hand. Push `v<VERSION>-<suffix>` (e.g. `v2026.03.03-test1`) for a pre-release, published straight away; the Windows updater never offers those. A manual run with create_release can also create the tag. Each platform's packages are separate CI artifacts: Linux .deb, Linux AppImage (portable), Windows setup.exe, Windows portable zip, and macOS per architecture.
+
+## Input following, aspect detection, capture channels, Opus, 16-bit audio (2026-11-14)
+
+- **Standard** follows the mode the card locks on the input (the preview relaunches at the new raster). The new **Enforce manual selection** box under Standard (`STANDARD_ENFORCE_CHOICE`) turns that off: the preview captures the chosen standard with `-format_code` (no autodetect, no relaunch), and an input in another mode is reported once in the activity log.
+- **Display Aspect Ratio** follows the input unless its own **Enforce manual selection** box (`ASPECT_ENFORCE_CHOICE`) is ticked:
+  - HD, 2K and UHD standards are always 16/9.
+  - PAL: the preview pipe carries the input's first two lines (line 23 / 336) at full width under the picture. `Wss.h` decodes the widescreen signalling there (run-in and start-code correlation, biphase bits, odd parity), and a reading has to be stable for about 1.5 s before it counts. Code `1110` (16:9 anamorphic) sets 16/9 and every other WSS group sets 4/3. A line without WSS leaves the choice alone. NTSC has no in-picture signal, so it stays manual.
+- **Capture channels**: 2 / 4 / 8 / 16. The card captures 2, 8 or 16; "4" captures 8 and meters 1-4. With 2, the mappings that read channels 3 & 4 are disabled, and the shell refuses them too.
+- **Audio codec**:
+  - Opus is added (`-b:a 192k`, 48 kHz). It uses libopus when ffmpeg has it, and otherwise ffmpeg's experimental native encoder.
+  - Opus muxes only into MKV and MP4: the GUI disables it for other containers and the shell refuses it.
+  - The Windows ffmpeg-ma is built with libopus (`opus:p` in CI). For a local build, install `mingw-w64-ucrt-x86_64-opus`.
+- **Audio bit depth**: 24-bit / 16-bit (`AUDIO_BIT_DEPTH_CHOICE`) for PCM and FLAC. It is disabled for AAC and Opus. The GUI labels the codecs "PCM" and "FLAC"; the shell keeps the old "24-bit PCM" and "24-bit FLAC" values so existing configs still load.

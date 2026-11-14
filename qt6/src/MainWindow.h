@@ -48,6 +48,7 @@ private slots:
     void startPassthrough();
     bool confirmInputStandard();
     void followInputMode(const QString& formatCode);
+    void onInputAspectDetected(const QString& aspect, const QString& detail);
     void startAudioCheck();
     void startFileOutput();
     void stopAllOutputs();
@@ -68,6 +69,10 @@ private:
     void refreshComponents();
     void showComponents(const QVector<ComponentStatus>& components);
     void populateFromConfig();
+    // codec / container / channel combinations the shell cannot record
+    void applyAudioConstraints();
+    // HD and larger are 16:9 pictures: the aspect follows unless enforced
+    void autoAspectForStandard();
     void syncConfigFromUi();
     void populateDeckLinkCombo(const QVector<DeckLinkDeviceInfo>& devices, const QString& selectedValue);
     void rebuildConnectorCombos();
@@ -129,6 +134,11 @@ private:
     QComboBox* m_playbackPassCombo = nullptr;
     QComboBox* m_bitDepthCombo = nullptr;
     QComboBox* m_aspectRatioCombo = nullptr;
+    QCheckBox* m_enforceStandardCheck = nullptr;   // STANDARD_ENFORCE_CHOICE
+    QCheckBox* m_enforceAspectCheck = nullptr;     // ASPECT_ENFORCE_CHOICE
+    QComboBox* m_audioBitDepthCombo = nullptr;     // AUDIO_BIT_DEPTH_CHOICE (Decklink)
+    QComboBox* m_audioModeBitDepthCombo = nullptr; // the same choice on the Audio tab
+    QString m_enforcedInputNotice;                 // input mode last reported as overridden
     QComboBox* m_dvDeviceCombo = nullptr;
     QComboBox* m_dvContainerCombo = nullptr;
     QComboBox* m_audioDeviceCombo = nullptr;

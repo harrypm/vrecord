@@ -809,8 +809,16 @@ _setup_vrecord_input(){
         GRAB_INPUT+=(-audio_input "${AUDIO_INPUT}")
         GRAB_INPUT+=(-video_input "${VIDEO_INPUT}")
         GRAB_INPUT+=(-format_code "${STANDARD}")
-        # DeckLink captures at 48 kHz; 8 (default) or 16 embedded channels
-        GRAB_INPUT+=(-channels "${DECKLINK_AUDIO_CHANNELS_CHOICE:-8}")
+        # DeckLink captures at 48 kHz with 2, 8 (default) or 16 embedded
+        # channels; "4" captures 8 (the card has no 4-channel mode) and the
+        # channel mapping uses channels 1-4 of them
+        DECKLINK_CAPTURE_CHANNELS="${DECKLINK_AUDIO_CHANNELS_CHOICE:-8}"
+        case "${DECKLINK_CAPTURE_CHANNELS}" in
+            2|8|16) ;;
+            4) DECKLINK_CAPTURE_CHANNELS=8 ;;
+            *) DECKLINK_CAPTURE_CHANNELS=8 ;;
+        esac
+        GRAB_INPUT+=(-channels "${DECKLINK_CAPTURE_CHANNELS}")
         GRAB_INPUT+=(-audio_depth 32)
         GRAB_INPUT+=(-raw_format "${PIXEL_FORMAT}")
         GRAB_INPUT+=(-i "${DECKLINK_INPUT_CHOICE}")
@@ -2944,22 +2952,48 @@ _lookup_choice(){
         "8 bit")  PIXEL_FORMAT="uyvy422" ;;
 
         # audio codec
+        # PCM and FLAC: the option names keep their historical "24-bit"
+        # spelling (existing configs), AUDIO_BIT_DEPTH_CHOICE picks 24 or 16
         "24-bit PCM")
-            _add_mediaconch_rule_set "${AUDIO_CODEC_PCM_TEST}"
-            MIDDLEOPTIONS_PRES_AUDIO+=(-c:a pcm_s24le)
+            if [[ "${AUDIO_BIT_DEPTH_CHOICE}" = "16-bit" ]] ; then
+                _add_mediaconch_rule_set "${AUDIO_CODEC_PCM_TEST/>24</>16<}"
+                MIDDLEOPTIONS_PRES_AUDIO+=(-c:a pcm_s16le)
+                AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X pcm_s16le)
+            else
+                _add_mediaconch_rule_set "${AUDIO_CODEC_PCM_TEST}"
+                MIDDLEOPTIONS_PRES_AUDIO+=(-c:a pcm_s24le)
+                AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X pcm_s24le)
+            fi
             MIDDLEOPTIONS_PRES_AUDIO+=(-rf64 auto)
-            AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X pcm_s24le)
             AUDIO_EXT='wav' ;;
         "24-bit FLAC")
             _add_mediaconch_rule_set "${AUDIO_CODEC_FLAC_TEST}"
             MIDDLEOPTIONS_PRES_AUDIO+=(-c:a flac)
-            MIDDLEOPTIONS_PRES_AUDIO+=(-sample_fmt s32)
-            MIDDLEOPTIONS_PRES_AUDIO+=(-bits_per_raw_sample:a 24)
-            AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X flac -sample_fmt:a:X s32 -bits_per_raw_sample:a:X 24)
+            if [[ "${AUDIO_BIT_DEPTH_CHOICE}" = "16-bit" ]] ; then
+                MIDDLEOPTIONS_PRES_AUDIO+=(-sample_fmt s16)
+                AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X flac -sample_fmt:a:X s16)
+            else
+                MIDDLEOPTIONS_PRES_AUDIO+=(-sample_fmt s32)
+                MIDDLEOPTIONS_PRES_AUDIO+=(-bits_per_raw_sample:a 24)
+                AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X flac -sample_fmt:a:X s32 -bits_per_raw_sample:a:X 24)
+            fi
             AUDIO_EXT='flac' ;;
         "AAC")
             MIDDLEOPTIONS_PRES_AUDIO+=(-c:a aac)
             AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X aac) ;;
+        # Opus: lossy, 48 kHz, Matroska / MP4 only (QuickTime, AVI and MXF
+        # cannot carry it). libopus when the ffmpeg has it, else ffmpeg's
+        # own (experimental) encoder
+        "Opus")
+            if "${FFMPEG_BIN}" -hide_banner -encoders 2>/dev/null | grep -q " libopus " ; then
+                MIDDLEOPTIONS_PRES_AUDIO+=(-c:a libopus -b:a 192k)
+                AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X libopus -b:a:X 192k)
+            else
+                MIDDLEOPTIONS_PRES_AUDIO+=(-c:a opus -strict -2 -b:a 192k)
+                AUDIO_MIDDLEOPTIONS_TEMPLATE+=(-c:a:X opus -strict:a:X -2 -b:a:X 192k)
+            fi
+            MIDDLEOPTIONS_PRES_AUDIO+=(-ar 48000)
+            AUDIO_EXT='opus' ;;
 
         # audio mappings
         "2 Stereo Tracks (Channels 1 & 2 -> 1st Track Stereo, Channels 3 & 4 -> 2nd Track Stereo)")
@@ -4116,9 +4150,10 @@ AUDIO_CODEC_PCM_TEST='
 
 AUDIO_CODEC_FLAC_TEST='
     <rule name="Is the audio FLAC?" value="Format" tracktype="Audio" operator="=">FLAC</rule>
-    <policy type="or" name="Bit Depth is 32 or 24?">
+    <policy type="or" name="Bit Depth is 32, 24 or 16?">
         <rule name="Bit Depth is 32?" value="BitDepth" tracktype="Audio" operator="=">32</rule>
         <rule name="Bit Depth is 24?" value="BitDepth" tracktype="Audio" operator="=">24</rule>
+        <rule name="Bit Depth is 16?" value="BitDepth" tracktype="Audio" operator="=">16</rule>
     </policy>
 '
 
@@ -4541,7 +4576,8 @@ AUDIO_INPUT_OPTIONS=("Analog" "SDI Embedded Audio" "Digital Audio (AES/EBU)")
 CONTAINER_OPTIONS=("QuickTime" "Matroska" "AVI" "MXF" "MP4")
 DV_CONTAINER_OPTIONS=("DV" "Matroska" "QuickTime")
 VIDEO_CODEC_OPTIONS=("Uncompressed Video" "FFV1 version 3" "JPEG2000" "ProRes" "ProRes (HQ)" "h264" "HuffYUV")
-AUDIO_CODEC_OPTIONS=("24-bit PCM" "24-bit FLAC" "AAC")
+AUDIO_CODEC_OPTIONS=("24-bit PCM" "24-bit FLAC" "AAC" "Opus")
+AUDIO_BIT_DEPTH_OPTIONS=("24-bit" "16-bit")
 AUDIO_CHANNEL_CHOICE_OPTIONS=("Mono" "Stereo")
 AUDIO_MODE_SR_CHOICE_OPTIONS=("96 kHz" "48 kHz" "44.1 kHz")
 VIDEO_BITDEPTH_OPTIONS=("10 bit" "8 bit")
@@ -4673,7 +4709,17 @@ if [[ "${OS_TYPE}" = "windows" ]] ; then
     fi
 fi
 
+# audio bit depth for PCM / FLAC (read by the codec lookups below)
+_review_option -n -d "24-bit" "AUDIO_BIT_DEPTH_CHOICE" "${AUDIO_BIT_DEPTH_OPTIONS[@]}"
 if [[ "${DEVICE_INPUT_CHOICE}" = "0" ]] ; then
+    if [[ "${AUDIO_CODEC_CHOICE}" = "Opus" ]] && [[ "${CONTAINER_CHOICE}" != "Matroska" ]] && [[ "${CONTAINER_CHOICE}" != "MP4" ]] ; then
+        _report -w "Opus audio can only be recorded to Matroska or MP4 (not ${CONTAINER_CHOICE}). Please choose another audio codec or file format in ${SCRIPTNAME} -e or the configuration file at ${CONFIG_FILE}."
+        exit 2
+    fi
+    if [[ "${DECKLINK_AUDIO_CHANNELS_CHOICE}" = "2" ]] && [[ "${AUDIO_MAPPING_CHOICE}" == *"3 & 4"* ]] ; then
+        _report -w "The audio channel mapping \"${AUDIO_MAPPING_CHOICE}\" needs channels 3 and 4, but only 2 capture channels are selected. Please choose 4 or more capture channels or another mapping."
+        exit 2
+    fi
     _review_option "CONTAINER_CHOICE" "${CONTAINER_OPTIONS[@]}"
     _review_option "VIDEO_CODEC_CHOICE" "${VIDEO_CODEC_OPTIONS[@]}"
     _review_option "AUDIO_CODEC_CHOICE" "${AUDIO_CODEC_OPTIONS[@]}"

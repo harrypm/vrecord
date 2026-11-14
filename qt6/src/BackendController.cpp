@@ -1,6 +1,7 @@
 #include "BackendController.h"
 
 #include "DeckLinkDiscovery.h"
+#include "Wss.h"
 #include "PipeFeed.h"
 #include "VrecordOptions.h"
 
@@ -332,6 +333,18 @@ FrameFeed* BackendController::startFeed(const QString& kind, const QList<FrameFe
             return;
         }
         if (isInput) {
+            if (feed == m_previewFeed && m_previewWssRows > 0 && frame.height() == m_previewPictureHeight + m_previewWssRows) {
+                // the rows under the picture are the input's first lines at
+                // full width: read WSS from them, show only the picture
+                if (++m_wssFrameCounter % 12 == 0) {
+                    readWss(frame);
+                }
+                auto* keep = new QImage(frame);
+                const QImage picture(keep->constBits(), keep->width(), m_previewPictureHeight, keep->bytesPerLine(), keep->format(),
+                                     [](void* info) { delete static_cast<QImage*>(info); }, keep);
+                emit inputFrame(picture);
+                return;
+            }
             emit inputFrame(frame);
         } else {
             emit outputFrame(frame);
@@ -734,11 +747,15 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
     stopFeed(m_previewFeed);
 
     const VideoMode mode = VideoModes::forStandard(config.value(QStringLiteral("STANDARD_CHOICE")).trimmed());
+    // "Enforce manual selection": capture exactly the chosen standard (no
+    // input autodetect, no relaunch when the input changes)
+    const bool enforced = config.value(QStringLiteral("STANDARD_ENFORCE_CHOICE")) == QStringLiteral("true") && !mode.formatCode.isEmpty();
+    m_previewEnforced = enforced;
     // native framing: the pane gets the signal's own raster shape. The driver
     // keeps the last detected input mode even while no capture runs; when the
     // live capture reports a different one the preview relaunches at that
     // size (see the streaming handler and the mode poll)
-    QString frameCode = DeckLinkDiscovery::detectInputFormatCode(device, nullptr, true);
+    QString frameCode = enforced ? mode.formatCode : DeckLinkDiscovery::detectInputFormatCode(device, nullptr, true);
     VideoMode frameMode = VideoModes::forCode(frameCode);
     if (!frameMode.isValid()) {
         frameMode = mode;
@@ -749,6 +766,14 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
     VideoModes::previewSize(frameMode.height, VideoModes::displayAspect(frameMode, config.value(QStringLiteral("ASPECT_RATIO_CHOICE"))), &width, &height);
     m_previewFrameCode = frameCode;
     m_previewConfig = config;
+    // PAL: carry lines 23 / 336 (the first two rows) at full width under the
+    // picture for the WSS reader; the 4:3 PAL pane is 720 wide, 16:9 wider
+    m_previewWssRows = frameCode == QStringLiteral("pal") && width >= 720 ? 2 : 0;
+    m_previewPictureHeight = height;
+    m_wssFrameCounter = 0;
+    m_wssCandidate.clear();
+    m_wssStableReads = 0;
+    m_wssReported.clear();
 
     bool autodetect = true;
     bool relayPossible = false;
@@ -758,7 +783,7 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
     }
     for (const auto& info : DeckLinkDiscovery::enumerateDevices()) {
         if (info.ffmpegName == device || info.modelName == device) {
-            autodetect = info.supportsInputFormatDetection;
+            autodetect = info.supportsInputFormatDetection && !enforced;
             // relaying the input back out of the same card needs full duplex
             relayPossible = (relayDevice != info.ffmpegName && relayDevice != info.modelName) || info.supportsFullDuplex;
         }
@@ -778,7 +803,10 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
                                 QStringLiteral("-analyzeduration"), QStringLiteral("0")};
     // audio is captured too (same input and channel count as a recording) so
     // the level meters show what would be recorded
-    const QString audioChannels = config.value(QStringLiteral("DECKLINK_AUDIO_CHANNELS_CHOICE"), QStringLiteral("8")).trimmed();
+    // 2 / 8 / 16 go to the card as chosen; "4" captures 8 and meters 1-4
+    const QString channelChoice = config.value(QStringLiteral("DECKLINK_AUDIO_CHANNELS_CHOICE"), QStringLiteral("8")).trimmed();
+    const QString audioChannels = VrecordOptions::decklinkCaptureChannels(channelChoice);
+    const int usedChannels = channelChoice == QStringLiteral("4") ? 4 : audioChannels.toInt();
     QStringList deviceOptions{QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
                               QStringLiteral("-raw_format"), QStringLiteral("uyvy422"),
                               QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE"))),
@@ -790,18 +818,26 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
                                    QStringLiteral("-raw_format"), QStringLiteral("yuv422p10"),
                                    QStringLiteral("-audio_input"), VrecordOptions::ffmpegAudioInput(config.value(QStringLiteral("AUDIO_INPUT_CHOICE"))),
                                    QStringLiteral("-channels"), audioChannels};
+    const QString pictureFilter = QStringLiteral("scale=%1:%2:flags=fast_bilinear,setsar=1,format=bgra").arg(width).arg(height);
+    const QString videoFilter = m_previewWssRows > 0
+        ? QStringLiteral("split=2[pic][wss];[pic]%1[p];[wss]crop=iw:%2:0:0,format=bgra,pad=%3:%2:0:0[w];[p][w]vstack=inputs=2")
+              .arg(pictureFilter).arg(m_previewWssRows).arg(width)
+        : pictureFilter;
+    const QString meterFilter = usedChannels == 4
+        ? QStringLiteral("pan=4c|c0=c0|c1=c1|c2=c2|c3=c3,") + audioMeterFilter()
+        : audioMeterFilter();
     const QStringList pipeOut{QStringLiteral("-map"), QStringLiteral("0:v:0"),
-                              QStringLiteral("-vf"), QStringLiteral("scale=%1:%2:flags=fast_bilinear,setsar=1,format=bgra").arg(width).arg(height),
+                              QStringLiteral("-vf"), videoFilter,
                               QStringLiteral("-an"),
                               QStringLiteral("-f"), QStringLiteral("rawvideo"),
                               QStringLiteral("-flush_packets"), QStringLiteral("1"),
                               QStringLiteral("pipe:1"),
                               // level meters: astats per 50 ms block, printed live on stderr
                               QStringLiteral("-map"), QStringLiteral("0:a:0"),
-                              QStringLiteral("-af"), audioMeterFilter(),
+                              QStringLiteral("-af"), meterFilter,
                               QStringLiteral("-f"), QStringLiteral("null"), QStringLiteral("-")};
     // relay audio: the monitored stereo pair (1/2 unless chosen otherwise)
-    const int pair = qBound(0, monitorPair(config), qMax(0, audioChannels.toInt() / 2 - 1));
+    const int pair = qBound(0, monitorPair(config), qMax(0, usedChannels / 2 - 1));
     const QStringList relayOut{QStringLiteral("-map"), QStringLiteral("0:v:0"), QStringLiteral("-map"), QStringLiteral("0:a:0"),
                                // re-pack rather than -c:v copy: a copied stream keeps the capture's
                                // 1/1000000 time base and the muxer then cannot derive the mode
@@ -847,7 +883,7 @@ bool BackendController::startVideoPreview(const VrecordConfig& config, QString* 
         }
         return false;
     }
-    m_previewFeed = startFeed(QStringLiteral("input"), attempts, width, height, 0);
+    m_previewFeed = startFeed(QStringLiteral("input"), attempts, width, height + m_previewWssRows, 0);
     m_previewDevice = device;
     if (!m_inputModeTimer) {
         m_inputModeTimer = new QTimer(this);
@@ -872,7 +908,7 @@ void BackendController::followInputMode(const QString& detected) {
         m_lastReportedInputMode = detected;
         emit inputModeDetected(detected);
     }
-    if (detected != m_previewFrameCode) {
+    if (detected != m_previewFrameCode && !m_previewEnforced) {
         // the signal changed raster/rate: relaunch so the pane keeps native framing
         m_previewFrameCode = detected;
         QTimer::singleShot(0, this, [this] {
@@ -883,6 +919,31 @@ void BackendController::followInputMode(const QString& detected) {
             stopFeed(m_previewFeed);
             startVideoPreview(config, nullptr);
         });
+    }
+}
+
+// WSS on the first two input lines (rows under the picture): report an
+// aspect once it reads the same 3 times in a row (about 1.5 s); a line
+// without WSS reports nothing, so a manual choice stays
+void BackendController::readWss(const QImage& frame) {
+    Wss::Result result;
+    for (int row = 0; row < m_previewWssRows && result.aspect == Wss::Aspect::None; ++row) {
+        result = Wss::decode(Wss::rowLuma(frame, m_previewPictureHeight + row));
+    }
+    if (result.aspect == Wss::Aspect::None) {
+        m_wssCandidate.clear();
+        m_wssStableReads = 0;
+        return;
+    }
+    const QString aspect = result.aspect == Wss::Aspect::Wide ? QStringLiteral("16/9") : QStringLiteral("4/3");
+    if (aspect != m_wssCandidate) {
+        m_wssCandidate = aspect;
+        m_wssStableReads = 1;
+        return;
+    }
+    if (++m_wssStableReads >= 3 && aspect != m_wssReported) {
+        m_wssReported = aspect;
+        emit inputAspectDetected(aspect, QStringLiteral("WSS %1 - %2").arg(result.group, result.description));
     }
 }
 

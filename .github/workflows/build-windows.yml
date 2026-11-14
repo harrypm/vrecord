@@ -52,7 +52,7 @@ jobs:
             toolchain:p cmake:p ninja:p pkgconf:p nasm:p
             qt6-base:p qt6-svg:p qt6-tools:p
             SDL2:p x264:p openh264:p freetype:p harfbuzz:p fontconfig:p fribidi:p
-            gtk3:p libxml2:p libxslt:p nsis:p
+            gtk3:p libxml2:p libxslt:p nsis:p opus:p
 
       # cached build inputs (ffmpeg-ma, gtkdialog, ...): keyed on the recipe
       # AND the week, so binaries never drift far from the MSYS2 DLLs the

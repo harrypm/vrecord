@@ -51,7 +51,61 @@ inline QStringList videoCodecs() {
 }
 
 inline QStringList audioCodecs() {
-    return {QStringLiteral("24-bit PCM"), QStringLiteral("24-bit FLAC"), QStringLiteral("AAC")};
+    return {QStringLiteral("24-bit PCM"), QStringLiteral("24-bit FLAC"), QStringLiteral("AAC"), QStringLiteral("Opus")};
+}
+
+// audio-only mode writes the codec's own file (.wav / .flac / .opus): AAC
+// has no audio-only file there
+inline QStringList audioModeCodecs() {
+    return {QStringLiteral("24-bit PCM"), QStringLiteral("24-bit FLAC"), QStringLiteral("Opus")};
+}
+
+// combo label for an audio codec value: the bit depth is chosen separately
+// (AUDIO_BIT_DEPTH_CHOICE), the shell keeps the historical "24-bit" names
+inline QString audioCodecLabel(const QString& value) {
+    static const QMap<QString, QString> labels{
+        {QStringLiteral("24-bit PCM"), QStringLiteral("PCM (uncompressed)")},
+        {QStringLiteral("24-bit FLAC"), QStringLiteral("FLAC (lossless)")},
+        {QStringLiteral("AAC"), QStringLiteral("AAC (lossy)")},
+        {QStringLiteral("Opus"), QStringLiteral("Opus (lossy, MKV / MP4)")},
+    };
+    return labels.value(value, value);
+}
+
+// PCM and FLAC take a bit depth; the lossy codecs do not
+inline bool audioCodecHasBitDepth(const QString& value) {
+    return value == QStringLiteral("24-bit PCM") || value == QStringLiteral("24-bit FLAC");
+}
+
+inline QStringList audioBitDepths() {
+    return {QStringLiteral("24-bit"), QStringLiteral("16-bit")};
+}
+
+// containers that can carry the codec (ffmpeg muxes Opus only into Matroska
+// and MP4)
+inline bool audioCodecFitsContainer(const QString& codec, const QString& container) {
+    if (codec == QStringLiteral("Opus")) {
+        return container == QStringLiteral("Matroska") || container == QStringLiteral("MP4");
+    }
+    return true;
+}
+
+// capture channel choices: the card captures 2, 8 or 16 embedded channels;
+// "4" captures 8 and the mapping uses channels 1-4
+inline QStringList captureChannels() {
+    return {QStringLiteral("2"), QStringLiteral("4"), QStringLiteral("8"), QStringLiteral("16")};
+}
+
+inline QString decklinkCaptureChannels(const QString& choice) {
+    if (choice == QStringLiteral("2") || choice == QStringLiteral("16")) {
+        return choice;
+    }
+    return QStringLiteral("8");
+}
+
+// channel mappings that read channels 3 / 4 (unusable with 2 capture channels)
+inline bool mappingNeedsFourChannels(const QString& mapping) {
+    return mapping.contains(QStringLiteral("3 & 4"));
 }
 
 inline QStringList audioChannels() {

@@ -92,6 +92,9 @@ signals:
     void shellFinished(const QString& mode, int exitCode, const QString& message);
     // the driver reports a (new) mode on the live input, e.g. "Hp50"
     void inputModeDetected(const QString& formatCode);
+    // the live PAL input carries widescreen signalling (WSS): "16/9" or
+    // "4/3" (steady for a few reads), with the WSS group in words
+    void inputAspectDetected(const QString& aspect, const QString& detail);
     // live input audio levels (dBFS per channel) from the preview / monitor
     void inputAudioLevels(const QVector<float>& peakDb, const QVector<float>& rmsDb);
     // what goes to the card: playout / held frame / test signal audio
@@ -140,6 +143,7 @@ private:
     FrameFeed* startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames);
     void stopFeed(QPointer<FrameFeed>& feed);
     void followInputMode(const QString& detected);
+    void readWss(const QImage& frame);
     void startSessionMonitor(const VrecordConfig& config, QProcessEnvironment* env);
     void stopSessionMonitor();
     void pollMonitorLevels();
@@ -162,6 +166,15 @@ private:
     QString m_previewDevice;
     QString m_previewFrameCode;       // the mode the pane raster was sized for
     QString m_lastReportedInputMode;
+    bool m_previewEnforced = false;   // STANDARD_ENFORCE_CHOICE: no autodetect / relaunch
+    // WSS rows: the preview pipe carries the input's first 2 lines at full
+    // width under the picture (PAL only); stripped before display
+    int m_previewWssRows = 0;
+    int m_previewPictureHeight = 0;
+    int m_wssFrameCounter = 0;
+    QString m_wssCandidate;
+    int m_wssStableReads = 0;
+    QString m_wssReported;
     VrecordConfig m_previewConfig;
     QTimer* m_inputModeTimer = nullptr;
     // in-pane session monitor

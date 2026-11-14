@@ -5,6 +5,7 @@
 #include "LevelMeter.h"
 #include "VideoView.h"
 #include "VrecordOptions.h"
+#include "Wss.h"
 #include "DeckControl.h"
 
 #include <QApplication>
@@ -36,6 +37,7 @@
 #include <QScopeGuard>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QSplitter>
 #include <QStyleFactory>
 #include <QStyleHints>
@@ -179,6 +181,7 @@ MainWindow::MainWindow(const QString& packageRoot, QWidget* parent)
         appendActivity(QStringLiteral("output: %1").arg(message));
     });
     connect(&m_backend, &BackendController::inputModeDetected, this, &MainWindow::followInputMode);
+    connect(&m_backend, &BackendController::inputAspectDetected, this, &MainWindow::onInputAspectDetected);
     connect(&m_backend, &BackendController::testSignalResult, this, [this](bool ok, const QString& message) {
         if (!ok) {
             m_testSignalOutputCheck->blockSignals(true);
@@ -627,6 +630,25 @@ void MainWindow::appendActivity(const QString& line) {
         m_activityText->appendPlainText(QStringLiteral("%1  %2").arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")), line));
     }
 }
+namespace {
+// "PCM (uncompressed)" etc.; the item data keeps the shell's spelling
+void labelAudioCodecItems(QComboBox* combo) {
+    for (int i = 0; i < combo->count(); ++i) {
+        const QString value = combo->itemText(i);
+        combo->setItemData(i, value);
+        combo->setItemText(i, VrecordOptions::audioCodecLabel(value));
+    }
+}
+
+void setComboItemEnabled(QComboBox* combo, int index, bool enabled) {
+    if (auto* model = qobject_cast<QStandardItemModel*>(combo->model())) {
+        if (QStandardItem* item = model->item(index)) {
+            item->setEnabled(enabled);
+        }
+    }
+}
+} // namespace
+
 QComboBox* MainWindow::makeCombo(const QStringList& items) {
     auto* combo = new QComboBox(this);
     combo->addItems(items);
@@ -754,11 +776,22 @@ void MainWindow::buildUi() {
                                               QStringLiteral("S-Video")});
     m_bitDepthCombo = makeCombo(VrecordOptions::bitDepths());
     m_aspectRatioCombo = makeCombo(VrecordOptions::aspectRatios());
+    m_enforceStandardCheck = makeCheckBox(QStringLiteral("Enforce manual selection"));
+    m_enforceStandardCheck->setToolTip(QStringLiteral("Unticked: the Standard follows the mode the card locks on the input, and the preview switches with it.\n"
+                                                      "Ticked: always capture the Standard chosen here, whatever the input sends."));
+    m_enforceAspectCheck = makeCheckBox(QStringLiteral("Enforce manual selection"));
+    m_enforceAspectCheck->setToolTip(QStringLiteral("Unticked: the aspect ratio follows the input - 16/9 for HD and larger, and for PAL\n"
+                                                    "the widescreen signalling (WSS) on line 23 when the source sends it.\n"
+                                                    "Ticked: always use the aspect ratio chosen here."));
     m_embedLogsCombo = makeCombo(VrecordOptions::embedLogs());
     m_containerCombo = makeCombo(VrecordOptions::containers());
     labelContainerItems(m_containerCombo);
     m_videoCodecCombo = makeCombo(VrecordOptions::videoCodecs());
     m_audioCodecCombo = makeCombo(VrecordOptions::audioCodecs());
+    labelAudioCodecItems(m_audioCodecCombo);
+    m_audioCodecCombo->setToolTip(QStringLiteral("Opus can only be recorded to MKV or MP4."));
+    m_audioBitDepthCombo = makeCombo(VrecordOptions::audioBitDepths());
+    m_audioBitDepthCombo->setToolTip(QStringLiteral("Bit depth of PCM and FLAC audio (AAC and Opus are lossy and have none)"));
     m_playbackViewCombo = makeCombo(VrecordOptions::playbackViews());
     m_playbackPassCombo = makeCombo(VrecordOptions::playbackViews());
     m_mp4Check = makeCheckBox(QStringLiteral("Access MP4"));
@@ -769,8 +802,9 @@ void MainWindow::buildUi() {
     // audio (GTK has these on its main page too): monitoring, the capture
     // channel count, the DeckLink capture rate, and live level meters
     m_monitorAudioCombo = makeCombo(VrecordOptions::monitorAudio());
-    m_captureChannelsCombo = makeCombo({QStringLiteral("8"), QStringLiteral("16")});
-    m_captureChannelsCombo->setToolTip(QStringLiteral("Embedded audio channels captured from the card (the channel mapping picks the tracks)"));
+    m_captureChannelsCombo = makeCombo(VrecordOptions::captureChannels());
+    m_captureChannelsCombo->setToolTip(QStringLiteral("Audio channels captured from the card (the channel mapping picks the tracks).\n"
+                                                      "2: channels 1-2 only. 4: channels 1-4 (the card captures 8). 8 / 16: all embedded channels."));
     m_ffplayMonitorCheck = makeCheckBox(QStringLiteral("ffplay monitor window (scopes / views)"));
     m_ffplayAspectCombo = makeCombo({QStringLiteral("16:9"), QStringLiteral("21:9"), QStringLiteral("5:4")});
     m_ffplayAspectCombo->setToolTip(QStringLiteral("Shape of the ffplay monitor view, to match the monitor it is shown on:\n"
@@ -800,6 +834,8 @@ void MainWindow::buildUi() {
     deckInputLayout->addWidget(m_bitDepthCombo, 3, 2);
     deckInputLayout->addWidget(new QLabel(QStringLiteral("Display Aspect Ratio"), deckInputBox), 2, 3);
     deckInputLayout->addWidget(m_aspectRatioCombo, 3, 3);
+    deckInputLayout->addWidget(m_enforceStandardCheck, 4, 1);
+    deckInputLayout->addWidget(m_enforceAspectCheck, 4, 3);
 
     auto* deckOutputBox = new QGroupBox(QStringLiteral("Output file options"), deckTab);
     auto* deckOutputLayout = new QGridLayout(deckOutputBox);
@@ -811,6 +847,8 @@ void MainWindow::buildUi() {
     deckOutputLayout->addWidget(m_videoCodecCombo, 1, 2);
     deckOutputLayout->addWidget(new QLabel(QStringLiteral("Select Audio Codec"), deckOutputBox), 0, 3);
     deckOutputLayout->addWidget(m_audioCodecCombo, 1, 3);
+    deckOutputLayout->addWidget(new QLabel(QStringLiteral("Audio Bit Depth"), deckOutputBox), 0, 4);
+    deckOutputLayout->addWidget(m_audioBitDepthCombo, 1, 4);
 
     auto* deckLowerRow = new QHBoxLayout();
     auto* playbackBox = new QGroupBox(QStringLiteral("Playback options"), deckTab);
@@ -972,7 +1010,10 @@ void MainWindow::buildUi() {
     m_tabs->addTab(dvTab, QStringLiteral("DV"));
 
     m_audioDeviceCombo = makeCombo({QStringLiteral("default"), QStringLiteral("Blackmagic"), QStringLiteral("Line In"), QStringLiteral("Microphone")});
-    m_audioModeCodecCombo = makeCombo(VrecordOptions::audioCodecs());
+    m_audioModeCodecCombo = makeCombo(VrecordOptions::audioModeCodecs());
+    labelAudioCodecItems(m_audioModeCodecCombo);
+    m_audioModeBitDepthCombo = makeCombo(VrecordOptions::audioBitDepths());
+    m_audioModeBitDepthCombo->setToolTip(m_audioBitDepthCombo->toolTip());
     m_audioChannelsCombo = makeCombo(VrecordOptions::audioChannels());
     m_audioSampleRateCombo = makeCombo(VrecordOptions::audioSampleRates());
     auto* audioTab = new QWidget(this);
@@ -987,6 +1028,8 @@ void MainWindow::buildUi() {
     audioLayout->addWidget(m_audioChannelsCombo, 1, 2);
     audioLayout->addWidget(new QLabel(QStringLiteral("Select Sampling Rate"), audioBox), 0, 3);
     audioLayout->addWidget(m_audioSampleRateCombo, 1, 3);
+    audioLayout->addWidget(new QLabel(QStringLiteral("Bit Depth"), audioBox), 0, 4);
+    audioLayout->addWidget(m_audioModeBitDepthCombo, 1, 4);
     audioRoot->addWidget(audioBox);
     audioRoot->addStretch();
     m_tabs->addTab(audioTab, QStringLiteral("Audio"));
@@ -1461,13 +1504,14 @@ void MainWindow::buildUi() {
                         m_audioDeviceCombo, m_audioModeCodecCombo, m_audioChannelsCombo, m_audioSampleRateCombo,
                         m_waveformScaleCombo, m_signalViewCombo, m_signalIntCombo, m_monitorAudioCombo, m_ntsc43SarCombo,
                         m_ntsc169SarCombo, m_pal43SarCombo, m_pal169SarCombo, m_themeCombo, m_videoOutputDeviceCombo, m_relayDeviceCombo,
-                        m_testPatternCombo, m_testAudioCombo, m_videoOutputConnectionCombo, m_ffplayAspectCombo}) {
+                        m_testPatternCombo, m_testAudioCombo, m_videoOutputConnectionCombo, m_ffplayAspectCombo,
+                        m_audioBitDepthCombo, m_captureChannelsCombo}) {
         connect(combo, &QComboBox::currentTextChanged, this, updateSlots);
     }
     for (auto* check : {m_enableSuffixCheck, m_mp4Check, m_frameMd5Check, m_timecodeVttCheck, m_qcToolsCheck,
                         m_dvOptionSCheck, m_dvOptionDCheck, m_dvOptionTCheck, m_dvOptionTcCheck, m_ccVttCheck,
                         m_ccSrtCheck, m_capToMp4Check, m_colorSafeCheck, m_invertPhase2Check, m_invertPhase4Check,
-                        m_previewRelayCheck, m_filePlayAutoCheck, m_testSignalOutputCheck}) {
+                        m_previewRelayCheck, m_filePlayAutoCheck, m_testSignalOutputCheck, m_enforceAspectCheck}) {
         connect(check, &QCheckBox::checkStateChanged, this, updateSlots);
     }
     for (auto* radio : m_inputChoiceRadios) {
@@ -1625,6 +1669,28 @@ void MainWindow::buildUi() {
     connect(m_videoInputCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
     connect(m_standardCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
     connect(m_aspectRatioCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
+    // enforcing switches the preview between autodetect and the chosen mode
+    connect(m_enforceStandardCheck, &QCheckBox::clicked, this, [this, restartPreviewIfRunning](bool on) {
+        m_enforcedInputNotice.clear();
+        appendActivity(on ? QStringLiteral("Standard enforced: capturing %1 whatever the input sends").arg(m_standardCombo->currentText())
+                          : QStringLiteral("Standard follows the input mode"));
+        restartPreviewIfRunning();
+    });
+    connect(m_enforceAspectCheck, &QCheckBox::clicked, this, [this](bool on) {
+        appendActivity(on ? QStringLiteral("Aspect ratio enforced: %1").arg(m_aspectRatioCombo->currentText())
+                          : QStringLiteral("Aspect ratio follows the input (HD: 16/9, PAL: WSS)"));
+    });
+    // one bit depth, shown on the Decklink and the Audio tab
+    connect(m_audioBitDepthCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (m_audioModeBitDepthCombo->currentIndex() != index) {
+            m_audioModeBitDepthCombo->setCurrentIndex(index);
+        }
+    });
+    connect(m_audioModeBitDepthCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (m_audioBitDepthCombo->currentIndex() != index) {
+            m_audioBitDepthCombo->setCurrentIndex(index);
+        }
+    });
     connect(m_captureChannelsCombo, &QComboBox::activated, this, [restartPreviewIfRunning](int) { restartPreviewIfRunning(); });
     connect(m_monitorPairCombo, &QComboBox::activated, this, [this, restartPreviewIfRunning](int index) {
         m_previewMeter->setMonitorPair(index);
@@ -1700,6 +1766,9 @@ void MainWindow::populateFromConfig() {
     setChoice(m_playbackPassCombo, m_config.value(QStringLiteral("PLAYBACKVIEW_CHOICE_PASS")), QStringLiteral("Visual"));
     setChoice(m_bitDepthCombo, m_config.value(QStringLiteral("VIDEO_BIT_DEPTH_CHOICE")), QStringLiteral("10 bit"));
     setChoice(m_aspectRatioCombo, m_config.value(QStringLiteral("ASPECT_RATIO_CHOICE")), QStringLiteral("4/3"));
+    m_enforceStandardCheck->setChecked(m_config.value(QStringLiteral("STANDARD_ENFORCE_CHOICE")) == QStringLiteral("true"));
+    m_enforceAspectCheck->setChecked(m_config.value(QStringLiteral("ASPECT_ENFORCE_CHOICE")) == QStringLiteral("true"));
+    setChoice(m_audioBitDepthCombo, m_config.value(QStringLiteral("AUDIO_BIT_DEPTH_CHOICE")), QStringLiteral("24-bit"));
     setComboValue(m_dvDeviceCombo, m_config.value(QStringLiteral("DVRESCUE_INPUT_CHOICE"), QStringLiteral("auto")));
     setChoice(m_dvContainerCombo, m_config.value(QStringLiteral("DV_CONTAINER_CHOICE")), QStringLiteral("DV"));
     setComboValue(m_audioDeviceCombo, m_config.value(QStringLiteral("AUDIO_DEV_CHOICE"), QStringLiteral("default")));
@@ -1769,15 +1838,18 @@ void MainWindow::syncConfigFromUi() {
     m_config.setValue(QStringLiteral("EMBED_LOGS_CHOICE"), m_embedLogsCombo->currentText());
     m_config.setValue(QStringLiteral("CONTAINER_CHOICE"), choiceValue(m_containerCombo));
     m_config.setValue(QStringLiteral("VIDEO_CODEC_CHOICE"), m_videoCodecCombo->currentText());
-    m_config.setValue(QStringLiteral("AUDIO_CODEC_CHOICE"), m_audioCodecCombo->currentText());
+    m_config.setValue(QStringLiteral("AUDIO_CODEC_CHOICE"), choiceValue(m_audioCodecCombo));
+    m_config.setValue(QStringLiteral("AUDIO_BIT_DEPTH_CHOICE"), m_audioBitDepthCombo->currentText());
     m_config.setValue(QStringLiteral("PLAYBACKVIEW_CHOICE"), m_playbackViewCombo->currentText());
     m_config.setValue(QStringLiteral("PLAYBACKVIEW_CHOICE_PASS"), m_playbackPassCombo->currentText());
     m_config.setValue(QStringLiteral("VIDEO_BIT_DEPTH_CHOICE"), m_bitDepthCombo->currentText());
     m_config.setValue(QStringLiteral("ASPECT_RATIO_CHOICE"), m_aspectRatioCombo->currentText());
+    m_config.setValue(QStringLiteral("STANDARD_ENFORCE_CHOICE"), m_enforceStandardCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
+    m_config.setValue(QStringLiteral("ASPECT_ENFORCE_CHOICE"), m_enforceAspectCheck->isChecked() ? QStringLiteral("true") : QStringLiteral("false"));
     m_config.setValue(QStringLiteral("DVRESCUE_INPUT_CHOICE"), m_dvDeviceCombo->currentText());
     m_config.setValue(QStringLiteral("DV_CONTAINER_CHOICE"), choiceValue(m_dvContainerCombo));
     m_config.setValue(QStringLiteral("AUDIO_DEV_CHOICE"), m_audioDeviceCombo->currentText());
-    m_config.setValue(QStringLiteral("AUDIO_MODE_CODEC_CHOICE"), m_audioModeCodecCombo->currentText());
+    m_config.setValue(QStringLiteral("AUDIO_MODE_CODEC_CHOICE"), choiceValue(m_audioModeCodecCombo));
     m_config.setValue(QStringLiteral("AUDIO_CHANNEL_CHOICE"), m_audioChannelsCombo->currentText());
     m_config.setValue(QStringLiteral("AUDIO_MODE_SR_CHOICE"), m_audioSampleRateCombo->currentText());
     m_config.setValue(QStringLiteral("WAVEFORM_SCALE_CHOICE"), m_waveformScaleCombo->currentText());
@@ -1991,7 +2063,21 @@ void MainWindow::followInputMode(const QString& formatCode) {
             break;
         }
     }
-    if (match.isEmpty() || match == m_standardCombo->currentText()) {
+    if (match.isEmpty()) {
+        return;
+    }
+    if (m_enforceStandardCheck->isChecked()) {
+        // keep the chosen Standard; say once per input change that they differ
+        if (match != m_standardCombo->currentText() && match != m_enforcedInputNotice) {
+            m_enforcedInputNotice = match;
+            appendActivity(QStringLiteral("Input is %1, but the Standard is enforced as %2 (untick \"Enforce manual selection\" to follow the input)")
+                               .arg(match, m_standardCombo->currentText()));
+            statusBar()->showMessage(QStringLiteral("Input is %1 - Standard enforced as %2").arg(match, m_standardCombo->currentText()), 8000);
+        }
+        return;
+    }
+    m_enforcedInputNotice.clear();
+    if (match == m_standardCombo->currentText()) {
         return;
     }
     const QString previous = m_standardCombo->currentText();
@@ -1999,6 +2085,77 @@ void MainWindow::followInputMode(const QString& formatCode) {
     updateDerivedState();
     appendActivity(QStringLiteral("Standard set to %1 to match the input (was %2)").arg(match, previous));
     statusBar()->showMessage(QStringLiteral("Standard follows the input: %1").arg(match), 6000);
+}
+
+// WSS on a PAL input (BackendController::readWss): follow it unless enforced
+void MainWindow::onInputAspectDetected(const QString& aspect, const QString& detail) {
+    if (m_backend.isShellRunning() || aspect == m_aspectRatioCombo->currentText()
+        || VrecordOptions::isHdStandard(m_standardCombo->currentText())) {
+        return;
+    }
+    if (m_enforceAspectCheck->isChecked()) {
+        appendActivity(QStringLiteral("Input signals %1 (%2), but the aspect ratio is enforced as %3")
+                           .arg(aspect, detail, m_aspectRatioCombo->currentText()));
+        return;
+    }
+    const QString previous = m_aspectRatioCombo->currentText();
+    setChoice(m_aspectRatioCombo, aspect, previous);
+    appendActivity(QStringLiteral("Display aspect ratio set to %1 from the input (%2; was %3)").arg(aspect, detail, previous));
+    statusBar()->showMessage(QStringLiteral("Aspect ratio follows the input: %1 (%2)").arg(aspect, detail), 6000);
+    updateDerivedState();
+    // the preview pane is shaped by the aspect: relaunch it
+    if (m_backend.isVideoPreviewActive()) {
+        m_backend.stopVideoPreview();
+        startPreviewQuietly();
+    }
+}
+
+void MainWindow::autoAspectForStandard() {
+    if (m_enforceAspectCheck->isChecked() || !VrecordOptions::isHdStandard(m_standardCombo->currentText())
+        || m_aspectRatioCombo->currentText() == QStringLiteral("16/9")) {
+        return;
+    }
+    const QString previous = m_aspectRatioCombo->currentText();
+    setChoice(m_aspectRatioCombo, QStringLiteral("16/9"), previous);
+    appendActivity(QStringLiteral("Display aspect ratio set to 16/9 for %1 (was %2)").arg(m_standardCombo->currentText(), previous));
+}
+
+void MainWindow::applyAudioConstraints() {
+    // Opus muxes only into Matroska / MP4
+    const QString container = choiceValue(m_containerCombo);
+    for (int i = 0; i < m_audioCodecCombo->count(); ++i) {
+        setComboItemEnabled(m_audioCodecCombo, i, VrecordOptions::audioCodecFitsContainer(m_audioCodecCombo->itemData(i).toString(), container));
+    }
+    if (!VrecordOptions::audioCodecFitsContainer(choiceValue(m_audioCodecCombo), container)) {
+        const QString previous = m_audioCodecCombo->currentText();
+        setChoice(m_audioCodecCombo, QStringLiteral("24-bit PCM"), QStringLiteral("24-bit PCM"));
+        appendActivity(QStringLiteral("%1 audio cannot be recorded to %2: audio codec set to %3")
+                           .arg(previous, m_containerCombo->currentText(), m_audioCodecCombo->currentText()));
+    }
+    m_audioBitDepthCombo->setEnabled(VrecordOptions::audioCodecHasBitDepth(choiceValue(m_audioCodecCombo)));
+    m_audioModeBitDepthCombo->setEnabled(VrecordOptions::audioCodecHasBitDepth(choiceValue(m_audioModeCodecCombo)));
+
+    // 2 capture channels: no mapping that reads channels 3 / 4
+    const QString channels = m_captureChannelsCombo->currentText();
+    const bool twoChannels = channels == QStringLiteral("2");
+    for (int i = 0; i < m_audioMappingCombo->count(); ++i) {
+        setComboItemEnabled(m_audioMappingCombo, i, !twoChannels || !VrecordOptions::mappingNeedsFourChannels(m_audioMappingCombo->itemText(i)));
+    }
+    if (twoChannels && VrecordOptions::mappingNeedsFourChannels(m_audioMappingCombo->currentText())) {
+        setChoice(m_audioMappingCombo, QStringLiteral("1 Stereo Track (From Channels 1 & 2)"), QStringLiteral("1 Stereo Track (From Channels 1 & 2)"));
+        appendActivity(QStringLiteral("2 capture channels: audio channel mapping set to %1").arg(m_audioMappingCombo->currentText()));
+    }
+    // monitored pair within the captured channels
+    if (m_monitorPairCombo) {
+        const int used = channels == QStringLiteral("4") ? 4 : qMax(2, channels.toInt());
+        for (int i = 0; i < m_monitorPairCombo->count(); ++i) {
+            setComboItemEnabled(m_monitorPairCombo, i, (i + 1) * 2 <= used);
+        }
+        if ((m_monitorPairCombo->currentIndex() + 1) * 2 > used) {
+            m_monitorPairCombo->setCurrentIndex(0);
+            m_previewMeter->setMonitorPair(0);
+        }
+    }
 }
 
 void MainWindow::startRecord() {
@@ -2298,6 +2455,40 @@ QStringList MainWindow::runSelfTest() {
           m_deckLinkCombo->count() > 0,
           QStringLiteral("%1 devices").arg(m_deckLinkCombo->count()));
 
+    // PAL widescreen signalling reader (aspect auto-detection)
+    {
+        const Wss::Result wide = Wss::decode(Wss::synthesizeLine(QStringLiteral("1110"), 17.3));
+        const Wss::Result full = Wss::decode(Wss::synthesizeLine(QStringLiteral("0001"), 24.0));
+        const Wss::Result badParity = Wss::decode(Wss::synthesizeLine(QStringLiteral("1111"), 17.3));
+        const Wss::Result flat = Wss::decode(QVector<float>(720, 16.f));
+        check(QStringLiteral("WSS reader: 16:9 anamorphic, 4:3, bad parity and no WSS"),
+              wide.aspect == Wss::Aspect::Wide && full.aspect == Wss::Aspect::FourThree
+                  && badParity.aspect == Wss::Aspect::None && flat.aspect == Wss::Aspect::None,
+              QStringLiteral("%1 / %2 / %3 / %4").arg(wide.group, full.group, badParity.group, flat.group));
+    }
+    // audio constraints: Opus only in MKV / MP4, 2 capture channels drop the 3 & 4 mappings
+    {
+        setChoice(m_containerCombo, QStringLiteral("QuickTime"), QStringLiteral("QuickTime"));
+        setChoice(m_audioCodecCombo, QStringLiteral("Opus"), QStringLiteral("Opus"));
+        applyAudioConstraints();
+        const bool opusRefused = choiceValue(m_audioCodecCombo) == QStringLiteral("24-bit PCM");
+        setChoice(m_containerCombo, QStringLiteral("Matroska"), QStringLiteral("Matroska"));
+        setChoice(m_audioCodecCombo, QStringLiteral("Opus"), QStringLiteral("Opus"));
+        applyAudioConstraints();
+        const bool opusKept = choiceValue(m_audioCodecCombo) == QStringLiteral("Opus") && !m_audioBitDepthCombo->isEnabled();
+        setChoice(m_captureChannelsCombo, QStringLiteral("2"), QStringLiteral("2"));
+        setChoice(m_audioMappingCombo, VrecordOptions::channelMappings().first(), VrecordOptions::channelMappings().first());
+        applyAudioConstraints();
+        const bool mappingLimited = !VrecordOptions::mappingNeedsFourChannels(m_audioMappingCombo->currentText());
+        check(QStringLiteral("Audio options: Opus only in MKV / MP4, no bit depth for Opus, 2 channels limit the mapping"),
+              opusRefused && opusKept && mappingLimited,
+              QStringLiteral("refused=%1 kept=%2 mapping=%3").arg(opusRefused).arg(opusKept).arg(mappingLimited));
+        // the 16-bit / 4-channel settings must still pass the shell's option review below
+        setChoice(m_audioBitDepthCombo, QStringLiteral("16-bit"), QStringLiteral("16-bit"));
+        setChoice(m_captureChannelsCombo, QStringLiteral("4"), QStringLiteral("4"));
+        updateDerivedState();
+    }
+
     saveConfig();
     check(QStringLiteral("Save Settings writes the config file"), QFileInfo::exists(m_config.configPath), m_config.configPath);
 
@@ -2324,6 +2515,7 @@ QStringList MainWindow::runSelfTest() {
             {QStringLiteral("CONTAINER_CHOICE"), VrecordOptions::containers()},
             {QStringLiteral("VIDEO_CODEC_CHOICE"), VrecordOptions::videoCodecs()},
             {QStringLiteral("AUDIO_CODEC_CHOICE"), VrecordOptions::audioCodecs()},
+            {QStringLiteral("AUDIO_BIT_DEPTH_CHOICE"), VrecordOptions::audioBitDepths()},
             {QStringLiteral("EMBED_LOGS_CHOICE"), VrecordOptions::embedLogs()},
         };
         QStringList rejected;
@@ -2598,6 +2790,8 @@ void MainWindow::updateDerivedState() {
     if (m_populating) {
         return;
     }
+    applyAudioConstraints();
+    autoAspectForStandard();
     syncConfigFromUi();
     const bool ffplayMonitor = m_ffplayMonitorCheck->isChecked();
     m_playbackViewCombo->setEnabled(ffplayMonitor);

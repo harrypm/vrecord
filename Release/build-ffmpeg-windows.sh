@@ -20,6 +20,15 @@ set -u
 export PATH=/ucrt64/bin:/usr/bin:$PATH TMPDIR=/tmp TMP=/tmp TEMP=/tmp
 B="${1:-/c/Users/Harry/vrecord-build}"
 cd "$B/ffmpeg-9.0.1" || { echo "missing $B/ffmpeg-9.0.1" ; exit 1 ; }
+# Opus recording: libopus when the UCRT64 opus package is installed
+# (pacman -S mingw-w64-ucrt-x86_64-opus; CI installs it), otherwise vrecord
+# falls back to ffmpeg's own experimental opus encoder
+EXTRA_LIBS=()
+if pkg-config --exists opus 2>/dev/null ; then
+    EXTRA_LIBS+=(--enable-libopus)
+else
+    echo "note: opus (pkg-config) not found - building without libopus"
+fi
 ./configure \
     --prefix="$B/ffmpeg-install" \
     --enable-shared \
@@ -34,7 +43,8 @@ cd "$B/ffmpeg-9.0.1" || { echo "missing $B/ffmpeg-9.0.1" ; exit 1 ; }
     --enable-libfreetype \
     --enable-libharfbuzz \
     --enable-libfontconfig \
-    --enable-libfribidi || exit 1
+    --enable-libfribidi \
+    "${EXTRA_LIBS[@]}" || exit 1
 make -j"$(nproc)" || exit 1
 make install || exit 1
 # the package (and vrecord) run the -ma names
