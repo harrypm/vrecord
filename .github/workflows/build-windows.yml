@@ -103,7 +103,7 @@ jobs:
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           A=Release/artifacts
           bash Release/ci/windows-update-tests.sh "$A/vrecord_windows_${VERSION}" \
-            "$A/vrecord_${VERSION}_windows_portable.zip" "$A/vrecord_${VERSION}_windows_setup.exe"
+            "$A/vrecord_${VERSION}_windows_x86_64_portable.zip" "$A/vrecord_${VERSION}_windows_x86_64_setup.exe"
 
       # collected even when the tests fail (the job still fails, so a release
       # never takes it): the package can then be downloaded and debugged
@@ -112,9 +112,9 @@ jobs:
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           mkdir -p artifacts/portable artifacts/installer
-          cp "Release/artifacts/vrecord_${VERSION}_windows_portable.zip" "artifacts/portable/vrecord_${VERSION}_windows_x86_64_portable.zip"
-          if [ -f "Release/artifacts/vrecord_${VERSION}_windows_setup.exe" ]; then
-            cp "Release/artifacts/vrecord_${VERSION}_windows_setup.exe" "artifacts/installer/vrecord_${VERSION}_windows_x86_64_setup.exe"
+          cp "Release/artifacts/vrecord_${VERSION}_windows_x86_64_portable.zip" artifacts/portable/
+          if [ -f "Release/artifacts/vrecord_${VERSION}_windows_x86_64_setup.exe" ]; then
+            cp "Release/artifacts/vrecord_${VERSION}_windows_x86_64_setup.exe" artifacts/installer/
           fi
           ls -la artifacts/*
 

@@ -30,11 +30,11 @@ case "${ARCH}" in
 esac
 if [ "${ARCH}" = "universal" ] ; then
     MACOS_ARCH_FLAGS="-arch x86_64 -arch arm64"
-    APP_ZIP_NAME="vrecord.app.zip"
 else
     MACOS_ARCH_FLAGS="-arch ${ARCH}"
-    APP_ZIP_NAME="vrecord_${ARCH}.app.zip"
 fi
+# same scheme as the release assets: vrecord_<version>_<platform>_<arch>
+APP_ZIP_NAME="vrecord_${VERSION}_macos_${ARCH}.app.zip"
 
 # --- Attempt the full release build (fetches/compiles all deps) ---
 if [ -x "$ROOT/bin/vrecord" ] || ./Release_Mac.sh 2>&1; then

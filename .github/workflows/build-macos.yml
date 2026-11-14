@@ -60,10 +60,10 @@ jobs:
 
       - name: Collect artifacts
         run: |
+          VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           mkdir -p artifacts
-          find Release -maxdepth 1 -name 'vrecord_*_Mac*.dmg' -exec cp {} artifacts/ \; || true
-          find Release -maxdepth 1 -name 'vrecord.pkg' -exec cp {} "artifacts/vrecord_${ARCH}.pkg" \; || true
-          cp -a Release/artifacts/vrecord.app artifacts/ 2>/dev/null || true
+          find Release -maxdepth 1 -name 'vrecord_*_macos_*.dmg' -exec cp {} artifacts/ \; || true
+          find Release -maxdepth 1 -name 'vrecord.pkg' -exec cp {} "artifacts/vrecord_${VERSION}_macos_${ARCH}.pkg" \; || true
           cp -a Release/artifacts/*.app.zip artifacts/ 2>/dev/null || true
           ls -la artifacts/
 

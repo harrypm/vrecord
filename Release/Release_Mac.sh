@@ -38,10 +38,8 @@ case "${ARCH}" in
 esac
 if [ "${ARCH}" = "universal" ] ; then
     MACOS_ARCH_FLAGS="-arch x86_64 -arch arm64"
-    ARCH_SUFFIX=""
 else
     MACOS_ARCH_FLAGS="-arch ${ARCH}"
-    ARCH_SUFFIX="_${ARCH}"
 fi
 export MACOS_ARCH_FLAGS
 
@@ -64,7 +62,7 @@ fi
 
 #-----------------------------------------------------------------------
 # Cleanup
-rm -f "${release_directory}"/vrecord_*_Mac*.dmg
+rm -f "${release_directory}"/vrecord_*_Mac*.dmg "${release_directory}"/vrecord_*_macos_*.dmg
 rm -f "${release_directory}/vrecord.unsigned.pkg"
 rm -f "${release_directory}/vrecord.pkg"
 
@@ -422,13 +420,13 @@ pushd "${release_directory}/"
         sleep 2
         hdiutil detach "/Volumes/vrecord" || hdiutil detach -force "/Volumes/vrecord"
     }
-    hdiutil convert "${tmp_path}/${tmp_dmg}" -format UDBZ -o "vrecord_${version}_Mac${ARCH_SUFFIX}.dmg"
+    hdiutil convert "${tmp_path}/${tmp_dmg}" -format UDBZ -o "vrecord_${version}_macos_${ARCH}.dmg"
 popd
 
 #-----------------------------------------------------------------------
 # Sign .dmg
 pushd "${release_directory}/"
     if [ -n "${MACOS_CODESIGN_IDENTITY}" ] ; then
-        codesign --force --options runtime --timestamp --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" --identifier "com.github.amiaopensource.vrecord" "vrecord_${version}_Mac${ARCH_SUFFIX}.dmg"
+        codesign --force --options runtime --timestamp --sign "Developer ID Application: ${MACOS_CODESIGN_IDENTITY}" --identifier "com.github.amiaopensource.vrecord" "vrecord_${version}_macos_${ARCH}.dmg"
     fi
 popd

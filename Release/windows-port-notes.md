@@ -150,3 +150,21 @@ Commits on `windows-port`: c14ab10 (feeds, shell-backed record, card-clocked pla
   - Opus muxes only into MKV and MP4: the GUI disables it for other containers and the shell refuses it.
   - The Windows ffmpeg-ma is built with libopus (`opus:p` in CI). For a local build, install `mingw-w64-ucrt-x86_64-opus`.
 - **Audio bit depth**: 24-bit / 16-bit (`AUDIO_BIT_DEPTH_CHOICE`) for PCM and FLAC. It is disabled for AAC and Opus. The GUI labels the codecs "PCM" and "FLAC"; the shell keeps the old "24-bit PCM" and "24-bit FLAC" values so existing configs still load.
+
+## Package names and the GTK output page (2026-11-14)
+
+- **One naming scheme everywhere**: the build scripts now write the release asset names directly, as `vrecord_<version>_<platform>_<arch>[_kind].<ext>`. CI no longer renames anything.
+  - `build-deb.sh` → `vrecord_<v>_linux_amd64.deb`
+  - `build-appimage.sh` → `vrecord_<v>_linux_x86_64.AppImage`
+  - `build-windows-portable.sh` → `vrecord_<v>_windows_x86_64_portable.zip`
+  - `build-windows-installer.sh` → `vrecord_<v>_windows_x86_64_setup.exe`
+  - `Release_Mac.sh` / `build-mac-app.sh` → `vrecord_<v>_macos_<arch>.dmg` / `.app.zip`. The universal build is named `_macos_universal` now; before, it had no arch suffix.
+  - The macOS CI artifact no longer carries the raw `vrecord.app` folder: the `.app.zip` keeps its permissions and symlinks.
+  - The unpacked Windows package folder stays `Release/artifacts/vrecord_windows_<v>/`, because `agent-build.cmd` and the tests use that path.
+- **GTK GUI: the Output tab is gone**, matching Qt6. The test signal controls now sit on the Video Preview tab's output side, in this order:
+  1. the relay output device;
+  2. the *Relay live feed* and *Test signal output* ticks, side by side;
+  3. a *Signal and audio generator* frame with the pattern and audio lists;
+  4. the output picture and status;
+  5. a *Playout controls* frame with file auto-detect, transport and scrub.
+  The settings tabs are now Decklink, DV, Audio, Config and Video Preview. The config variables are unchanged.

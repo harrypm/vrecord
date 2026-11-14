@@ -218,12 +218,12 @@ EOF
 (
   cd "$ARTIFACTS"
   if command -v zip >/dev/null 2>&1; then
-    rm -f "vrecord_${VERSION}_windows_portable.zip"
-    (cd "vrecord_windows_${VERSION}" && zip -qry "../vrecord_${VERSION}_windows_portable.zip" .)
+    rm -f "vrecord_${VERSION}_windows_x86_64_portable.zip"
+    (cd "vrecord_windows_${VERSION}" && zip -qry "../vrecord_${VERSION}_windows_x86_64_portable.zip" .)
   else
-    powershell.exe -NoProfile -Command "Compress-Archive -Path 'vrecord_windows_${VERSION}\\*' -DestinationPath 'vrecord_${VERSION}_windows_portable.zip' -Force"
+    powershell.exe -NoProfile -Command "Compress-Archive -Path 'vrecord_windows_${VERSION}\\*' -DestinationPath 'vrecord_${VERSION}_windows_x86_64_portable.zip' -Force"
   fi
 )
 
 echo "Built: $PKG"
-echo "Zip:   $ARTIFACTS/vrecord_${VERSION}_windows_portable.zip"
+echo "Zip:   $ARTIFACTS/vrecord_${VERSION}_windows_x86_64_portable.zip"

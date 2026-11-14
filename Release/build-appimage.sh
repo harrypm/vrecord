@@ -104,7 +104,7 @@ chmod 755 "$APPDIR/AppRun"
 LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/linuxdeploy-x86_64.AppImage"
 curl -fL "$LINUXDEPLOY_URL" -o /tmp/linuxdeploy
 chmod +x /tmp/linuxdeploy
-export OUTPUT="$ARTIFACTS/vrecord_${VERSION}_x86_64.AppImage"
+export OUTPUT="$ARTIFACTS/vrecord_${VERSION}_linux_x86_64.AppImage"
 export ARCH=x86_64
 # CI runners have no FUSE: run linuxdeploy (and the appimagetool it calls)
 # in extract-and-run mode instead of mounting AppImages
