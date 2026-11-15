@@ -1,5 +1,7 @@
 #include "FrameFeed.h"
 
+#include "Platform.h"
+
 #include <QDateTime>
 #include <QFile>
 #include <QMutexLocker>
@@ -193,11 +195,7 @@ void FrameFeed::run() {
         m_delayQueue.clear();
 
         QProcess process;
-#ifdef Q_OS_WIN
-        process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-            args->flags |= CREATE_NO_WINDOW;
-        });
-#endif
+        Platform::prepareChild(&process);
         process.setProcessChannelMode(QProcess::SeparateChannels);
         process.setStandardInputFile(QProcess::nullDevice());
         QStringList quoted;

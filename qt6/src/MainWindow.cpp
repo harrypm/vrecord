@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+
+#include "Platform.h"
 #include <cstdio>
 
 #include "DeckLinkDiscovery.h"
@@ -57,6 +59,7 @@
 #include <QWidget>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QFileInfo>
 #include <QProxyStyle>
 
 namespace {
@@ -93,7 +96,7 @@ void selfTestTrace(const QString& step) {
     if (!BackendController::testMode()) {
         return;
     }
-    QFile file(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
+    QFile file(QDir(Platform::stateDir(QCoreApplication::applicationDirPath())).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
     if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
         file.write(QStringLiteral("%1 trace %2\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate), step).toUtf8());
     }
@@ -485,9 +488,7 @@ void MainWindow::runNextTimecodeScan() {
     const QString type = m_timecodeScanQueue.takeFirst();
     m_timecodeScanProcess = new QProcess(this);
     m_timecodeScanProcess->setProcessChannelMode(QProcess::MergedChannels);
-    m_timecodeScanProcess->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-        args->flags |= 0x08000000;   // CREATE_NO_WINDOW
-    });
+    Platform::prepareChild(m_timecodeScanProcess);
     auto* timeout = new QTimer(m_timecodeScanProcess);
     timeout->setSingleShot(true);
     connect(timeout, &QTimer::timeout, m_timecodeScanProcess, &QProcess::kill);
@@ -500,7 +501,7 @@ void MainWindow::runNextTimecodeScan() {
         m_timecodeScanText->appendPlainText(QStringLiteral("%1 %2").arg(type, -13).arg(match.hasMatch() ? match.captured(1) : QStringLiteral("none")));
         runNextTimecodeScan();
     });
-    const QString ffmpeg = QDir(m_backend.packageRoot()).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    const QString ffmpeg = Platform::toolPath(m_backend.packageRoot(), QStringLiteral("ffmpeg-ma"));
     m_timecodeScanProcess->start(ffmpeg, {QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("info"),
                                           QStringLiteral("-timecode_format"), type,
                                           QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
@@ -2571,7 +2572,7 @@ QStringList MainWindow::runSelfTest() {
     // test saves must never touch the user's real configuration
     const VrecordConfig originalConfig = m_config;
     VrecordConfig testConfig = originalConfig;
-    testConfig.configPath = QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf"));
+    testConfig.configPath = QDir(Platform::stateDir(m_backend.packageRoot())).filePath(QStringLiteral("VrecordQt6-selftest.conf"));
     QFile::remove(testConfig.configPath);
     m_config = testConfig;
     BackendController::setTestMode(true);
@@ -2758,8 +2759,9 @@ QStringList MainWindow::runSelfTest() {
 
     {
         // drag and drop: real QDragEnter/QDrop events through the filters
-        const QString folder = QDir(m_backend.packageRoot()).absolutePath();
-        const QString file = QDir(folder).filePath(QStringLiteral("VrecordQt6.exe"));
+        // a file that surely exists (this program) and its folder
+        const QString file = QCoreApplication::applicationFilePath();
+        const QString folder = QFileInfo(file).absolutePath();
         const auto dropOnto = [](QWidget* widget, const QString& path) {
             QMimeData mime;
             mime.setUrls({QUrl::fromLocalFile(path)});
@@ -2817,7 +2819,7 @@ QStringList MainWindow::runSelfTest() {
         }
     }
     check(QStringLiteral("User settings are restored intact after the test"), changed.isEmpty(), changed.join(QStringLiteral("; ")));
-    QFile::remove(QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf")));
+    QFile::remove(QDir(Platform::stateDir(m_backend.packageRoot())).filePath(QStringLiteral("VrecordQt6-selftest.conf")));
 
     BackendController::setTestMode(false);
     BackendController::clearCaptured();

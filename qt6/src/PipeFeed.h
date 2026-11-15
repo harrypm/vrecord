@@ -1,7 +1,8 @@
 #pragma once
 
-// PipeFeed: a Windows named-pipe server that receives raw BGRA frames of a
-// fixed size from an ffmpeg running elsewhere (the vrecord shell backend's
+// PipeFeed: a pipe server (a named pipe on Windows, a FIFO in the temp folder
+// on macOS / Linux) that receives raw BGRA frames of a fixed size from an
+// ffmpeg running elsewhere (the vrecord shell backend's
 // monitor player when the ffplay window is off) and hands the newest frame to
 // the GUI, like FrameFeed does for the processes it starts itself.
 // Closing the pipe (stop()) makes the writer fail and exit - for a record
@@ -20,8 +21,8 @@ public:
     PipeFeed(const QString& pipeName, int width, int height, QObject* parent = nullptr);
     ~PipeFeed() override;
 
-    // what the writer opens: //./pipe/<name>
-    QString clientPath() const { return QStringLiteral("//./pipe/%1").arg(m_name); }
+    // what the writer opens: //./pipe/<name> on Windows, the FIFO elsewhere
+    QString clientPath() const;
     void stop();
     QImage takeFrame();
     qint64 framesReceived() const { return m_frames.load(); }

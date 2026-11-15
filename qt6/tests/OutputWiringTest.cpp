@@ -1,4 +1,5 @@
 #include "BackendController.h"
+#include "Platform.h"
 #include "DeckLinkDiscovery.h"
 #include "VrecordConfig.h"
 
@@ -32,24 +33,10 @@ void note(const QString& text) {
     std::cout << "[INFO] " << text.toStdString() << std::endl;
 }
 
-// tasklist prints "INFO: No tasks are running..." when nothing matches.
-bool isImageRunning(const QString& imageName) {
-    QProcess tasklist;
-    tasklist.start(QStringLiteral("tasklist.exe"),
-                   {QStringLiteral("/NH"), QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq %1").arg(imageName)});
-    tasklist.waitForFinished(5000);
-    const QString out = QString::fromUtf8(tasklist.readAllStandardOutput());
-    return !out.contains(QStringLiteral("INFO:"));
-}
+int ffmpegProcessCount() { return Platform::countProcesses(QStringLiteral("ffmpeg-ma")); }
+bool isPidAlive(qint64 pid) { return Platform::pidAlive(pid); }
 
-int ffmpegProcessCount() {
-    QProcess tasklist;
-    tasklist.start(QStringLiteral("tasklist.exe"),
-                   {QStringLiteral("/NH"), QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq ffmpeg-ma.exe")});
-    tasklist.waitForFinished(5000);
-    const QString out = QString::fromUtf8(tasklist.readAllStandardOutput());
-    return out.count(QStringLiteral("ffmpeg-ma.exe"));
-}
+
 
 qint64 readPidFile(const QString& path) {
     QFile file(path);
@@ -59,17 +46,6 @@ qint64 readPidFile(const QString& path) {
     return QString::fromUtf8(file.readAll()).trimmed().toLongLong();
 }
 
-bool isPidAlive(qint64 pid) {
-    if (pid <= 0) {
-        return false;
-    }
-    QProcess tasklist;
-    tasklist.start(QStringLiteral("tasklist.exe"),
-                   {QStringLiteral("/NH"), QStringLiteral("/FI"), QStringLiteral("PID eq %1").arg(pid)});
-    tasklist.waitForFinished(5000);
-    const QString out = QString::fromUtf8(tasklist.readAllStandardOutput());
-    return !out.contains(QStringLiteral("INFO:"));
-}
 
 }  // namespace
 
@@ -81,14 +57,16 @@ int main(int argc, char** argv) {
 
     QString packageRoot = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
     if (packageRoot.isEmpty()) {
-        const QString defaultRoot = QStringLiteral("C:/Users/Harry/vrecord/Release/artifacts/vrecord_windows_2026-03-03");
-        if (QFileInfo::exists(QDir(defaultRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe")))) {
+        // no argument: the package this program was built in (CI), else the
+        // repository checkout the build folder sits in
+        const QString defaultRoot = QFileInfo(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral(".."))).absoluteFilePath();
+        if (QFileInfo(QDir(defaultRoot).filePath(QStringLiteral("vrecord"))).isFile()) {
             packageRoot = defaultRoot;
         }
     }
     report(QStringLiteral("Package root resolved"), !packageRoot.isEmpty(), packageRoot);
     if (packageRoot.isEmpty()) {
-        note(QStringLiteral("Pass the package root (containing bin/ffmpeg-ma.exe) as argument 1."));
+        note(QStringLiteral("Pass the package root (the folder with the vrecord script and bin/) as argument 1."));
         return 1;
     }
 
@@ -104,7 +82,7 @@ int main(int argc, char** argv) {
                == config.value(QStringLiteral("VIDEO_OUTPUT_CONNECTION_CHOICE"), QStringLiteral("Auto")));
 
     // 2. ffmpeg backend binary present
-    const QString ffmpegPath = QDir(packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    const QString ffmpegPath = Platform::toolPath(packageRoot, QStringLiteral("ffmpeg-ma"));
     report(QStringLiteral("ffmpeg backend present"), QFileInfo::exists(ffmpegPath), ffmpegPath);
 
     // 3. DeckLink device enumeration and output target presence

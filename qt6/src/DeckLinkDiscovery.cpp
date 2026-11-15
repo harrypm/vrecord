@@ -3,33 +3,17 @@
 #include <QScopeGuard>
 #include <QStringList>
 
-#include <DeckLinkAPI.h>
+#include "DeckLinkPlatform.h"
 
-#include <comdef.h>
+using namespace DeckLinkPlatform;
 
 namespace {
-QString bstrToQString(BSTR value) {
-    return value ? QString::fromWCharArray(value) : QString();
-}
-
 QString deviceDisplayName(IDeckLink* deckLink) {
-    BSTR name = nullptr;
-    QString result;
-    if (deckLink->GetDisplayName(&name) == S_OK) {
-        result = bstrToQString(name);
-        SysFreeString(name);
-    }
-    return result;
+    return takeString([&](DLString* name) { return deckLink->GetDisplayName(name); });
 }
 
 QString deviceModelName(IDeckLink* deckLink) {
-    BSTR name = nullptr;
-    QString result;
-    if (deckLink->GetModelName(&name) == S_OK) {
-        result = bstrToQString(name);
-        SysFreeString(name);
-    }
-    return result;
+    return takeString([&](DLString* name) { return deckLink->GetModelName(name); });
 }
 
 // display modes are fourCCs ('ntsc', 'Hp25', '4k30', ...): decode the four
@@ -45,24 +29,10 @@ QString fourCC(qint64 value) {
     return code;
 }
 
-// COM for the calling thread; balanced only if this call initialised it (the
-// Qt GUI thread is already an OLE STA, so there it is a no-op)
-struct ComScope {
-    HRESULT hr;
-    ComScope() : hr(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
-    ~ComScope() {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    }
-    bool ok() const { return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE; }
-};
-
 IDeckLinkIterator* createIterator(QString* errorMessage) {
-    IDeckLinkIterator* iterator = nullptr;
-    const HRESULT hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator,
-                                        reinterpret_cast<void**>(&iterator));
-    if (FAILED(hr) || !iterator) {
+    HRESULT hr = S_OK;
+    IDeckLinkIterator* iterator = DeckLinkPlatform::createIterator(&hr);
+    if (!iterator) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("DeckLink drivers not found (Blackmagic Desktop Video is not installed or the iterator could not be created, 0x%1).")
                                 .arg(QString::number(static_cast<uint>(hr), 16));
@@ -112,7 +82,7 @@ QVector<DeckLinkDeviceInfo> DeckLinkDiscovery::enumerateDevices(QString* errorMe
 
         IDeckLinkProfileAttributes* attributes = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkProfileAttributes, reinterpret_cast<void**>(&attributes)) == S_OK && attributes) {
-            LONGLONG value = 0;
+            DLInt value = 0;
             if (attributes->GetInt(BMDDeckLinkPersistentID, &value) == S_OK) {
                 info.persistentId = value;
             }
@@ -125,9 +95,9 @@ QVector<DeckLinkDeviceInfo> DeckLinkDiscovery::enumerateDevices(QString* errorMe
             if (attributes->GetInt(BMDDeckLinkDuplex, &value) == S_OK) {
                 info.supportsFullDuplex = (value == bmdDuplexFull);
             }
-            BOOL flag = FALSE;
+            DLBool flag = false;
             if (attributes->GetFlag(BMDDeckLinkSupportsInputFormatDetection, &flag) == S_OK) {
-                info.supportsInputFormatDetection = flag != FALSE;
+                info.supportsInputFormatDetection = bool(flag);
             }
             attributes->Release();
         }
@@ -237,8 +207,8 @@ QString DeckLinkDiscovery::detectInputFormatCode(const QString& deviceName, QStr
             }
             return false;
         }
-        LONGLONG locked = 0;
-        LONGLONG mode = 0;
+        DLInt locked = 0;
+        DLInt mode = 0;
         const bool signalLocked = status->GetInt(bmdDeckLinkStatusVideoInputSignalLocked, &locked) == S_OK && locked != 0;
         const bool modeDetected = status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &mode) == S_OK;
         status->Release();
@@ -264,7 +234,7 @@ QString DeckLinkDiscovery::activeOutputModeFourCC(const QString& deviceName, QSt
             }
             return false;
         }
-        LONGLONG activeMode = 0;
+        DLInt activeMode = 0;
         const bool ok = status->GetInt(bmdDeckLinkStatusCurrentVideoOutputMode, &activeMode) == S_OK;
         status->Release();
         if (!ok) {
@@ -314,7 +284,7 @@ bool DeckLinkDiscovery::applyConnection(const QString& deviceName, std::int64_t 
             }
             return false;
         }
-        LONGLONG readback = 0;
+        DLInt readback = 0;
         if (configuration->GetInt(configId, &readback) != S_OK || (readback & connectionMask) != connectionMask) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("Video %1 connection %2 on %3 failed SDK readback verification (device reports 0x%4).")
@@ -332,17 +302,11 @@ QString DeckLinkDiscovery::driverVersion() {
     if (!com.ok()) {
         return {};
     }
-    IDeckLinkAPIInformation* info = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_CDeckLinkAPIInformation, nullptr, CLSCTX_ALL, IID_IDeckLinkAPIInformation,
-                                reinterpret_cast<void**>(&info))) || !info) {
+    IDeckLinkAPIInformation* info = createApiInformation();
+    if (!info) {
         return {};
     }
-    QString version;
-    BSTR text = nullptr;
-    if (info->GetString(BMDDeckLinkAPIVersion, &text) == S_OK) {
-        version = bstrToQString(text);
-        SysFreeString(text);
-    }
+    const QString version = takeString([&](DLString* text) { return info->GetString(BMDDeckLinkAPIVersion, text); });
     info->Release();
     return version;
 }

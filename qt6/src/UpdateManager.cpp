@@ -1,5 +1,8 @@
 #include "UpdateManager.h"
 
+#include <QDesktopServices>
+#include <QSysInfo>
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -24,8 +27,22 @@
 #endif
 
 namespace {
+// the release asset that installs this copy
+#if defined(Q_OS_WIN)
 const QString kSetupSuffix = QStringLiteral("_windows_x86_64_setup.exe");
 const QString kPortableSuffix = QStringLiteral("_windows_x86_64_portable.zip");
+const QString kPlatformName = QStringLiteral("Windows");
+#elif defined(Q_OS_MACOS)
+const QString kSetupSuffix = QStringLiteral("_macos_universal.dmg");
+const QString kPortableSuffix = kSetupSuffix;
+const QString kPlatformName = QStringLiteral("macOS");
+#else
+// the .deb is named after dpkg's architecture
+const QString kSetupSuffix = QStringLiteral("_linux_%1.deb")
+                                 .arg(QSysInfo::currentCpuArchitecture() == QStringLiteral("arm64") ? QStringLiteral("arm64") : QStringLiteral("amd64"));
+const QString kPortableSuffix = kSetupSuffix;
+const QString kPlatformName = QStringLiteral("Linux");
+#endif
 const QString kSumsName = QStringLiteral("SHA256SUMS.txt");
 
 // PowerShell single-quoted literal
@@ -142,8 +159,8 @@ bool UpdateManager::parseRelease(const QByteArray& json, bool portable, UpdateIn
         }
     }
     if (!result.assetUrl.isValid() || result.assetName.isEmpty()) {
-        *message = QStringLiteral("Release %1 has no %2 Windows package (*%3).")
-                       .arg(result.tag, portable ? QStringLiteral("portable") : QStringLiteral("installer"), suffix);
+        *message = QStringLiteral("Release %1 has no %2 %3 package (*%4).")
+                       .arg(result.tag, portable ? QStringLiteral("portable") : QStringLiteral("installer"), kPlatformName, suffix);
         return false;
     }
     if (!result.sumsUrl.isValid()) {
@@ -411,6 +428,18 @@ bool UpdateManager::launchInstall(qint64 processId, bool relaunch, QString* erro
         *error = QStringLiteral("No verified update is ready.");
         return false;
     }
+#ifndef Q_OS_WIN
+    // macOS / Linux: the verified package opens in the system installer
+    // (Finder mounts the .dmg with its .pkg; the software installer takes the
+    // .deb); vrecord quits so the files can be replaced
+    Q_UNUSED(processId);
+    Q_UNUSED(relaunch);
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(m_assetPath))) {
+        *error = QStringLiteral("Could not open %1 - install it by hand.").arg(QDir::toNativeSeparators(m_assetPath));
+        return false;
+    }
+    return true;
+#else
     const QString dir = workDir(m_info.tag);
     // a fresh log: an old run's "done" must not pass for this one
     QFile::remove(applyLogPath());
@@ -476,4 +505,5 @@ bool UpdateManager::launchInstall(qint64 processId, bool relaunch, QString* erro
         *error = QStringLiteral("Could not start PowerShell to apply the update.");
     }
     return started;
+#endif
 }

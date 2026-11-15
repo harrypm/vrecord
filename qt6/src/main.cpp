@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "Platform.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -20,7 +21,39 @@ int main(int argc, char* argv[]) {
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/vrecord.ico")));
 
     const QString appDir = QCoreApplication::applicationDirPath();
-    const QString startupLogPath = QDir(appDir).filePath(QStringLiteral("VrecordQt6-startup.log"));
+    // the package root holds the vrecord shell backend (vrecord, Resources/)
+    // and bin/ with the tools:
+    //   Windows packages   the exe's folder (or its parent)
+    //   macOS .app         Contents/Resources/backend
+    //   Linux / prefix     <prefix>/share/vrecord (or the exe's parent)
+    //   development        the repository the build folder sits in
+    // VRECORD_PACKAGE_ROOT overrides it.
+    const auto isPackageRoot = [](const QString& dir) {
+        return QFileInfo(QDir(dir).filePath(QStringLiteral("vrecord"))).isFile()
+               || QFileInfo::exists(QDir(dir).filePath(QStringLiteral("vrecord.cmd")));
+    };
+    QStringList candidates;
+    if (qEnvironmentVariableIsSet("VRECORD_PACKAGE_ROOT")) {
+        candidates << qEnvironmentVariable("VRECORD_PACKAGE_ROOT");
+    }
+    candidates << appDir << QDir(appDir).filePath(QStringLiteral(".."))
+               << QDir(appDir).filePath(QStringLiteral("../Resources/backend"))
+               << QDir(appDir).filePath(QStringLiteral("../share/vrecord"));
+    for (QDir up(appDir); up.cdUp();) {
+        candidates << up.absolutePath();
+        if (up.isRoot()) {
+            break;
+        }
+    }
+    QString packageRoot = appDir;
+    for (const QString& candidate : candidates) {
+        if (isPackageRoot(candidate)) {
+            packageRoot = QFileInfo(candidate).absoluteFilePath();
+            break;
+        }
+    }
+
+    const QString startupLogPath = QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-startup.log"));
     QFile startupLog(startupLogPath);
     startupLog.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate);
     QTextStream log(&startupLog);
@@ -30,15 +63,6 @@ int main(int argc, char* argv[]) {
     };
     writeLog(QStringLiteral("startup"));
     writeLog(QStringLiteral("appDir=%1").arg(QDir::toNativeSeparators(appDir)));
-    QString packageRoot = appDir;
-    // the package root holds the vrecord shell backend and bin/ffmpeg-ma.exe
-    if (QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("vrecord")))
-        || QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("vrecord.cmd")))) {
-        packageRoot = appDir;
-    } else if (QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("../vrecord")))
-               || QFileInfo::exists(QDir(appDir).filePath(QStringLiteral("../vrecord.cmd")))) {
-        packageRoot = QFileInfo(QDir(appDir).filePath(QStringLiteral(".."))).absoluteFilePath();
-    }
     writeLog(QStringLiteral("packageRoot=%1").arg(QDir::toNativeSeparators(packageRoot)));
 
     bool selfTestMode = false;
@@ -65,7 +89,7 @@ int main(int argc, char* argv[]) {
     // VrecordQt6-update-test.log; exit 0 when the outcome is the expected one.
     if (!updateTestApi.isEmpty()) {
         qputenv("VRECORD_UPDATE_API", updateTestApi.toUtf8());
-        QFile reportFile(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-update-test.log")));
+        QFile reportFile(QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-update-test.log")));
         reportFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate);
         QTextStream report(&reportFile);
         const auto say = [&report](const QString& line) { report << line << '\n'; report.flush(); };
@@ -109,13 +133,13 @@ int main(int argc, char* argv[]) {
         // test mode BEFORE the window exists: its constructor must not start
         // the live preview (CI: no card) or anything the self-test drives
         BackendController::setTestMode(true);
-        QFile::remove(QDir(appDir).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
+        QFile::remove(QDir(Platform::stateDir(appDir)).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
         writeLog(QStringLiteral("self-test: constructing window"));
         MainWindow window(packageRoot);
         writeLog(QStringLiteral("self-test: running checks"));
         const QStringList results = window.runSelfTest();
         int failures = 0;
-        QFile reportFile(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-selftest.log")));
+        QFile reportFile(QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-selftest.log")));
         reportFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate);
         QTextStream report(&reportFile);
         for (const QString& line : results) {
