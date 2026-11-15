@@ -1601,7 +1601,7 @@ void MainWindow::buildUi() {
                         m_dvOptionSCheck, m_dvOptionDCheck, m_dvOptionTCheck, m_dvOptionTcCheck, m_ccVttCheck,
                         m_ccSrtCheck, m_capToMp4Check, m_colorSafeCheck, m_invertPhase2Check, m_invertPhase4Check,
                         m_previewRelayCheck, m_filePlayAutoCheck, m_testSignalOutputCheck, m_enforceAspectCheck}) {
-        connect(check, &QCheckBox::checkStateChanged, this, updateSlots);
+        connect(check, &QCheckBox::toggled, this, updateSlots);
     }
     for (auto* radio : m_inputChoiceRadios) {
         connect(radio, &QRadioButton::toggled, this, updateSlots);
@@ -1627,7 +1627,7 @@ void MainWindow::buildUi() {
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
-    connect(m_enableSuffixCheck, &QCheckBox::checkStateChanged, this, [outputNameLabel, this] {
+    connect(m_enableSuffixCheck, &QCheckBox::toggled, this, [outputNameLabel, this] {
         if (m_populating) {
             return;
         }
