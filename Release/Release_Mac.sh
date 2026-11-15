@@ -274,7 +274,8 @@ popd
 #-----------------------------------------------------------------------
 # Build deckcontrol
 pushd "${release_directory}/"
-    git clone --depth 1 https://github.com/bavc/deckcontrol.git
+    # pinned to v0.6, the same release the Linux and Windows builds use
+    git clone --depth 1 --branch v0.6 https://github.com/bavc/deckcontrol.git
     if [ -z "${BMSDK}" ] ; then
         if ! (echo "#include <DeckLinkAPI.h>" | clang -E - >/dev/null 2>&1) ; then
             git clone --depth 1 https://github.com/MediaArea/decklink-sdk-headers.git
