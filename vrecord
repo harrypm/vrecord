@@ -1975,24 +1975,14 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
                 </hbox>
             </frame>
-            <frame File playout>
-                <hbox>
-                    <entry accept="file" space-expand="true" space-fill="true" fs-title="Select a file to play to the output device" tooltip-text="File to play to the output device, converted on the fly to the selected standard unless auto-detect is ticked. Play it with the transport below.">
-                        <variable>VRECORD_PLAY_FILE</variable>
-                        <default>"${VRECORD_PLAY_FILE}"</default>
-                    </entry>
-                    <button tooltip-text="Browse for a file to play to the output device">
-                        <input file stock="gtk-open"></input>
-                        <variable export="false">playfile_browse</variable>
-                        <action type="fileselect">VRECORD_PLAY_FILE</action>
-                    </button>
-                    <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
-                        <label>Auto-detect format</label>
-                        <default>"${FILEPLAY_AUTO_CHOICE:-true}"</default>
-                        <variable>FILEPLAY_AUTO_CHOICE</variable>
-                    </checkbox>
-                </hbox>
-            </frame>
+            <hbox space-expand="false">
+                <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
+                    <label>Auto-detect file format (play natively)</label>
+                    <default>"${FILEPLAY_AUTO_CHOICE:-true}"</default>
+                    <variable>FILEPLAY_AUTO_CHOICE</variable>
+                </checkbox>
+                <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
+            </hbox>
             <pixmap space-expand="false">
                 <variable export="false">fileplay_image</variable>
                 <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
@@ -2170,6 +2160,19 @@ export MAIN_DIALOG='
                         <input file stock="gtk-open"></input>
                         <variable export="false">LOGDIRBROWSE</variable>
                         <action type="fileselect">LOGDIR</action>
+                    </button>
+                </hbox>
+            </frame>
+            <frame Select a file to play to the output device>
+                <hbox>
+                    <entry accept="file" fs-title="Select a file to play to the output device">
+                        <variable>VRECORD_PLAY_FILE</variable>
+                        <default>'"${VRECORD_PLAY_FILE:-\"\"}"'</default>
+                    </entry>
+                    <button>
+                        <input file stock="gtk-open"></input>
+                        <variable export="false">playfile_browse</variable>
+                        <action type="fileselect">VRECORD_PLAY_FILE</action>
                     </button>
                 </hbox>
             </frame>
