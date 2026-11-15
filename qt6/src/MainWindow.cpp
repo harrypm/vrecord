@@ -48,6 +48,9 @@
 #include <QStyleHints>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QScreen>
+#include <QScrollArea>
+#include <QGuiApplication>
 #include <QTextStream>
 #include <QTime>
 #include <QTimer>
@@ -1577,7 +1580,34 @@ void MainWindow::buildUi() {
     // a file the playout file (the specific boxes above take precedence)
     registerDropTarget(central, nullptr, false);
     setWindowTitle(QStringLiteral("vrecord Qt6"));
-    resize(1380, 920);
+
+    // every tab page scrolls when the window is shorter / narrower than the
+    // page needs (a 13" MacBook has ~820 points of height under the menu
+    // bar; the Decklink page alone needs ~660), so the window can shrink to
+    // the screen instead of running off it. Pages that fit show no bars.
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        QWidget* page = m_tabs->widget(i);
+        const QString title = m_tabs->tabText(i);
+        m_tabs->removeTab(i);
+        auto* scroll = new QScrollArea(m_tabs);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->viewport()->setAutoFillBackground(false);
+        page->setAutoFillBackground(false);
+        scroll->setWidget(page);
+        m_tabs->insertTab(i, scroll, title);
+    }
+    m_tabs->setCurrentIndex(0);
+
+    // open at the preferred size, clamped to the screen's usable area minus
+    // the title bar (28 points on macOS, ~31 on Windows) - every point counts
+    // on a 13" MacBook, where the Video Preview page just fits
+    QSize initial(1380, 920);
+    if (const QScreen* screen = QGuiApplication::primaryScreen()) {
+        const QRect available = screen->availableGeometry();
+        initial = initial.boundedTo(QSize(available.width() - 16, available.height() - 32));
+    }
+    resize(initial);
 
     const auto updateSlots = [this] {
         updateDerivedState();
