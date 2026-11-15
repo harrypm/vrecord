@@ -6,11 +6,13 @@ name: Build and Release
 # to a single GitHub release.
 #
 # Assets per release:
-#   vrecord_<tag>_linux_amd64.deb              Debian / Ubuntu package
-#   vrecord_<tag>_linux_x86_64.AppImage        Linux portable
-#   vrecord_<tag>_windows_x86_64_setup.exe     Windows installer
-#   vrecord_<tag>_windows_x86_64_portable.zip  Windows portable
-#   vrecord_<tag>_macos_<arch>.dmg / .app.zip  macOS x86_64, arm64, universal
+#   vrecord_<tag>_linux_amd64.deb              Debian / Ubuntu package (GTK)
+#   vrecord-qt6_<tag>_linux_amd64.deb          the Qt6 frontend on top of it
+#   vrecord_<tag>_linux_x86_64.AppImage        Linux portable (GTK)
+#   vrecord_<tag>_windows_x86_64_setup.exe     Windows installer (Qt6)
+#   vrecord_<tag>_windows_x86_64_portable.zip  Windows portable (Qt6)
+#   vrecord_<tag>_macos_<arch>.dmg / .app.zip  macOS x86_64, arm64, universal (GTK)
+#   vrecord-qt6_<tag>_macos_<arch>.app.zip     macOS x86_64, arm64: "vrecord Qt6.app"
 #   SHA256SUMS.txt
 #
 # Release kinds:
@@ -184,16 +186,25 @@ jobs:
             cp "$found" "release/$3"
           }
           T="$RELEASE_TAG"
-          need "Linux .deb"            '*.deb'                          "vrecord_${T}_linux_amd64.deb"
+          need "Linux .deb"            'vrecord_*_linux_*.deb'          "vrecord_${T}_linux_amd64.deb"
+          need "Linux Qt6 .deb"        'vrecord-qt6_*_linux_*.deb'      "vrecord-qt6_${T}_linux_amd64.deb"
           need "Linux AppImage"        '*.AppImage'                     "vrecord_${T}_linux_x86_64.AppImage"
           need "Windows portable zip"  '*_windows_x86_64_portable.zip'  "vrecord_${T}_windows_x86_64_portable.zip"
           need "Windows installer"     '*_windows_x86_64_setup.exe'     "vrecord_${T}_windows_x86_64_setup.exe"
+          # per architecture: the GTK .dmg / .app.zip, and (not for universal:
+          # Homebrew's Qt is single-arch) the Qt6 bundle vrecord-qt6_*.app.zip
           for arch in x86_64 arm64 universal; do
-            dmg="$(find "dist/vrecord-macos-${arch}" -type f -name '*.dmg' | head -n 1)"
-            app="$(find "dist/vrecord-macos-${arch}" -type f -name '*.app.zip' | head -n 1)"
+            dmg="$(find "dist/vrecord-macos-${arch}" -type f -name 'vrecord_*.dmg' | head -n 1)"
+            app="$(find "dist/vrecord-macos-${arch}" -type f -name 'vrecord_*.app.zip' | head -n 1)"
+            qt6="$(find "dist/vrecord-macos-${arch}" -type f -name 'vrecord-qt6_*.app.zip' | head -n 1)"
             [ -n "$dmg" ] && cp "$dmg" "release/vrecord_${T}_macos_${arch}.dmg"
             [ -n "$app" ] && cp "$app" "release/vrecord_${T}_macos_${arch}.app.zip"
             [ -n "$dmg$app" ] || { echo "::error::missing macOS ${arch} package"; exit 1; }
+            if [ -n "$qt6" ] ; then
+              cp "$qt6" "release/vrecord-qt6_${T}_macos_${arch}.app.zip"
+            elif [ "$arch" != universal ] ; then
+              echo "::error::missing macOS ${arch} Qt6 bundle (vrecord-qt6_*.app.zip)"; exit 1
+            fi
           done
           (cd release && sha256sum * > SHA256SUMS.txt)
           ls -la release

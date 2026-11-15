@@ -106,7 +106,7 @@ Version: ${VERSION}
 Section: video
 Priority: optional
 Architecture: ${ARCH}
-Depends: libc6 (>= 2.39)
+Depends: libc6 (>= 2.39), bash (>= 4)
 Maintainer: harrypm <harry@harrymunday.com>
 Installed-Size: ${INSTALLED_SIZE}
 Description: Open-source video capture tool for archivists
@@ -125,3 +125,53 @@ chmod 755 "$PREFIX/bin/"*
 dpkg-deb --build "$PKGROOT" "$ARTIFACTS/vrecord_${VERSION}_linux_${ARCH}.deb"
 rm -rf "$PKGROOT"
 echo "Built: $ARTIFACTS/vrecord_${VERSION}_linux_${ARCH}.deb"
+
+# --- vrecord-qt6: the Qt6 frontend as a second package on top of vrecord ---
+# With QT6_BUILD pointing at the CMake build folder of qt6/. It installs
+# VrecordQt6 (+ the vsignal CLI) and its own desktop entry, and depends on
+# the vrecord package above for the backend, so both frontends can be
+# installed side by side while users move over. Qt comes from the
+# distribution (Ubuntu 24.04 names the libraries *t64, Debian 13 does not).
+QT6_BUILD="${QT6_BUILD:-}"
+if [ -n "$QT6_BUILD" ] ; then
+    [ -x "$QT6_BUILD/VrecordQt6" ] || { echo "ERROR: QT6_BUILD=$QT6_BUILD has no VrecordQt6 - build qt6/ first." >&2 ; exit 1 ; }
+    QT6ROOT="$RELEASE_DIR/deb-qt6-pkg"
+    QT6PREFIX="$QT6ROOT/usr/local"
+    rm -rf "$QT6ROOT"
+    mkdir -p "$QT6ROOT/DEBIAN" "$QT6PREFIX/bin" "$QT6PREFIX/share/applications"
+    cp "$QT6_BUILD/VrecordQt6" "$QT6PREFIX/bin/VrecordQt6"
+    [ -x "$QT6_BUILD/vsignal" ] && cp "$QT6_BUILD/vsignal" "$QT6PREFIX/bin/vsignal"
+    chmod 755 "$QT6PREFIX/bin/"*
+    cat > "$QT6PREFIX/share/applications/vrecord-qt6.desktop" << 'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=vrecord (Qt6)
+GenericName=Video Capture
+Comment=Capture video signals to digital files - Qt6 frontend
+Exec=VrecordQt6
+Icon=vrecord
+Terminal=false
+Categories=AudioVideo;Video;Recorder;
+StartupWMClass=VrecordQt6
+DESKTOP
+    QT6_INSTALLED_SIZE="$(du -sk "$QT6ROOT" | awk '{print $1}')"
+    cat > "$QT6ROOT/DEBIAN/control" << EOF
+Package: vrecord-qt6
+Version: ${VERSION}
+Section: video
+Priority: optional
+Architecture: ${ARCH}
+Depends: vrecord (>= ${VERSION}), libqt6widgets6t64 (>= 6.4) | libqt6widgets6 (>= 6.4), libqt6network6t64 (>= 6.4) | libqt6network6 (>= 6.4), libqt6gui6t64 (>= 6.4) | libqt6gui6 (>= 6.4), libqt6core6t64 (>= 6.4) | libqt6core6 (>= 6.4), qt6-qpa-plugins
+Maintainer: harrypm <harry@harrymunday.com>
+Installed-Size: ${QT6_INSTALLED_SIZE}
+Description: Qt6 frontend for vrecord
+ The VrecordQt6 window: live input preview, output device feed with file
+ playout and test signals, level meters and RS-422 deck control, driving
+ the vrecord backend of the vrecord package. The GTK settings window of
+ that package remains available as vrecord -e.
+Homepage: https://github.com/amiaopensource/vrecord
+EOF
+    dpkg-deb --build "$QT6ROOT" "$ARTIFACTS/vrecord-qt6_${VERSION}_linux_${ARCH}.deb"
+    rm -rf "$QT6ROOT"
+    echo "Built: $ARTIFACTS/vrecord-qt6_${VERSION}_linux_${ARCH}.deb"
+fi

@@ -22,6 +22,20 @@ mkdir -p "$MACOS" "$RESOURCES/bin" "$RESOURCES/share/vrecord/Resources" "$FRAMEW
 VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' ../vrecord)"
 ROOT="$RELEASE_DIR/vrecord_ROOT/usr/local"
 
+# With QT6_BUILD pointing at the CMake build folder of qt6/, a second bundle
+# is made from this one: "vrecord Qt6.app", whose main executable is the Qt6
+# frontend (the same backend script, tools and GTK settings window inside).
+# The GTK bundle built here stays as it is, so both can be shipped while
+# users move over.
+QT6_BUILD="${QT6_BUILD:-}"
+QT6_BIN=""
+if [ -n "$QT6_BUILD" ] && [ -x "$QT6_BUILD/VrecordQt6.app/Contents/MacOS/VrecordQt6" ] ; then
+    QT6_BIN="$QT6_BUILD/VrecordQt6.app/Contents/MacOS/VrecordQt6"
+elif [ -n "$QT6_BUILD" ] ; then
+    echo "ERROR: QT6_BUILD=$QT6_BUILD has no VrecordQt6.app - build qt6/ first." >&2
+    exit 1
+fi
+
 # Target architecture (mirrors Release_Mac.sh): x86_64, arm64, or universal.
 ARCH="${ARCH:-universal}"
 case "${ARCH}" in
@@ -338,4 +352,53 @@ codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
 # --- zip for upload ---
 cd "$ARTIFACTS"
 zip -qry "$APP_ZIP_NAME" vrecord.app
+
+# --- the Qt6 bundle: a copy with the Qt6 frontend as main executable ---
+if [ -n "$QT6_BIN" ] ; then
+    QT6_APP="$ARTIFACTS/vrecord Qt6.app"
+    QT6_ZIP_NAME="vrecord-qt6_${VERSION}_macos_${ARCH}.app.zip"
+    rm -rf "$QT6_APP"
+    cp -a "$APP" "$QT6_APP"
+    cp -a "$QT6_BIN" "$QT6_APP/Contents/MacOS/VrecordQt6"
+    [ -x "$QT6_BUILD/vsignal" ] && cp -a "$QT6_BUILD/vsignal" "$QT6_APP/Contents/MacOS/vsignal"
+    chmod +x "$QT6_APP/Contents/MacOS/VrecordQt6"
+    # its own identity, so both apps can be installed side by side
+    /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable VrecordQt6" \
+                            -c "Set :CFBundleName vrecord Qt6" \
+                            -c "Set :CFBundleDisplayName vrecord Qt6" \
+                            -c "Set :CFBundleIdentifier com.harrypm.vrecord.qt6" \
+                            "$QT6_APP/Contents/Info.plist"
+    # Qt frameworks and plugins into the bundle
+    MACDEPLOYQT="${MACDEPLOYQT:-$(command -v macdeployqt || true)}"
+    if [ -z "$MACDEPLOYQT" ] ; then
+        for prefix in "$(brew --prefix qtbase 2>/dev/null)" "$(brew --prefix qt 2>/dev/null)" ; do
+            [ -x "$prefix/bin/macdeployqt" ] && MACDEPLOYQT="$prefix/bin/macdeployqt" && break
+        done
+    fi
+    [ -n "$MACDEPLOYQT" ] || { echo "ERROR: macdeployqt not found (brew install qtbase)." >&2 ; exit 1 ; }
+    EXTRA_EXE=()
+    [ -x "$QT6_APP/Contents/MacOS/vsignal" ] && EXTRA_EXE=(-executable="$QT6_APP/Contents/MacOS/vsignal")
+    # (the shell scripts in MacOS/ are "not an object file" to it, and the
+    # virtual keyboard / pdf / svg plugins it scans name frameworks qtbase
+    # does not have: both harmless)
+    "$MACDEPLOYQT" "$QT6_APP" -verbose=1 "${EXTRA_EXE[@]}" 2>&1 \
+        | grep -vE '^(Log|Deploying|Adding|Updating|Copied|Checking)|is not an object file|Cannot resolve rpath|^ERROR:  using QList' || true
+    test -d "$QT6_APP/Contents/Frameworks/QtWidgets.framework" || { echo "ERROR: macdeployqt left no QtWidgets.framework in the bundle." >&2 ; exit 1 ; }
+    # the virtual keyboard input plugin drags in Qml / Quick (and OpenGL):
+    # nothing in vrecord uses them, so out they go (~30 MB). QtDBus stays:
+    # Homebrew's QtGui links it.
+    rm -f "$QT6_APP/Contents/PlugIns/platforminputcontexts/libqtvirtualkeyboardplugin.dylib"
+    for fw in QtQml QtQmlMeta QtQmlModels QtQmlWorkerScript QtQuick QtOpenGL ; do
+        rm -rf "$QT6_APP/Contents/Frameworks/$fw.framework"
+    done
+    # nothing left in the bundle may still name a removed framework
+    for f in "$QT6_APP"/Contents/Frameworks/*.framework/Versions/A/Qt* "$QT6_APP"/Contents/PlugIns/*/*.dylib "$QT6_APP/Contents/MacOS/VrecordQt6" ; do
+        otool -L "$f" 2>/dev/null | grep -qE 'Qt(Qml|Quick|OpenGL)[A-Za-z]*\.framework' \
+            && { echo "ERROR: $f still links a removed Qt framework." >&2 ; exit 1 ; }
+    done
+    codesign --force --deep -s - "$QT6_APP" >/dev/null 2>&1 || true
+    rm -f "$QT6_ZIP_NAME"
+    zip -qry "$QT6_ZIP_NAME" "vrecord Qt6.app"
+    echo "Built: $QT6_APP and $QT6_ZIP_NAME"
+fi
 echo "Built: $ARTIFACTS/vrecord.app and $APP_ZIP_NAME"

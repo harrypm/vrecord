@@ -27,17 +27,23 @@
 #endif
 
 namespace {
-// the release asset that installs this copy
+// the release asset that installs this copy: name prefix and suffix (the
+// GTK packages share the suffixes on macOS / Linux, so the prefix matters)
 #if defined(Q_OS_WIN)
+const QString kAssetPrefix = QStringLiteral("vrecord_");
 const QString kSetupSuffix = QStringLiteral("_windows_x86_64_setup.exe");
 const QString kPortableSuffix = QStringLiteral("_windows_x86_64_portable.zip");
 const QString kPlatformName = QStringLiteral("Windows");
 #elif defined(Q_OS_MACOS)
-const QString kSetupSuffix = QStringLiteral("_macos_universal.dmg");
+// "vrecord Qt6.app" for this machine's architecture, zipped
+const QString kAssetPrefix = QStringLiteral("vrecord-qt6_");
+const QString kSetupSuffix = QStringLiteral("_macos_%1.app.zip")
+                                 .arg(QSysInfo::currentCpuArchitecture() == QStringLiteral("arm64") ? QStringLiteral("arm64") : QStringLiteral("x86_64"));
 const QString kPortableSuffix = kSetupSuffix;
 const QString kPlatformName = QStringLiteral("macOS");
 #else
-// the .deb is named after dpkg's architecture
+// the vrecord-qt6 .deb, named after dpkg's architecture
+const QString kAssetPrefix = QStringLiteral("vrecord-qt6_");
 const QString kSetupSuffix = QStringLiteral("_linux_%1.deb")
                                  .arg(QSysInfo::currentCpuArchitecture() == QStringLiteral("arm64") ? QStringLiteral("arm64") : QStringLiteral("amd64"));
 const QString kPortableSuffix = kSetupSuffix;
@@ -150,7 +156,7 @@ bool UpdateManager::parseRelease(const QByteArray& json, bool portable, UpdateIn
         const QJsonObject asset = value.toObject();
         const QString name = asset.value(QStringLiteral("name")).toString();
         const QUrl url(asset.value(QStringLiteral("browser_download_url")).toString());
-        if (name.endsWith(suffix)) {
+        if (name.startsWith(kAssetPrefix) && name.endsWith(suffix)) {
             result.assetName = name;
             result.assetUrl = url;
             result.assetSize = asset.value(QStringLiteral("size")).toInteger();
@@ -159,8 +165,8 @@ bool UpdateManager::parseRelease(const QByteArray& json, bool portable, UpdateIn
         }
     }
     if (!result.assetUrl.isValid() || result.assetName.isEmpty()) {
-        *message = QStringLiteral("Release %1 has no %2 %3 package (*%4).")
-                       .arg(result.tag, portable ? QStringLiteral("portable") : QStringLiteral("installer"), kPlatformName, suffix);
+        *message = QStringLiteral("Release %1 has no %2 %3 package (%4*%5).")
+                       .arg(result.tag, portable ? QStringLiteral("portable") : QStringLiteral("installer"), kPlatformName, kAssetPrefix, suffix);
         return false;
     }
     if (!result.sumsUrl.isValid()) {
@@ -429,9 +435,9 @@ bool UpdateManager::launchInstall(qint64 processId, bool relaunch, QString* erro
         return false;
     }
 #ifndef Q_OS_WIN
-    // macOS / Linux: the verified package opens in the system installer
-    // (Finder mounts the .dmg with its .pkg; the software installer takes the
-    // .deb); vrecord quits so the files can be replaced
+    // macOS / Linux: the verified package is handed to the system (the
+    // Finder unpacks the .app.zip next to it, the software installer takes
+    // the .deb); vrecord quits so its files can be replaced
     Q_UNUSED(processId);
     Q_UNUSED(relaunch);
     if (!QDesktopServices::openUrl(QUrl::fromLocalFile(m_assetPath))) {

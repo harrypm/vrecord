@@ -36,7 +36,8 @@ jobs:
             build-essential curl libgtk2.0-dev libgtk-3-dev bison flex texinfo \
             git mkvtoolnix gnuplot xmlstarlet mpv mediaconch \
             libiec61883-dev libraw1394-dev libavc1394-dev libavc1394-tools \
-            binutils file desktop-file-utils librsvg2-bin zlib1g-dev pkg-config
+            binutils file desktop-file-utils librsvg2-bin zlib1g-dev pkg-config \
+            cmake ninja-build qt6-base-dev libgl-dev
           # homebrew-on-linux for ffmpeg-ma (mediaarea tap) and a VENDORED
           # GUI stack. Two annotations were seen here:
           # 1. 'gtk+ has been deprecated ... disabled 2027-08-28' - FIXED by
@@ -116,10 +117,33 @@ jobs:
           dvrescue --version
           cd "$GITHUB_WORKSPACE"
 
+      - name: Build and self-test the Qt6 frontend
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          # the SDK headers: the decklinksdk formula installed above, else the mirror
+          SDK="$(brew --prefix decklinksdk 2>/dev/null)/include"
+          if [ ! -f "$SDK/DeckLinkAPI.h" ] ; then
+            git clone --depth 1 https://github.com/MediaArea/decklink-sdk-headers.git Release/decklink-sdk-headers
+            SDK="$PWD/Release/decklink-sdk-headers/DeckLinkSDK/Linux/include"
+          fi
+          cmake -S qt6 -B qt6/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDECKLINK_SDK="$SDK"
+          cmake --build qt6/build
+          # the GUI's own checks, offscreen, against this checkout as the package
+          # (the card checks SKIP: no DeckLink on a runner)
+          export QT_QPA_PLATFORM=offscreen VRECORD_SELFTEST_ALLOW_NO_HARDWARE=1 VRECORD_PACKAGE_ROOT="$PWD"
+          LOGDIR="$HOME/.local/share/vrecord/vrecord-qt6"
+          if ./qt6/build/VrecordQt6 --self-test ; then
+            echo "self-test passed" ; grep -c '^PASS' "$LOGDIR/VrecordQt6-selftest.log"
+          else
+            echo "::error::VrecordQt6 --self-test failed" ; cat "$LOGDIR/VrecordQt6-selftest.log" || true ; exit 1
+          fi
+          echo "QT6_BUILD=$PWD/qt6/build" >> "$GITHUB_ENV"
+
       - name: Build .deb package
         id: deb
         run: |
           chmod +x Release/build-deb.sh
+          # QT6_BUILD (set above) also builds the vrecord-qt6 .deb (the Qt6 frontend on top of vrecord)
           ./Release/build-deb.sh
 
       - name: Build .AppImage (portable)

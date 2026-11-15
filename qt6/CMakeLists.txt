@@ -119,7 +119,7 @@ target_link_libraries(VrecordQt6 PRIVATE
 
 if(APPLE)
   set_target_properties(VrecordQt6 PROPERTIES
-    OUTPUT_NAME "vrecord"
+    OUTPUT_NAME "VrecordQt6"
     MACOSX_BUNDLE_BUNDLE_NAME "vrecord"
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.harrypm.vrecord.qt6"
     MACOSX_BUNDLE_BUNDLE_VERSION "${VRECORD_VERSION}"

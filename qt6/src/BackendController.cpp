@@ -424,7 +424,10 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
 #else
     env.insert(QStringLiteral("PATH"), Platform::childPath(m_packageRoot, env.value(QStringLiteral("PATH"))));
 #endif
-    env.insert(QStringLiteral("VRECORD_RESOURCES"), toBashPath(QDir(m_packageRoot).filePath(QStringLiteral("Resources"))));
+    const QString resources = Platform::resourcesDir(m_packageRoot);
+    if (!resources.isEmpty()) {
+        env.insert(QStringLiteral("VRECORD_RESOURCES"), toBashPath(resources));
+    }
     // the ffplay view shape picked in the GUI (16:9 / 21:9 / 5:4)
     env.insert(QStringLiteral("VRECORD_VIEW_ASPECT"), config.value(QStringLiteral("FFPLAY_VIEW_ASPECT_CHOICE"), QStringLiteral("16:9")));
     // ffplay monitor window: the shell makes the Visual view 16:9 (so a

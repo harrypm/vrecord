@@ -30,6 +30,9 @@ QString findTool(const QString& packageRoot, const QStringList& baseNames);
 QString findTool(const QString& packageRoot, const QString& baseName);
 // findTool, or the expected <root>/bin path when missing (for messages)
 QString toolPath(const QString& packageRoot, const QString& baseName);
+// the backend's Resources folder (vrecord_functions, logos ...): beside the
+// script, or share/vrecord/Resources of its prefix; empty if neither exists
+QString resourcesDir(const QString& packageRoot);
 // PATH for child processes: the package tool folders first
 QString childPath(const QString& packageRoot, const QString& currentPath);
 

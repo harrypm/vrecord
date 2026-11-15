@@ -124,9 +124,22 @@ QStringList toolDirs(const QString& packageRoot) {
     // the .pkg / .deb layout keeps the tools beside the script's prefix
     dirs = appendUnique(dirs, QDir(packageRoot).filePath(QStringLiteral("lib/vrecord/bin")));
     dirs = appendUnique(dirs, QDir(packageRoot).filePath(QStringLiteral("../lib/vrecord/bin")));
+    // the macOS .app: the script in Contents/MacOS, the tools in Contents/Resources/bin
+    dirs = appendUnique(dirs, QDir(packageRoot).filePath(QStringLiteral("../Resources/bin")));
     dirs = appendUnique(dirs, QStringLiteral("/usr/local/lib/vrecord/bin"));
 #endif
     return dirs;
+}
+
+QString resourcesDir(const QString& packageRoot) {
+    for (const QString& candidate : {QDir(packageRoot).filePath(QStringLiteral("Resources")),
+                                     QDir(packageRoot).filePath(QStringLiteral("../share/vrecord/Resources")),
+                                     QDir(packageRoot).filePath(QStringLiteral("share/vrecord/Resources"))}) {
+        if (QFileInfo(QDir(candidate).filePath(QStringLiteral("vrecord_functions"))).isFile()) {
+            return QDir::cleanPath(candidate);
+        }
+    }
+    return {};
 }
 
 QString findTool(const QString& packageRoot, const QStringList& baseNames) {
