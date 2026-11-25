@@ -3,7 +3,7 @@
 # vrecord
 # Open-source software for capturing a video signal and turning it into a digital file.
 
-VERSION="2026-03-03"
+VERSION="2026-11-25"
 # filter-argument escape for ':' (Windows drive letters in file= / fontfile=).
 # Kept in a variable: written inline in the substitution, bash 5.2
 # (patsub_replacement) drops the backslash and the path stays unescaped.
