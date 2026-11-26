@@ -14,11 +14,16 @@ title_of() {
         | awk '{ for (i = 1; i <= NF; i++) $i = toupper(substr($i, 1, 1)) substr($i, 2); print }' \
         | sed -E 's/\bDv\b/DV/g; s/Decklink/DeckLink/g'
 }
+# where the images are served from: IMAGE_BASE (e.g. the release-assets
+# branch, https://raw.githubusercontent.com/<repo>/release-assets/<tag>),
+# which also works while the release is a draft; otherwise the release's own
+# downloads (those only resolve once it is published)
+IMAGE_BASE="${IMAGE_BASE:-https://github.com/${REPO}/releases/download/${TAG}}"
 cell() {
     local name title
     name="$(basename "$1")" ; title="$(title_of "$1")"
-    printf '<a href="https://github.com/%s/releases/download/%s/%s"><img src="https://github.com/%s/releases/download/%s/%s" alt="%s"></a>' \
-        "$REPO" "$TAG" "$name" "$REPO" "$TAG" "$name" "$title"
+    printf '<a href="%s/%s"><img src="%s/%s" alt="%s"></a>' \
+        "$IMAGE_BASE" "$name" "$IMAGE_BASE" "$name" "$title"
 }
 gallery() {
     [[ $# -gt 0 ]] || return 0

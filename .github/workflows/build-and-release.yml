@@ -258,6 +258,27 @@ jobs:
           else
             TITLE="Vrecord ${RELEASE_TAG%-gtk} - GTK (Windows, Linux, macOS)"
           fi
+          # screenshots go to the release-assets branch (<tag>/), so the
+          # notes' gallery shows them while the release is still a draft
+          # (a draft's own downloads only resolve once it is published)
+          if ls release/screenshot-*.png > /dev/null 2>&1; then
+            if git clone -q --depth 1 --branch release-assets "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" assets 2>/dev/null; then
+              :
+            else
+              git init -q assets && git -C assets checkout -q -b release-assets
+              git -C assets remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
+            fi
+            mkdir -p "assets/${RELEASE_TAG}"
+            cp release/screenshot-*.png "assets/${RELEASE_TAG}/"
+            git -C assets config user.name "github-actions[bot]"
+            git -C assets config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -C assets add -A
+            if ! git -C assets diff --cached --quiet; then
+              git -C assets commit -q -m "Screenshots for release ${RELEASE_TAG}"
+              git -C assets push -q origin release-assets
+            fi
+            export IMAGE_BASE="https://raw.githubusercontent.com/${REPO}/release-assets/${RELEASE_TAG}"
+          fi
           NOTES_SRC="src/Release/release-notes/${RELEASE_TAG}.md"
           NOTE_ARGS=(--generate-notes)
           if [ -f "$NOTES_SRC" ]; then

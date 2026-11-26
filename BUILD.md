@@ -132,7 +132,7 @@ Each line is released on its own, from its own tag.
    - `@DL@` becomes the release's download address, so `[Installer](@DL@/vrecord-qt6_x.y.z_windows_x86_64_setup.exe)` links the file;
    - a line holding only `@SCREENSHOTS@` becomes the screenshot gallery (Qt6).
 
-   Without a notes file, GitHub's generated notes are used.
+   Without a notes file, GitHub's generated notes are used. A Qt6 release's screenshots are also pushed to the `release-assets` branch (`<tag>/`). The gallery loads them from there, so it displays while the release is still a draft.
 3. **Tag**: push the tag. It must match its line's version.
    - Qt6: `git tag -a v1.1.0 -m "Vrecord 1.1.0 (Qt6)"` then `git push origin v1.1.0`. This builds and tests Windows only.
    - GTK: `git tag -a v2026.12.01-gtk -m "Vrecord 2026-12-01 (GTK)"` then `git push origin v2026.12.01-gtk`. This builds and tests Windows, Linux and macOS.
