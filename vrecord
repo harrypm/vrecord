@@ -676,8 +676,16 @@ _gtk_vbox_list() {
     # comboboxtext only treats <input> as a shell command with the explicit
     # "command:" prefix - without it the value is read as a FILE name and the
     # dropdown never fills (decklink detection appeared dead on Windows)
+    # the Video Preview page uses compact one-line dropdowns (label beside a
+    # native dropdown) so its output column fits without scrolling
+    local GUI_INLINE=false
+    case "${VARIABLE_NAME}" in
+        PREVIEW_RELAY_DEV_CHOICE|TEST_SIGNAL_PATTERN_CHOICE|TEST_SIGNAL_AUDIO_CHOICE) GUI_INLINE=true ;;
+    esac
+    local GUI_DROPDOWN="${GUI_INLINE}"
+    [[ "${OS_TYPE}" = "windows" ]] && GUI_DROPDOWN=true
     local INPUT_PREFIX=""
-    [[ "${OS_TYPE}" = "windows" ]] && INPUT_PREFIX="command:"
+    "${GUI_DROPDOWN}" && INPUT_PREFIX="command:"
     if [[ "${VARIABLE_NAME}" == "DECKLINK_INPUT_CHOICE" ]] ; then
         LIST="<input>${INPUT_PREFIX}_get_decklink_input_list</input>"
     elif [[ "${VARIABLE_NAME}" == "PREVIEW_RELAY_DEV_CHOICE" ]] ; then
@@ -766,13 +774,15 @@ _gtk_vbox_list() {
     local GUI_LIST_CLOSE="</list>"
     local GUI_LIST_LABEL="<label>${LABEL}</label>"
     local GUI_LIST_DEFAULT=""
-    if [[ "${OS_TYPE}" = "windows" ]] ; then
+    if "${GUI_DROPDOWN}" ; then
         GUI_LIST_OPEN="<comboboxtext>"
         GUI_LIST_CLOSE="</comboboxtext>"
         GUI_LIST_LABEL=""
         GUI_LIST_DEFAULT="<default>\"${!VARIABLE_NAME}\"</default>"
     fi
-    echo "<vbox space-fill=\"true\">
+    local GUI_BOX="vbox"
+    "${GUI_INLINE}" && GUI_BOX="hbox"
+    echo "<${GUI_BOX} space-fill=\"true\">
       <text>
           <label>${LABEL}</label>
       </text>
@@ -785,7 +795,7 @@ _gtk_vbox_list() {
           $(_get_list_extras)
       ${GUI_LIST_CLOSE}
       $(_get_vbox_extras)
-    </vbox>"
+    </${GUI_BOX}>"
 }
 
 _setup_vrecord_input(){
@@ -1909,22 +1919,15 @@ AUDIO_INPUT_FORM
 )
 
 PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
-<frame Video Preview options>
-    <vbox>
-        <hbox space-expand="true" space-fill="true">
-            <vbox space-expand="true" space-fill="true">
-                <text>
-                    <label>Record: input preview</label>
-                </text>
-                <pixmap>
-                    <variable export="false">vrecord_preview_image</variable>
-                    <input file>"${VRECORD_PREVIEW_TMP}"</input>
-                </pixmap>
-                <entry editable="false" has-frame="false">
-                    <variable export="false">preview_status</variable>
-                    <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
-                </entry>
-                <togglebutton>
+<hbox homogeneous="true" space-expand="true" space-fill="true">
+    <frame Live input preview>
+        <vbox>
+            <pixmap space-expand="false">
+                <variable export="false">vrecord_preview_image</variable>
+                <input file>"${VRECORD_PREVIEW_TMP}"</input>
+            </pixmap>
+            <hbox space-expand="false">
+                <togglebutton tooltip-text="Input preview at the native frame rate, straight from the capture. The preview stops automatically when recording starts.">
                     <label>Preview</label>
                     <default>true</default>
                     <variable export="false">preview_toggle</variable>
@@ -1932,112 +1935,112 @@ PREVIEW_INPUT_GUI=$(cat << PREVIEW_FORM
                     <action>if true _start_video_preview</action>
                     <action>if false _stop_video_preview</action>
                 </togglebutton>
-                <timer milliseconds="true" interval="33" visible="false">
-                    <variable export="false">preview_timer</variable>
-                    <action>refresh:preview_status</action>
-                    <action>refresh:vrecord_preview_image</action>
-                </timer>
-                <text width-chars="-1">
-                    <label>The preview stops automatically when recording starts.</label>
-                </text>
-            </vbox>
-            <vbox space-expand="true" space-fill="true">
-                <text>
-                    <label>Output: device feed</label>
-                </text>
-                <hbox>
-                    <vbox space-expand="true" space-fill="true">
-                        <pixmap>
-                            <variable export="false">fileplay_image</variable>
-                            <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
-                        </pixmap>
-                        <entry editable="false" has-frame="false">
-                            <variable export="false">fileplay_status</variable>
-                            <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
-                        </entry>
-                    </vbox>
-                    <vbox>
-                        <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording. Toggling restarts the preview so the device output matches immediately: off blacks out the output until the relay is re-enabled or a file is played.">
-                            <label>Relay live feed to the device output</label>
-                            <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
-                            <variable>PREVIEW_RELAY_CHOICE</variable>
-                            <action>_apply_relay_state</action>
-                        </checkbox>
-                        $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "120" "Relay output device" "${DECKLINK_DEVICES[@]}")
-                        <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
-                            <label>Test signal output</label>
-                            <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
-                            <action>_apply_test_signal_state</action>
-                        </checkbox>
-                        $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "120" "Test pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
-                        $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "120" "Test audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
-                        <text wrap="true" width-chars="40">
-                            <label>or play the selected file to the output (converted on the fly to the selected standard)</label>
-                        </text>
-                        <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
-                            <label>Auto-detect file format (play natively)</label>
-                            <default>"${FILEPLAY_AUTO_CHOICE:-true}"</default>
-                            <variable>FILEPLAY_AUTO_CHOICE</variable>
-                        </checkbox>
-                        <hbox space-expand="true" space-fill="true">
-                            <button>
-                                <variable export="false">fp_back100</variable>
-                                <input file stock="gtk-media-rewind"></input>
-                                <action>_step_playback -100</action>
-                            </button>
-                            <button>
-                                <variable export="false">fp_back1</variable>
-                                <input file stock="gtk-media-previous"></input>
-                                <action>_step_playback -1</action>
-                            </button>
-                            <button>
-                                <variable export="false">transport_play_icon</variable>
-                                <input file>"${VRECORD_FILEPLAY_ICON_TMP}"</input>
-                                <action>_toggle_transport_play</action>
-                            </button>
-                            <button>
-                                <variable export="false">fp_fwd1</variable>
-                                <input file stock="gtk-media-next"></input>
-                                <action>_step_playback 1</action>
-                            </button>
-                            <button>
-                                <variable export="false">fp_fwd100</variable>
-                                <input file stock="gtk-media-forward"></input>
-                                <action>_step_playback 100</action>
-                            </button>
-                        </hbox>
-                        <text>
-                            <label>scrub (timecode):</label>
-                        </text>
-                        <hscale range-min="0" range-max="10000" range-step="1">
-                            <variable>FILEPLAY_SEEK</variable>
-                            <input file>"${VRECORD_FILEPLAY_SEEKPOS_TMP}"</input>
-                            <action signal="button-press-event">echo 1 > "${VRECORD_FILEPLAY_DRAG_TMP}"</action>
-                            <action>_scrub_preview</action>
-                            <action signal="button-release-event">_seek_scale_playback</action>
-                        </hscale>
-                        <entry editable="false" has-frame="false" width-request="130">
-                            <variable export="false">fileplay_frame</variable>
-                            <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
-                        </entry>
-                    </vbox>
-                </hbox>
-                <timer milliseconds="true" interval="33" visible="false">
-                    <variable export="false">fileplay_timer</variable>
-                    <action>refresh:fileplay_status</action>
-                    <action>refresh:fileplay_image</action>
-                    <action>refresh:fileplay_frame</action>
-                    <action>refresh:FILEPLAY_SEEK</action>
-                    <action>refresh:transport_play_icon</action>
-                </timer>
-                <timer milliseconds="true" interval="300" visible="false">
-                    <variable export="false">preview_status_timer</variable>
-                    <action>_refresh_preview_page &</action>
-                </timer>
-            </vbox>
-        </hbox>
-    </vbox>
-</frame>
+                <entry editable="false" has-frame="false" space-expand="true" space-fill="true">
+                    <variable export="false">preview_status</variable>
+                    <input file>"${VRECORD_PREVIEW_STATUS_TMP}"</input>
+                </entry>
+            </hbox>
+            <vbox space-expand="true" space-fill="true"><text><label>""</label></text></vbox>
+            <timer milliseconds="true" interval="33" visible="false">
+                <variable export="false">preview_timer</variable>
+                <action>refresh:preview_status</action>
+                <action>refresh:vrecord_preview_image</action>
+            </timer>
+        </vbox>
+    </frame>
+    <frame Output device feed>
+        <vbox>
+            <hbox space-expand="false">
+                $(_gtk_vbox_list "PREVIEW_RELAY_DEV_CHOICE" "180" "Relay output device" "${DECKLINK_DEVICES[@]}")
+                <vbox>
+                    <checkbox tooltip-text="While the preview runs, the live input feed is also sent to the selected device's output connector through the Blackmagic SDK: SDI on cards such as the DeckLink SDI 4K, HDMI on HDMI cards, or analogue outputs on older cards. The relay output also carries the video during recording. Toggling restarts the preview so the device output matches immediately: off blacks out the output until the relay is re-enabled or a file is played.">
+                        <label>Relay live feed to the device output</label>
+                        <default>"${PREVIEW_RELAY_CHOICE:-true}"</default>
+                        <variable>PREVIEW_RELAY_CHOICE</variable>
+                        <action>_apply_relay_state</action>
+                    </checkbox>
+                    <checkbox tooltip-text="Sends the selected test pattern and audio to the relay output device, converted on the fly to the selected standard, so the device chain can be checked without a source or a file. The test signal yields to file playout and the live relay; toggling it off stops the output immediately.">
+                        <label>Test signal output</label>
+                        <variable>TEST_SIGNAL_OUTPUT_CHOICE</variable>
+                        <action>_apply_test_signal_state</action>
+                    </checkbox>
+                </vbox>
+                <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
+            </hbox>
+            <hbox space-expand="false">
+                $(_gtk_vbox_list "TEST_SIGNAL_PATTERN_CHOICE" "240" "Test pattern" "${TEST_SIGNAL_PATTERN_OPTIONS[@]}")
+                $(_gtk_vbox_list "TEST_SIGNAL_AUDIO_CHOICE" "130" "Test audio" "${TEST_SIGNAL_AUDIO_OPTIONS[@]}")
+                <hbox space-expand="true" space-fill="true"><text><label>""</label></text></hbox>
+            </hbox>
+            <pixmap space-expand="false">
+                <variable export="false">fileplay_image</variable>
+                <input file>"${VRECORD_OUTPUT_DISPLAY_TMP}"</input>
+            </pixmap>
+            <hbox homogeneous="true" space-expand="false">
+                <button tooltip-text="Step back 100 frames">
+                    <variable export="false">fp_back100</variable>
+                    <input file stock="gtk-media-rewind"></input>
+                    <action>_step_playback -100</action>
+                </button>
+                <button tooltip-text="Step back 1 frame">
+                    <variable export="false">fp_back1</variable>
+                    <input file stock="gtk-media-previous"></input>
+                    <action>_step_playback -1</action>
+                </button>
+                <button tooltip-text="Play / Pause (holds the exact frame)">
+                    <variable export="false">transport_play_icon</variable>
+                    <input file>"${VRECORD_FILEPLAY_ICON_TMP}"</input>
+                    <action>_toggle_transport_play</action>
+                </button>
+                <button tooltip-text="Step forward 1 frame">
+                    <variable export="false">fp_fwd1</variable>
+                    <input file stock="gtk-media-next"></input>
+                    <action>_step_playback 1</action>
+                </button>
+                <button tooltip-text="Step forward 100 frames">
+                    <variable export="false">fp_fwd100</variable>
+                    <input file stock="gtk-media-forward"></input>
+                    <action>_step_playback 100</action>
+                </button>
+            </hbox>
+            <hscale range-min="0" range-max="10000" range-step="1" draw-value="false" space-expand="false" tooltip-text="Scrub through the file">
+                <variable>FILEPLAY_SEEK</variable>
+                <input file>"${VRECORD_FILEPLAY_SEEKPOS_TMP}"</input>
+                <action signal="button-press-event">echo 1 > "${VRECORD_FILEPLAY_DRAG_TMP}"</action>
+                <action>_scrub_preview</action>
+                <action signal="button-release-event">_seek_scale_playback</action>
+            </hscale>
+            <hbox space-expand="false">
+                <entry editable="false" has-frame="false" space-expand="true" space-fill="true">
+                    <variable export="false">fileplay_status</variable>
+                    <input file>"${VRECORD_FILEPLAY_STATUS_TMP}"</input>
+                </entry>
+                <checkbox tooltip-text="Plays the file at its native video size, frame rate, and interlacing; the output device switches its display mode to match the file automatically. Untick to force conversion to the selected standard instead.">
+                    <label>Auto-detect file format (play natively)</label>
+                    <default>"${FILEPLAY_AUTO_CHOICE:-true}"</default>
+                    <variable>FILEPLAY_AUTO_CHOICE</variable>
+                </checkbox>
+                <entry editable="false" has-frame="false" width-request="150" xalign="1">
+                    <variable export="false">fileplay_frame</variable>
+                    <input file>"${VRECORD_FILEPLAY_FRAME_TMP}"</input>
+                </entry>
+            </hbox>
+            <vbox space-expand="true" space-fill="true"><text><label>""</label></text></vbox>
+            <timer milliseconds="true" interval="33" visible="false">
+                <variable export="false">fileplay_timer</variable>
+                <action>refresh:fileplay_status</action>
+                <action>refresh:fileplay_image</action>
+                <action>refresh:fileplay_frame</action>
+                <action>refresh:FILEPLAY_SEEK</action>
+                <action>refresh:transport_play_icon</action>
+            </timer>
+            <timer milliseconds="true" interval="300" visible="false">
+                <variable export="false">preview_status_timer</variable>
+                <action>_refresh_preview_page &</action>
+            </timer>
+        </vbox>
+    </frame>
+</hbox>
 PREVIEW_FORM
 )
 
@@ -2053,8 +2056,8 @@ export MAIN_DIALOG='
                         <width>100</width>
                         <input file>"'"${RESOURCE_PATH}/vrecord_logo.png"'"</input>
                         <action>_update_config_file</action>
-                        <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)" type="exit">record_button</action>
-                        <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">_start_gui_recording</action>
+                        <action condition="command_is_true( [ \"${GUI_TAB}\" != 0 ] && echo true)" type="exit">record_button</action>
+                        <action condition="command_is_true( [ \"${GUI_TAB}\" = 0 ] && echo true)">_start_gui_recording</action>
                     </button>
                     <button image-position="Top">
                         <label>Passthrough</label>
@@ -2103,24 +2106,24 @@ export MAIN_DIALOG='
             <variable export="false">MAIN</variable>
             <action signal="show" type="refresh">VRECORD_SETTINGS_SUMMARY</action>
         </vbox>
-        <vbox scrollable="true" width="1420" height="520" shadow-type="0">
+        <vbox scrollable="true" width="1420" height="600" shadow-type="0">
             <frame Input Options>
-            <notebook page="4" tab-labels="Decklink|DV|Audio|Config|Video Preview">
+            <notebook page="0" tab-labels="Video Preview|Decklink|DV|Audio|Config">
+                '"${PREVIEW_INPUT_GUI}"'
                 '"${DECKLINK_INPUT_GUI}"'
                 '"${DVRESCUE_INPUT_GUI}"'
                 '"${AUDIO_INPUT_GUI}"'
                 '"${OPTIONAL_TOOLS_GUI}"'
-                '"${PREVIEW_INPUT_GUI}"'
-                <variable>DEVICE_INPUT_CHOICE</variable>
+                <variable>GUI_TAB</variable>
                 <action signal="button-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" -le 2 ] && echo true)">echo \"$DEVICE_INPUT_CHOICE\" > \"'\"$INPUT_MEM_TMP\"'\"</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" -ge 1 -a \"${GUI_TAB}\" -le 3 ] && echo true)">echo $(( GUI_TAB - 1 )) > \"'\"$INPUT_MEM_TMP\"'\"</action>
                 <action signal="button-release-event" type="refresh">INPUT_CHOICE_MEM</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
-                <action signal="button-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a \"${GUI_TAB}\" != 0 ] && echo true)">enable:passthrough_button</action>
+                <action signal="button-release-event" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o \"${GUI_TAB}\" = 0 ] && echo true)">disable:passthrough_button</action>
             </notebook>
         </frame>
         <variable export="false">INPUTSETTINGS</variable>
@@ -2191,12 +2194,12 @@ export MAIN_DIALOG='
                             <default>"'"${ID}"'"</default>
                             <variable>ID</variable>
                             <action signal="key-release-event" type="refresh">VRECORD_OUTPUT_NAME</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
-                            <action signal="key-release-event" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a \"${GUI_TAB}\" != 0 ] && echo true)">enable:passthrough_button</action>
+                            <action signal="key-release-event" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o \"${GUI_TAB}\" = 0 ] && echo true)">disable:passthrough_button</action>
                         </entry>
                     </vbox>
                     <vbox>
@@ -2314,8 +2317,8 @@ export MAIN_DIALOG='
                 <input file stock="gtk-media-record"></input>
                 <variable export="false">record_button</variable>
                 <action>_update_config_file</action>
-                <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)" type="exit">record</action>
-                <action condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">_start_gui_recording</action>
+                <action condition="command_is_true( [ \"${GUI_TAB}\" != 0 ] && echo true)" type="exit">record</action>
+                <action condition="command_is_true( [ \"${GUI_TAB}\" = 0 ] && echo true)">_start_gui_recording</action>
             </button>
             <button>
                 <label>Passthrough</label>
@@ -2352,12 +2355,12 @@ export MAIN_DIALOG='
     <action signal="show" type="refresh">VRECORD_OUTPUT_NAME</action>
     <action signal="show" condition="command_is_true(echo \"$AUDIO_DEV_CHOICE\" | grep -vq Blackmagic && echo true)">enable:AUDIO_MODE_SR_CHOICE</action>
     <action signal="show" condition="command_is_true(echo \"$AUDIO_DEV_CHOICE\" | grep -q Blackmagic && echo true)">disable:AUDIO_MODE_SR_CHOICE</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" != 3 -a \"${DEVICE_INPUT_CHOICE}\" != 4 ] && echo true)">enable:passthrough_button</action>
-    <action signal="show" condition="command_is_true( [ \"${DEVICE_INPUT_CHOICE}\" =  3 -o \"${DEVICE_INPUT_CHOICE}\" = 4 ] && echo true)">disable:passthrough_button</action>
+    <action signal="show" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button</action>
+    <action signal="show" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o -z \"${ID}\" ] && echo true)">disable:record_button</action>
+    <action signal="show" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a -n \"${ID}\" ] && echo true)">enable:record_button_main</action>
+    <action signal="show" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o -z \"${ID}\" ] && echo true)">disable:record_button_main</action>
+    <action signal="show" condition="command_is_true( [ \"${GUI_TAB}\" != 4 -a \"${GUI_TAB}\" != 0 ] && echo true)">enable:passthrough_button</action>
+    <action signal="show" condition="command_is_true( [ \"${GUI_TAB}\" =  4 -o \"${GUI_TAB}\" = 0 ] && echo true)">disable:passthrough_button</action>
 </window>
 '
 
@@ -2509,6 +2512,9 @@ _edit_mode(){
         eval "$("${GTKDIALOGBIN}" --include="${GTK_INC}" --program MAIN_DIALOG --center "${GTKDIALOG_GEOM[@]}" 2> /dev/null)"
     fi
     MAIN_DIALOG="${MAIN_DIALOG_TMP}"
+
+    # the notebook returns its page as GUI_TAB: back to DEVICE_INPUT_CHOICE
+    _gui_input_from_tab
 
     # combine the HH/MM/SS recording time boxes into DURATION (all boxes blank means an unlimited recording)
     _combine_duration_fields
