@@ -36,16 +36,22 @@ gallery() {
     done
 }
 
+# placeholders on any line: @TAG@ -> the tag, @DL@ -> the release's
+# download base (https://github.com/<repo>/releases/download/<tag>), so a
+# notes file links its own downloads
+DL="https://github.com/${REPO}/releases/download/${TAG}"
+expand() { sed -e "s|@DL@|${DL}|g" -e "s|@TAG@|${TAG}|g" ; }
+
 if grep -q '^@SCREENSHOTS@$' "$NOTES" ; then
     GALLERY="$(gallery "$@")"
     while IFS= read -r line || [[ -n "$line" ]] ; do
         if [[ "$line" == "@SCREENSHOTS@" ]] ; then
             [[ -n "$GALLERY" ]] && printf '%s\n' "$GALLERY"
         else
-            printf '%s\n' "$line"
+            printf '%s\n' "$line" | expand
         fi
     done < "$NOTES"
 else
-    cat "$NOTES"
+    expand < "$NOTES"
     [[ $# -gt 0 ]] && { echo ; gallery "$@" ; }
 fi

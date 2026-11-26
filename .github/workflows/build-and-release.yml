@@ -254,6 +254,14 @@ jobs:
             echo
             echo "https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
             echo
+            echo "#### Downloads"
+            for f in release/*; do
+              n="$(basename "$f")"
+              case "$n" in screenshot-*) continue ;; esac
+              echo "- [${n}](https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${n})"
+            done
+            echo
+            echo "#### SHA256"
             echo '```'
             cat release/SHA256SUMS.txt
             echo '```'
