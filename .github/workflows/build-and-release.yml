@@ -33,19 +33,23 @@ name: Build and Release
 # The tag must match its version: qt6/VERSION for v<x.y.z>, the script's
 # VERSION for -gtk tags.
 #
-# Trigger: push a tag, or run manually with create_release + tag_name (a
-# missing tag is created on the commit the run was started from; tick
-# prerelease to force a pre-release). A manual run without create_release
-# only builds and tests.
+# Trigger: PUBLISH a GitHub release (Releases -> Draft a new release ->
+# tag v1.0.0 or v2026.11.26-gtk on the commit to release -> Publish): the
+# build runs and uploads its files and notes into that release. Or run
+# manually with create_release + tag_name (a missing tag is created on the
+# commit the run was started from; the release is then created as a draft
+# / pre-release). A manual run without create_release only builds and tests.
 
 permissions:
   contents: write
   actions: write
 
 on:
-  push:
-    tags:
-      - "v*"
+  # an ACTUAL release starts it: publish a GitHub release (tag v1.0.0 or
+  # v2026.11.26-gtk, created on publish if missing); the build then uploads
+  # its files into that published release. Tag pushes alone build nothing.
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       create_release:
@@ -100,7 +104,8 @@ jobs:
               PUBLISH="false"; RAW=""
             fi
           else
-            RAW="${{ github.ref_name }}"
+            # a published release: its tag
+            RAW="${{ github.event.release.tag_name }}"
           fi
           if [ "$PUBLISH" != "true" ]; then
             # build-only run: build everything
@@ -289,6 +294,7 @@ jobs:
           fi
           KIND=(--draft)
           [ "$PRERELEASE" = "true" ] && KIND=(--prerelease)
+          # (a published release already exists: only its notes and files are set)
           if gh release view "$RELEASE_TAG" --repo "$REPO" > /dev/null 2>&1; then
             echo "release ${RELEASE_TAG} already exists"
             [ -f notes.md ] && gh release edit "$RELEASE_TAG" --repo "$REPO" --notes-file notes.md

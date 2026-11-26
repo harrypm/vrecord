@@ -133,11 +133,10 @@ Each line is released on its own, from its own tag.
    - a line holding only `@SCREENSHOTS@` becomes the screenshot gallery (Qt6).
 
    Without a notes file, GitHub's generated notes are used. A Qt6 release's screenshots are also pushed to the `release-assets` branch (`<tag>/`). The gallery loads them from there, so it displays while the release is still a draft.
-3. **Tag**: push the tag. It must match its line's version.
-   - Qt6: `git tag -a v1.1.0 -m "Vrecord 1.1.0 (Qt6)"` then `git push origin v1.1.0`. This builds and tests Windows, Linux and macOS.
-   - GTK: `git tag -a v2026.12.01-gtk -m "Vrecord 2026-12-01 (GTK)"` then `git push origin v2026.12.01-gtk`. This builds and tests Windows, Linux and macOS.
-
-   Either kind creates a **draft** release: check it, then publish it. A `-suffix` (`v1.1.0-rc1`, `v2026.12.01-rc1-gtk`) publishes a **pre-release** straight away.
+3. **Publish the release**: on GitHub, *Releases → Draft a new release*, with the tag `v1.1.0` (Qt6) or `v2026.12.01-gtk` (GTK) on the commit to release, then **Publish**. From the command line: `gh release create v1.1.0 --target <commit> --title "Vrecord v1.1.0" --notes "Building..."`.
+   - Publishing starts *Build and Release*. It builds and tests Windows, Linux and macOS (including the Apple-silicon builds, which only release runs use), then uploads the files, `SHA256SUMS.txt`, the screenshots and the notes into that release.
+   - The tag must match its line's version. Pushing a tag alone builds nothing.
+   - A `-suffix` (`v1.1.0-rc1`, `v2026.12.01-rc1-gtk`) is treated as a pre-release.
 4. **Updates**: installed Qt6 copies offer the newest published, non-pre-release Qt6 release (Config → Updates). GTK packages are updated by hand.
 
 A manual run (*Actions → Build and Release → Run workflow*) with *create_release* and a tag name creates a missing tag on the chosen branch and releases it.
