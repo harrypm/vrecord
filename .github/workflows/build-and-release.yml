@@ -167,6 +167,12 @@ jobs:
       PRERELEASE: ${{ needs.resolve-tag.outputs.prerelease }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
+      # the release notes (Release/release-notes/<tag>.md) and their renderer
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
+          path: src
+
       - name: Download every build artifact
         uses: actions/download-artifact@v8
         with:
@@ -196,19 +202,39 @@ jobs:
             [ -n "$dmg$app" ] || { echo "::error::missing macOS ${arch} package"; exit 1; }
           done
           (cd release && sha256sum * > SHA256SUMS.txt)
+          # screenshots ride along (after the sums: they are not downloads)
+          find dist/vrecord-screenshots -name 'screenshot-*.png' -exec cp {} release/ \; 2>/dev/null || true
           ls -la release
+
+      # Release/release-notes/<tag>.md when it exists (its @SCREENSHOTS@ line
+      # becomes the gallery); otherwise GitHub's generated notes
+      - name: Release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOTES="src/Release/release-notes/${RELEASE_TAG}.md"
+          if [ -f "$NOTES" ]; then
+            shopt -s nullglob
+            bash src/Release/ci/render-release-notes.sh "$NOTES" "$RELEASE_TAG" "${{ github.repository }}" release/screenshot-*.png > notes.md
+            echo "notes from $NOTES"
+          else
+            echo "no $NOTES - using generated notes"
+          fi
 
       - name: Create the release (if needed)
         shell: bash
         run: |
+          NOTE_ARGS=(--generate-notes)
+          [ -f notes.md ] && NOTE_ARGS=(--notes-file notes.md)
           if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
             echo "release $RELEASE_TAG already exists"
+            [ -f notes.md ] && gh release edit "$RELEASE_TAG" --repo "${{ github.repository }}" --notes-file notes.md
           elif [ "$PRERELEASE" = "true" ]; then
             gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
-              --title "vrecord $RELEASE_TAG (pre-release)" --prerelease --generate-notes --verify-tag
+              --title "vrecord $RELEASE_TAG (pre-release)" --prerelease "${NOTE_ARGS[@]}" --verify-tag
           else
             gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
-              --title "vrecord $RELEASE_TAG" --draft --generate-notes --verify-tag
+              --title "vrecord $RELEASE_TAG" --draft "${NOTE_ARGS[@]}" --verify-tag
           fi
 
       - name: Upload the binaries

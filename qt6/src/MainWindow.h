@@ -35,6 +35,8 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(const QString& packageRoot, QWidget* parent = nullptr);
     QStringList runSelfTest();
+    // one PNG per tab into folder (default settings, never the user's)
+    QStringList saveScreenshots(const QString& folder);
     // open on the tab with this title (--tab "Video Preview"); false if none
     bool selectTab(const QString& title);
 

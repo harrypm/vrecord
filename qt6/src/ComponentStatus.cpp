@@ -7,6 +7,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <QStringDecoder>
 #include <QStringList>
 
 namespace {
@@ -48,7 +49,13 @@ QString runTool(const QString& program, const QStringList& arguments, const QStr
         process.kill();
         process.waitForFinished(1000);
     }
-    return QString::fromLocal8Bit(process.readAll());
+    // the bundled tools print UTF-8 (mpv's "Copyright ©" showed as "Â©"
+    // through the Windows code page); fall back to the local code page for
+    // output that is not valid UTF-8
+    const QByteArray output = process.readAll();
+    QStringDecoder utf8(QStringDecoder::Utf8);
+    const QString text = utf8.decode(output);
+    return utf8.hasError() ? QString::fromLocal8Bit(output) : text;
 }
 
 QString firstLine(const QString& text) {

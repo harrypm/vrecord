@@ -57,6 +57,7 @@
 #include <QWidget>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QProxyStyle>
 
 namespace {
@@ -1548,7 +1549,7 @@ void MainWindow::buildUi() {
     m_summaryText = new QPlainTextEdit(summaryBox);
     m_summaryText->setReadOnly(true);
     summaryLayout->addWidget(m_summaryText);
-    auto* validationBox = new QGroupBox(QStringLiteral("Errors & Warnings (incl. self test)"), logsTab);
+    auto* validationBox = new QGroupBox(QStringLiteral("Errors && Warnings (incl. self test)"), logsTab);
     auto* validationLayout = new QVBoxLayout(validationBox);
     m_validationText = new QPlainTextEdit(validationBox);
     m_validationText->setReadOnly(true);
@@ -2533,6 +2534,103 @@ void MainWindow::applyVideoOutputConnection() {
                                  ? QStringLiteral("Video output connector: Auto (SDK selection untouched)")
                                  : QStringLiteral("Video output connector: %1 (SDK verified)").arg(m_videoOutputConnectionCombo->currentText()),
                              3000);
+}
+
+// --screenshots <folder>: one PNG per main tab, for release notes and docs.
+// The window is shown with a throwaway config (default settings), so no
+// saved paths, names or IDs of whoever runs it end up in the images; run
+// with QT_QPA_PLATFORM=offscreen and nothing appears on screen.
+QStringList MainWindow::saveScreenshots(const QString& folder) {
+    QDir().mkpath(folder);
+    const QString scratch = QDir(folder).filePath(QStringLiteral("screenshot-settings.conf"));
+    const auto removeScratch = [&scratch] {
+        for (const QString& suffix : {QString(), QStringLiteral(".bak"), QStringLiteral(".tmp")}) {
+            QFile::remove(scratch + suffix);
+        }
+    };
+    removeScratch();
+    m_config = VrecordConfig::load(QStringLiteral("vrecord"), scratch);
+    populateFromConfig();
+    // neutral sample values, so the derived fields (output filename,
+    // warnings) look like a real session
+    // a folder that exists on every install and belongs to no user
+#ifdef Q_OS_WIN
+    const QString sampleDir = QStringLiteral("C:/Users/Public/Videos");
+#else
+    const QString sampleDir = QDir::tempPath();
+#endif
+    m_dirEdit->setText(QDir::toNativeSeparators(QDir(sampleDir).exists() ? sampleDir : QDir::tempPath()));
+    m_idEdit->setText(QStringLiteral("Tape_0001"));
+    m_technicianEdit->setText(QStringLiteral("Operator"));
+    updateDerivedState();
+    resize(1380, 920);
+    show();
+    const auto settle = [] {
+        for (int i = 0; i < 10; ++i) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        }
+    };
+    settle();
+    // the Installed components / FFmpeg Status boxes fill from a worker
+    // thread (normally started by a timer): start it now and wait for it
+    // (up to 60 s) so they are not shot mid-check
+    refreshComponents();
+    QElapsedTimer waited;
+    waited.start();
+    while (m_componentsChecking && waited.elapsed() < 60000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+        QThread::msleep(50);
+    }
+    settle();
+    // the home folder (user name) never appears in an image: every path
+    // under it shows as ~
+    const QString home = QDir::homePath();
+    const auto scrub = [&home, &scratch](QString text) {
+        // the throwaway config shows as the real one's usual location
+        text.replace(QDir::toNativeSeparators(scratch), QDir::toNativeSeparators(QStringLiteral("~/.vrecord.conf")), Qt::CaseInsensitive);
+        text.replace(scratch, QStringLiteral("~/.vrecord.conf"), Qt::CaseInsensitive);
+        for (const QString& form : {home, QDir::toNativeSeparators(home)}) {
+            text.replace(form, QStringLiteral("~"), Qt::CaseInsensitive);
+        }
+        return text;
+    };
+    const auto scrubAll = [this, &scrub] {
+        for (QLabel* label : findChildren<QLabel*>()) {
+            const QString clean = scrub(label->text());
+            if (clean != label->text()) {
+                label->setText(clean);
+            }
+        }
+        for (QLineEdit* edit : findChildren<QLineEdit*>()) {
+            const QString clean = scrub(edit->text());
+            if (clean != edit->text()) {
+                const QSignalBlocker block(edit);
+                edit->setText(clean);
+            }
+        }
+        for (QPlainTextEdit* edit : findChildren<QPlainTextEdit*>()) {
+            const QString clean = scrub(edit->toPlainText());
+            if (clean != edit->toPlainText()) {
+                edit->setPlainText(clean);
+            }
+        }
+    };
+    QStringList saved;
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        m_tabs->setCurrentIndex(i);
+        settle();
+        scrubAll();
+        settle();
+        QString slug = m_tabs->tabText(i).toLower();
+        slug.replace(QRegularExpression(QStringLiteral("[^a-z0-9]+")), QStringLiteral("-"));
+        const QString path = QDir(folder).filePath(QStringLiteral("vrecord-qt6-%1-%2.png").arg(i + 1, 2, 10, QLatin1Char('0')).arg(slug));
+        if (grab().save(path)) {
+            saved << path;
+        }
+    }
+    m_autosaveTimer->stop();
+    removeScratch();
+    return saved;
 }
 
 QStringList MainWindow::runSelfTest() {

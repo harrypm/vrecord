@@ -46,9 +46,12 @@ int main(int argc, char* argv[]) {
     QString updateTestApi;
     bool updateTestExpectFail = false;
     bool updateTestApply = false;
+    QString screenshotFolder;
     for (int i = 1; i < argc; ++i) {
         if (QByteArray(argv[i]) == QByteArray("--self-test")) {
             selfTestMode = true;
+        } else if (QByteArray(argv[i]) == QByteArray("--screenshots") && i + 1 < argc) {
+            screenshotFolder = QString::fromLocal8Bit(argv[++i]);
         } else if (QByteArray(argv[i]) == QByteArray("--tab") && i + 1 < argc) {
             startTab = QString::fromLocal8Bit(argv[++i]);
         } else if (QByteArray(argv[i]) == QByteArray("--update-test") && i + 1 < argc) {
@@ -104,6 +107,17 @@ int main(int argc, char* argv[]) {
                      succeeded ? QStringLiteral("succeeded") : QStringLiteral("refused/failed"),
                      updateTestExpectFail ? QStringLiteral("refusal") : QStringLiteral("success")));
         return expected ? 0 : 1;
+    }
+    // --screenshots <folder>: one PNG per tab, default settings, no hardware
+    // use (test mode: nothing is started); exit 0 when every tab was saved
+    if (!screenshotFolder.isEmpty()) {
+        BackendController::setTestMode(true);
+        MainWindow window(packageRoot);
+        const QStringList saved = window.saveScreenshots(screenshotFolder);
+        for (const QString& path : saved) {
+            writeLog(QStringLiteral("screenshot: %1").arg(QDir::toNativeSeparators(path)));
+        }
+        return saved.isEmpty() ? 1 : 0;
     }
     if (selfTestMode) {
         // test mode BEFORE the window exists: its constructor must not start
