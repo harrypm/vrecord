@@ -142,7 +142,7 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always() && steps.deb.outcome == 'success'
         with:
-          name: vrecord-linux-amd64-deb
+          name: vrecord-gtk-linux-amd64-deb
           path: artifacts/deb/
           if-no-files-found: error
 
@@ -150,7 +150,7 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always() && steps.appimage.outcome == 'success'
         with:
-          name: vrecord-linux-x86_64-appimage
+          name: vrecord-gtk-linux-x86_64-appimage
           path: artifacts/appimage/
           if-no-files-found: error
 

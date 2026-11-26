@@ -62,14 +62,14 @@ jobs:
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
           mkdir -p artifacts
-          find Release -maxdepth 1 -name 'vrecord_*_macos_*.dmg' -exec cp {} artifacts/ \; || true
-          find Release -maxdepth 1 -name 'vrecord.pkg' -exec cp {} "artifacts/vrecord_${VERSION}_macos_${ARCH}.pkg" \; || true
+          find Release -maxdepth 1 -name 'vrecord-gtk_*_macos_*.dmg' -exec cp {} artifacts/ \; || true
+          find Release -maxdepth 1 -name 'vrecord.pkg' -exec cp {} "artifacts/vrecord-gtk_${VERSION}_macos_${ARCH}.pkg" \; || true
           cp -a Release/artifacts/*.app.zip artifacts/ 2>/dev/null || true
           ls -la artifacts/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: vrecord-macos-${{ matrix.arch }}
+          name: vrecord-gtk-macos-${{ matrix.arch }}
           path: artifacts/
           if-no-files-found: error
 

@@ -4,7 +4,9 @@
 #   ffmpeg-install/, gtkdialog-install/, xmlstarlet-install/,
 #   decklink-include/, mediainfo-cli/, mkvtoolnix/, dejavu fonts, cowsay/
 #
-# Output: Release/artifacts/vrecord_windows_<VERSION>/ + .zip
+# Output: Release/artifacts/vrecord_windows_<VERSION>/ (combined, development)
+#   plus the release packages vrecord-qt6_windows_<VERSION>/ and
+#   vrecord-gtk_windows_<VERSION>/, each with its portable .zip
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -162,68 +164,181 @@ if not defined MROOT (
 exit /b %ERRORLEVEL%
 EOF
 
-cat > "$PKG/README-WINDOWS.txt" << EOF
-vrecord Windows portable ${VERSION}
-===================================
 
-Requirements:
-  - Blackmagic Desktop Video drivers installed (this station: 16.0.x)
-  - MSYS2 bash at C:\\msys64 OR Git Bash
+# ---------------------------------------------------------------- flavours
+# $PKG above is the combined development folder (both interfaces; what
+# agent-build and the full test suite use). The release ships two packages
+# made from it:
+#   vrecord-qt6_windows_<v>/  Qt6 GUI as Vrecord.exe + the capture backend
+#   vrecord-gtk_windows_<v>/  GTK interface (Vrecord.exe launcher + gtkdialog)
+# A DLL leaves a package only when the removed programs needed it and
+# nothing that stays does (ldd), so shared tools never lose a library.
+QT_PKG="$ARTIFACTS/vrecord-qt6_windows_${VERSION}"
+GTK_PKG="$ARTIFACTS/vrecord-gtk_windows_${VERSION}"
 
-Run:
-  VrecordQt6.exe
-  vsignal start --pattern "SMPTE SD Bars (75%)" --connector HDMI
-  vsignal stop
-  Vrecord.exe
-  vrecord.cmd
-  vrecord.cmd -e
-  vrecord.cmd -s testid
-  vrecord.cmd mytape
+# every DLL inside <pkg> that the given binaries load (resolved paths, lower case)
+package_deps() {
+  local pkg_lc="${1,,}" ; shift
+  local bin
+  for bin in "$@" ; do
+    [[ -f "$bin" ]] || continue
+    { ldd "$bin" 2>/dev/null || true ; } | awk '{ print $3 }'
+  done | tr 'A-Z' 'a-z' | { grep -F "$pkg_lc/" || true ; } | sort -u
+}
+# make_flavour <dest> <path relative to the package to remove>...
+make_flavour() {
+  local dest="$1" ; shift
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  # the script FIRST: MSYS matches "vrecord" to an existing Vrecord.exe
+  # (.exe suffix magic), so copying it after the exe fails ("File exists")
+  cp -a "$PKG/vrecord" "$dest/"
+  local entry
+  for entry in "$PKG"/* ; do
+    if [[ "$(basename "$entry")" == "vrecord" ]] ; then continue ; fi
+    cp -a "$entry" "$dest/"
+  done
+  # development leftovers never ship
+  rm -f "$dest"/VrecordQt6-*.log "$dest"/VrecordQt6-*.txt "$dest"/VrecordQt6-*.jpg \
+        "$dest"/VrecordQt6-*.conf "$dest"/VrecordQt6-*.conf.bak "$dest"/VrecordQt6-*.pid \
+        "$dest"/vrecord-qt6-update.ini
+  local removed=() rel
+  for rel in "$@" ; do
+    [[ -e "$dest/$rel" ]] || continue
+    if [[ -d "$dest/$rel" ]] ; then
+      while IFS= read -r f ; do removed+=("$f") ; done < <(find "$dest/$rel" -type f \( -iname '*.exe' -o -iname '*.dll' \))
+    else
+      removed+=("$dest/$rel")
+    fi
+  done
+  local kept=()
+  while IFS= read -r f ; do
+    local is_removed=0 r
+    for r in "${removed[@]}" ; do
+      if [[ "$r" == "$f" ]] ; then is_removed=1 ; break ; fi
+    done
+    if [[ $is_removed = 0 ]] ; then kept+=("$f") ; fi
+  done < <(find "$dest" -type f \( -iname '*.exe' -o -iname '*.dll' \))
+  local removed_deps kept_deps
+  removed_deps="$(package_deps "$dest" "${removed[@]}")"
+  # what stays needs: every kept program, and every kept DLL that is NOT
+  # one of the removed programs' libraries (plugins and libraries loaded
+  # at run time keep themselves). The removed programs' libraries do not
+  # count as users - libgdk needing libpango must not keep either.
+  local roots=() lower
+  for f in "${kept[@]}" ; do
+    lower="${f,,}"
+    if [[ "$lower" == *.exe ]] || ! grep -qxF "$lower" <<< "$removed_deps" ; then
+      roots+=("$f")
+    fi
+  done
+  kept_deps="$(package_deps "$dest" "${roots[@]}")"
+  for rel in "$@" ; do rm -rf "${dest:?}/$rel" ; done
+  local dll dropped=0
+  while IFS= read -r dll ; do
+    [[ -n "$dll" ]] || continue
+    if grep -qxF "$dll" <<< "$kept_deps" ; then continue ; fi
+    # resolve the lower-cased path back to the real file
+    local real
+    real="$(find "$dest" -type f -iname "$(basename "$dll")" | awk -v want="$dll" 'tolower($0) == want' | head -n 1)"
+    if [[ -n "$real" ]] ; then rm -f "$real" ; dropped=$((dropped + 1)) ; fi
+  done <<< "$removed_deps"
+  echo "  $(basename "$dest"): removed $* and ${dropped} DLL(s) only they used"
+}
 
-Install or portable:
-  - vrecord_<version>_windows_x86_64_setup.exe installs for the current user
-    (no administrator rights) into %LOCALAPPDATA%\\Programs\\vrecord, with
-    Start Menu shortcuts and an Apps & features entry.
-  - vrecord_<version>_windows_x86_64_portable.zip runs from any folder
-    (portable.txt marks it as portable).
+echo "Making the Qt6 and GTK packages"
+# Qt6: the GTK launcher and gtkdialog go; the Qt6 app becomes Vrecord.exe
+make_flavour "$QT_PKG" Vrecord.exe bin/gtkdialog.exe vrecord.cmd vrecord.sh
+mv "$QT_PKG/VrecordQt6.exe" "$QT_PKG/Vrecord.exe"
+# GTK: the Qt programs, the Qt libraries and the Qt plugin folders go
+QT_PARTS=(VrecordQt6.exe vsignal.exe VrecordOutputTest.exe)
+for f in "$PKG"/Qt6*.dll ; do
+  if [[ -f "$f" ]] ; then QT_PARTS+=("$(basename "$f")") ; fi
+done
+for d in "$PKG"/*/ ; do
+  d="$(basename "$d")"
+  case "$d" in bin|Resources|share) ;; *) QT_PARTS+=("$d") ;; esac
+done
+make_flavour "$GTK_PKG" "${QT_PARTS[@]}"
 
-Updates (VrecordQt6 > Config > Updates):
-  - Off / tell me when an update is available (default) / download
-    automatically and install when vrecord closes. "Check for updates" and
-    "Install and restart" work in every mode.
-  - Only published GitHub releases are offered. Every download is checked
-    against the release's SHA256SUMS.txt and refused when it does not match.
-  - Installed copies run the new setup silently; portable copies unpack the
-    new zip over this folder (files the zip does not carry, such as your
-    logs, stay). Nothing is installed while a recording is running.
-  - The install helper's log: %TEMP%\\vrecord-update\\<tag>\\apply-update.log
+write_readme() {   # write_readme <package> <qt6|gtk>
+  local pkg="$1" flavour="$2"
+  {
+    if [[ "$flavour" = qt6 ]] ; then
+      echo "Vrecord ${VERSION} for Windows"
+    else
+      echo "Vrecord ${VERSION} for Windows (GTK interface)"
+    fi
+    echo "======================================="
+    echo
+    echo "Requirements:"
+    echo "  - Blackmagic Desktop Video drivers"
+    echo "  - Git for Windows or MSYS2 (C:\\msys64): the bash that runs the capture script"
+    echo
+    echo "Run:"
+    echo "  Vrecord.exe"
+    if [[ "$flavour" = qt6 ]] ; then
+      echo "  vsignal start --pattern \"SMPTE SD Bars (75%)\" --connector HDMI"
+      echo "  vsignal stop"
+      echo
+      echo "Install or portable:"
+      echo "  - vrecord-qt6_<version>_windows_x86_64_setup.exe installs for the current"
+      echo "    user (no administrator rights) into %LOCALAPPDATA%\\Programs\\vrecord,"
+      echo "    with Start Menu shortcuts and an Apps & features entry."
+      echo "  - vrecord-qt6_<version>_windows_x86_64_portable.zip runs from any folder"
+      echo "    (portable.txt marks it as portable)."
+      echo
+      echo "Updates (Config > Updates):"
+      echo "  - Off / tell me when an update is available (default) / download"
+      echo "    automatically and install when Vrecord closes."
+      echo "  - Only published Qt6 releases are offered. Every download is checked"
+      echo "    against the release's SHA256SUMS.txt and refused when it does not match."
+      echo "  - Installed copies run the new setup silently; portable copies unpack the"
+      echo "    new zip over this folder (your logs stay). Nothing is installed while a"
+      echo "    recording is running."
+      echo "  - The install helper's log: %TEMP%\\vrecord-update\\<tag>\\apply-update.log"
+    else
+      echo "  vrecord.cmd           (the same, from a console)"
+      echo "  vrecord.cmd -e        (edit settings)"
+      echo "  vrecord.cmd mytape    (record without the window)"
+      echo
+      echo "The GTK package is portable only: unzip it anywhere. New versions are"
+      echo "downloaded by hand from the GTK release on GitHub."
+    fi
+    echo
+    echo "Notes:"
+    echo "  - Output directories must be normal Windows paths (e.g. C:/Captures)."
+    echo "  - ffmpeg-ma is a MinGW build with the DeckLink input/output and drawtext."
+    echo "  - Only the Desktop Video driver (and a bash) are system installs;"
+    echo "    everything else is bundled."
+  } > "$pkg/README-WINDOWS.txt"
+  # marks a portable copy (the Qt6 installer deletes it: an installed copy
+  # updates with the setup)
+  {
+    echo "Vrecord ${VERSION} portable package."
+    if [[ "$flavour" = qt6 ]] ; then echo "Updates (Config > Updates) unpack the new portable zip over this folder." ; fi
+    echo "Delete this file only if this folder was installed with the Vrecord setup."
+  } > "$pkg/portable.txt"
+}
+write_readme "$QT_PKG" qt6
+write_readme "$GTK_PKG" gtk
 
-Notes:
-  - Output directories must be normal Windows paths (e.g. C:/Captures).
-  - ffmpeg-ma is a MinGW build with decklink indev/outdev and drawtext
-    (freetype/harfbuzz) enabled - see Release/build-ffmpeg-windows.sh.
-  - gtkdialog GUI is GTK3-based; preview uses a Windows-safe image path.
-  - Only the Desktop Video driver is a system install; everything else is bundled.
-EOF
+zip_package() {   # zip_package <package dir> <zip name>
+  (
+    cd "$ARTIFACTS"
+    rm -f "$2"
+    if command -v zip >/dev/null 2>&1; then
+      (cd "$(basename "$1")" && zip -qry "../$2" .)
+    else
+      powershell.exe -NoProfile -Command "Compress-Archive -Path '$(basename "$1")\\*' -DestinationPath '$2' -Force"
+    fi
+  )
+}
+QT_ZIP="vrecord-qt6_${VERSION}_windows_x86_64_portable.zip"
+GTK_ZIP="vrecord-gtk_${VERSION}_windows_x86_64_portable.zip"
+zip_package "$QT_PKG" "$QT_ZIP"
+zip_package "$GTK_PKG" "$GTK_ZIP"
 
-# marks a portable copy: its updater replaces the files in place from the
-# portable zip (the installer deletes this file; an installed copy updates
-# with the setup)
-cat > "$PKG/portable.txt" << EOF
-vrecord ${VERSION} portable package.
-Updates (Config > Updates) unpack the new portable zip over this folder.
-Delete this file only if this folder was installed with the vrecord setup.
-EOF
-
-(
-  cd "$ARTIFACTS"
-  if command -v zip >/dev/null 2>&1; then
-    rm -f "vrecord_${VERSION}_windows_x86_64_portable.zip"
-    (cd "vrecord_windows_${VERSION}" && zip -qry "../vrecord_${VERSION}_windows_x86_64_portable.zip" .)
-  else
-    powershell.exe -NoProfile -Command "Compress-Archive -Path 'vrecord_windows_${VERSION}\\*' -DestinationPath 'vrecord_${VERSION}_windows_x86_64_portable.zip' -Force"
-  fi
-)
-
-echo "Built: $PKG"
-echo "Zip:   $ARTIFACTS/vrecord_${VERSION}_windows_x86_64_portable.zip"
+echo "Built: $PKG (combined, development)"
+echo "Qt6:   $QT_PKG + $ARTIFACTS/$QT_ZIP"
+echo "GTK:   $GTK_PKG + $ARTIFACTS/$GTK_ZIP"

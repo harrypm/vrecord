@@ -52,6 +52,8 @@ public:
     static QString repository();
     // compares the digit groups (2026-03-03 == v2026.03.03): <0, 0, >0
     static int compareVersions(const QString& a, const QString& b);
+    // "qt6-v1.2.3" / "v1.2.3" / "1.2.3" -> "1.2.3"
+    static QString versionPart(const QString& text);
     // "<hash>  <name>" / "<hash> *<name>" lines -> hash for name ("" if absent)
     static QString expectedSha256(const QByteArray& sums, const QString& assetName);
     // picks this copy's asset out of a GitHub release JSON; false + message if unusable

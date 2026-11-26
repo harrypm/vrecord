@@ -16,6 +16,9 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("vrecord-qt6"));
     QApplication::setOrganizationName(QStringLiteral("vrecord"));
+    // the name users see (window titles, dialogs); the application name
+    // above stays: it keys stored settings
+    QApplication::setApplicationDisplayName(QStringLiteral("Vrecord"));
     // the vrecord icon of the GTK launcher (also the exe icon via vrecord.rc)
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/vrecord.ico")));
 

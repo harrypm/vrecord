@@ -1576,7 +1576,7 @@ void MainWindow::buildUi() {
     // drop anywhere else in the window: a folder sets the recording directory,
     // a file the playout file (the specific boxes above take precedence)
     registerDropTarget(central, nullptr, false);
-    setWindowTitle(QStringLiteral("vrecord Qt6"));
+    setWindowTitle(QStringLiteral("Vrecord"));
     resize(1380, 920);
 
     const auto updateSlots = [this] {
@@ -2067,7 +2067,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if (m_backend.isShellRunning()) {
         // the session is a child of this window: closing it would cut the
         // recording off mid-file
-        const auto answer = QMessageBox::question(this, QStringLiteral("vrecord Qt6"),
+        const auto answer = QMessageBox::question(this, QStringLiteral("Vrecord"),
                                                   QStringLiteral("A %1 session is still running. Stop it and quit?").arg(m_backend.shellMode()));
         if (answer != QMessageBox::Yes) {
             event->ignore();
@@ -2692,6 +2692,32 @@ QStringList MainWindow::runSelfTest() {
                   && badParity.aspect == Wss::Aspect::None && flat.aspect == Wss::Aspect::None,
               QStringLiteral("%1 / %2 / %3 / %4").arg(wide.group, full.group, badParity.group, flat.group));
     }
+    // updater versions: flavour prefixes are not digits, semantic versions
+    // beat the old date versions, and the release list yields the newest
+    // published Qt6 release (not GTK, not a pre-release or draft)
+    {
+        const bool compareOk = UpdateManager::compareVersions(QStringLiteral("qt6-v1.0.0"), QStringLiteral("1.0.0")) == 0
+                               && UpdateManager::compareVersions(QStringLiteral("qt6-v1.0.1"), QStringLiteral("1.0.0")) > 0
+                               && UpdateManager::compareVersions(QStringLiteral("qt6-v1.10.0"), QStringLiteral("qt6-v1.9.9")) > 0
+                               && UpdateManager::compareVersions(QStringLiteral("v1.0.0"), QStringLiteral("2026-11-25")) > 0
+                               && UpdateManager::compareVersions(QStringLiteral("2026-11-25"), QStringLiteral("0.0.1")) < 0;
+        const QByteArray list = R"([
+            {"tag_name":"gtk-v1.2.0","draft":false,"prerelease":false,"assets":[]},
+            {"tag_name":"qt6-v1.3.0-rc1","draft":false,"prerelease":true,"assets":[]},
+            {"tag_name":"qt6-v1.2.0","draft":true,"prerelease":false,"assets":[]},
+            {"tag_name":"qt6-v1.1.0","draft":false,"prerelease":false,"html_url":"https://example.invalid/qt6-v1.1.0","assets":[
+              {"name":"vrecord-qt6_1.1.0_windows_x86_64_setup.exe","browser_download_url":"https://example.invalid/setup.exe","size":1},
+              {"name":"SHA256SUMS.txt","browser_download_url":"https://example.invalid/sums","size":1}]},
+            {"tag_name":"qt6-v1.0.0","draft":false,"prerelease":false,"assets":[]}
+        ])";
+        UpdateInfo picked;
+        QString pickMessage;
+        const bool parsed = UpdateManager::parseRelease(list, false, &picked, &pickMessage);
+        check(QStringLiteral("Updater: Qt6 release picked from the list, semantic versions beat date versions"),
+              compareOk && parsed && picked.tag == QStringLiteral("qt6-v1.1.0")
+                  && picked.assetName == QStringLiteral("vrecord-qt6_1.1.0_windows_x86_64_setup.exe"),
+              QStringLiteral("compare=%1 picked=%2 asset=%3 %4").arg(int(compareOk)).arg(picked.tag, picked.assetName, pickMessage));
+    }
     // audio constraints: Opus only in MKV / MP4, 2 capture channels drop the 3 & 4 mappings
     {
         setChoice(m_containerCombo, QStringLiteral("QuickTime"), QStringLiteral("QuickTime"));
@@ -2857,7 +2883,7 @@ QStringList MainWindow::runSelfTest() {
     {
         // drag and drop: real QDragEnter/QDrop events through the filters
         const QString folder = QDir(m_backend.packageRoot()).absolutePath();
-        const QString file = QDir(folder).filePath(QStringLiteral("VrecordQt6.exe"));
+        const QString file = QCoreApplication::applicationFilePath();   // a real file in the package
         const auto dropOnto = [](QWidget* widget, const QString& path) {
             QMimeData mime;
             mime.setUrls({QUrl::fromLocalFile(path)});
@@ -3069,5 +3095,5 @@ void MainWindow::showError(const QString& message) {
         fflush(stderr);
         return;
     }
-    QMessageBox::warning(this, QStringLiteral("vrecord Qt6"), message);
+    QMessageBox::warning(this, QStringLiteral("Vrecord"), message);
 }

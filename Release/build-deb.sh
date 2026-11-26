@@ -100,9 +100,14 @@ chmod 755 "$PKGROOT/DEBIAN/postinst"
 # --- control file (note: no comments allowed inside, dpkg rejects them) ---
 ARCH="$(dpkg --print-architecture)"
 INSTALLED_SIZE="$(du -sk "$PKGROOT" | awk '{print $1}')"
+# epoch 1: semantic versions (1.0.0) follow the date versions (2026-11-25),
+# which dpkg would otherwise rank higher (an upgrade would look like a
+# downgrade); a date version keeps no epoch
+DEB_VERSION="${VERSION}"
+[[ "${VERSION%%[.-]*}" -lt 1000 ]] && DEB_VERSION="1:${VERSION}"
 cat > "$PKGROOT/DEBIAN/control" << EOF
 Package: vrecord
-Version: ${VERSION}
+Version: ${DEB_VERSION}
 Section: video
 Priority: optional
 Architecture: ${ARCH}
@@ -122,6 +127,6 @@ EOF
 
 # --- build ---
 chmod 755 "$PREFIX/bin/"*
-dpkg-deb --build "$PKGROOT" "$ARTIFACTS/vrecord_${VERSION}_linux_${ARCH}.deb"
+dpkg-deb --build "$PKGROOT" "$ARTIFACTS/vrecord-gtk_${VERSION}_linux_${ARCH}.deb"
 rm -rf "$PKGROOT"
-echo "Built: $ARTIFACTS/vrecord_${VERSION}_linux_${ARCH}.deb"
+echo "Built: $ARTIFACTS/vrecord-gtk_${VERSION}_linux_${ARCH}.deb"

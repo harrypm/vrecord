@@ -23,7 +23,7 @@ pass() { echo "PASS  $*" ; }
 fail() { echo "FAIL  $*" ; FAILS=$((FAILS + 1)) ; }
 win() { cygpath -w "$1" ; }
 url() { echo "file:///$(cygpath -m "$1")" ; }
-TAG="v9999.1.1"
+TAG="qt6-v999.1.1"   # flavour prefix + a semantic version above any real one (< 1000: not a date)
 UNINSTKEY='HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\vrecord'
 # robocopy, not cp: to MSYS, "vrecord" (the backend script) and "Vrecord.exe"
 # are the same name, so cp skips one of them
@@ -51,8 +51,8 @@ show_apply_log() { [[ -n "$APPLY_LOG" ]] && sed 's/^/    apply: /' "$APPLY_LOG" 
 # ---- the fake release
 REL="$WORK/release"
 mkdir -p "$REL"
-ZIP_NAME="vrecord_${TAG}_windows_x86_64_portable.zip"
-SETUP_NAME="vrecord_${TAG}_windows_x86_64_setup.exe"
+ZIP_NAME="vrecord-qt6_${TAG#qt6-v}_windows_x86_64_portable.zip"
+SETUP_NAME="vrecord-qt6_${TAG#qt6-v}_windows_x86_64_setup.exe"
 {
     echo "$(sha256sum "$ZIP" | cut -c1-64)  ${ZIP_NAME}"
     echo "$(sha256sum "$SETUP" | cut -c1-64)  ${SETUP_NAME}"
@@ -75,19 +75,19 @@ release_json SHA256SUMS-bad.txt > "$REL/latest-bad.json"
 PORT="$WORK/portable"
 copy_tree "$PKG" "$PORT" || fail "copy the package"
 [[ -f "$PORT/portable.txt" ]] && pass "package is marked portable (portable.txt)" || fail "package has no portable.txt"
-if update_test "$PORT/VrecordQt6.exe" "$REL/latest.json" && grep -q "downloaded, verified and unpacked" "$PORT/VrecordQt6-update-test.log" ; then
+if update_test "$PORT/Vrecord.exe" "$REL/latest.json" && grep -q "downloaded, verified and unpacked" "$PORT/VrecordQt6-update-test.log" ; then
     pass "portable update: check, download, SHA256 verify, unpack"
 else
     fail "portable update" ; report "$PORT"
 fi
-if update_test "$PORT/VrecordQt6.exe" "$REL/latest-bad.json" --expect-fail && grep -q "Checksum mismatch" "$PORT/VrecordQt6-update-test.log" ; then
+if update_test "$PORT/Vrecord.exe" "$REL/latest-bad.json" --expect-fail && grep -q "Checksum mismatch" "$PORT/VrecordQt6-update-test.log" ; then
     pass "a wrong SHA256 is refused"
 else
     fail "wrong SHA256 not refused" ; report "$PORT"
 fi
 echo "OLD" > "$PORT/README-WINDOWS.txt"
 echo "mine" > "$PORT/user-notes.txt"
-if update_test "$PORT/VrecordQt6.exe" "$REL/latest.json" --apply && wait_for_apply "$PORT" \
+if update_test "$PORT/Vrecord.exe" "$REL/latest.json" --apply && wait_for_apply "$PORT" \
    && grep -q "portable files copied: True" "$APPLY_LOG" \
    && [[ "$(head -1 "$PORT/README-WINDOWS.txt")" != "OLD" && -f "$PORT/user-notes.txt" ]] ; then
     pass "portable apply: files replaced after exit, user files kept"
@@ -99,12 +99,12 @@ fi
 # ---- 4-6: installer
 INST="$WORK/installed/vrecord"
 # shell folders by CSIDL (right even when the Desktop is redirected, e.g. OneDrive)
-DESKTOP_LNK="$(cygpath -F 16)/vrecord.lnk"
+DESKTOP_LNK="$(cygpath -F 16)/Vrecord.lnk"
 START_MENU="$(cygpath -F 2)/vrecord"
 DESKTOP_BEFORE="$([[ -e "$DESKTOP_LNK" ]] && echo yes || echo no)"
 "$SETUP" /S "/D=$(win "$INST")"
 rc=$?
-if [[ $rc -eq 0 && -f "$INST/VrecordQt6.exe" && -f "$INST/vrecord" && -f "$INST/bin/ffmpeg-ma.exe" && -f "$INST/uninstall.exe" && ! -e "$INST/portable.txt" ]] ; then
+if [[ $rc -eq 0 && -f "$INST/Vrecord.exe" && -f "$INST/vrecord" && -f "$INST/bin/ffmpeg-ma.exe" && -f "$INST/uninstall.exe" && ! -e "$INST/portable.txt" ]] ; then
     pass "silent install: files in place, portable.txt removed"
 else
     fail "silent install (exit $rc)" ; ls "$INST" 2> /dev/null | head
@@ -114,13 +114,13 @@ if ls "$INST"/VrecordQt6-*.log "$INST"/vrecord-qt6-update.ini > /dev/null 2>&1 ;
 else
     pass "installer ships no run logs or local settings"
 fi
-if reg query "$UNINSTKEY" /v DisplayVersion > /dev/null 2>&1 && [[ -f "$START_MENU/vrecord.lnk" ]] ; then
+if reg query "$UNINSTKEY" /v DisplayVersion > /dev/null 2>&1 && [[ -f "$START_MENU/Vrecord.lnk" ]] ; then
     pass "uninstall entry + Start Menu shortcut"
 else
     fail "uninstall entry / Start Menu shortcut missing ($START_MENU)"
 fi
 echo "OLD" > "$INST/README-WINDOWS.txt"
-if update_test "$INST/VrecordQt6.exe" "$REL/latest.json" --apply && grep -q "kind=installed" "$INST/VrecordQt6-update-test.log" \
+if update_test "$INST/Vrecord.exe" "$REL/latest.json" --apply && grep -q "kind=installed" "$INST/VrecordQt6-update-test.log" \
    && wait_for_apply "$INST" && grep -q "setup exit code 0" "$APPLY_LOG" && [[ "$(head -1 "$INST/README-WINDOWS.txt")" != "OLD" ]] ; then
     pass "installed update: verified setup ran silently into the same folder"
 else

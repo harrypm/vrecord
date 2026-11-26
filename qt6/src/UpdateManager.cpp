@@ -72,11 +72,25 @@ QString UpdateManager::repository() {
     return QStringLiteral(VRECORD_UPDATE_REPO);
 }
 
+// the version part of a tag or VERSION: "qt6-v1.2.3" / "v1.2.3" -> "1.2.3"
+// (the "6" of a flavour prefix is not a version digit)
+QString UpdateManager::versionPart(const QString& text) {
+    static const QRegularExpression flavour(QStringLiteral("^[A-Za-z][A-Za-z0-9]*-(?=v?\\d)"));
+    QString version = text.trimmed();
+    version.remove(flavour);
+    if (version.startsWith(QLatin1Char('v')) || version.startsWith(QLatin1Char('V'))) {
+        version.remove(0, 1);
+    }
+    return version;
+}
+
+// date versions (2026-11-25, the scheme before 1.0.0) are older than any
+// semantic version: the first group decides (>= 1000 = a year)
 int UpdateManager::compareVersions(const QString& a, const QString& b) {
     static const QRegularExpression digits(QStringLiteral("\\d+"));
     const auto parts = [](const QString& text) {
         QList<qlonglong> values;
-        auto it = digits.globalMatch(text);
+        auto it = digits.globalMatch(versionPart(text));
         while (it.hasNext()) {
             values << it.next().captured(0).toLongLong();
         }
@@ -84,6 +98,11 @@ int UpdateManager::compareVersions(const QString& a, const QString& b) {
     };
     const QList<qlonglong> left = parts(a);
     const QList<qlonglong> right = parts(b);
+    const bool leftDate = !left.isEmpty() && left.first() >= 1000;
+    const bool rightDate = !right.isEmpty() && right.first() >= 1000;
+    if (leftDate != rightDate) {
+        return leftDate ? -1 : 1;
+    }
     const qsizetype count = qMax(left.size(), right.size());
     for (qsizetype i = 0; i < count; ++i) {
         const qlonglong l = i < left.size() ? left.at(i) : 0;
@@ -110,11 +129,32 @@ QString UpdateManager::expectedSha256(const QByteArray& sums, const QString& ass
 bool UpdateManager::parseRelease(const QByteArray& json, bool portable, UpdateInfo* info, QString* message) {
     QJsonParseError parseError{};
     const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+    if (parseError.error != QJsonParseError::NoError || (!document.isObject() && !document.isArray())) {
         *message = QStringLiteral("The release information could not be read (%1).").arg(parseError.errorString());
         return false;
     }
-    const QJsonObject release = document.object();
+    QJsonObject release;
+    if (document.isArray()) {
+        // the release list: the newest published (not draft, not
+        // pre-release) Qt6 release - tag qt6-v<version>
+        for (const QJsonValue& value : document.array()) {
+            const QJsonObject candidate = value.toObject();
+            const QString tag = candidate.value(QStringLiteral("tag_name")).toString();
+            if (candidate.value(QStringLiteral("draft")).toBool() || candidate.value(QStringLiteral("prerelease")).toBool()
+                || !tag.startsWith(QStringLiteral("qt6-v"), Qt::CaseInsensitive)) {
+                continue;
+            }
+            if (release.isEmpty() || compareVersions(tag, release.value(QStringLiteral("tag_name")).toString()) > 0) {
+                release = candidate;
+            }
+        }
+        if (release.isEmpty()) {
+            *message = QStringLiteral("No published Qt6 release was found.");
+            return false;
+        }
+    } else {
+        release = document.object();   // one release (a test feed, or an older API)
+    }
     if (release.value(QStringLiteral("draft")).toBool() || release.value(QStringLiteral("prerelease")).toBool()) {
         *message = QStringLiteral("The latest release is not published yet.");
         return false;
@@ -181,8 +221,11 @@ QUrl UpdateManager::apiUrl() const {
     if (!overrideUrl.isEmpty()) {
         return QUrl(overrideUrl);
     }
+    // the release LIST: each version has a Qt6 and a GTK release
+    // (qt6-v1.2.3 / gtk-v1.2.3), so "latest" could be the GTK one;
+    // parseRelease picks the newest published Qt6 release from the list
     const QString repo = m_settings->value(QStringLiteral("update/repo"), repository()).toString();
-    return QUrl(QStringLiteral("https://api.github.com/repos/%1/releases/latest").arg(repo));
+    return QUrl(QStringLiteral("https://api.github.com/repos/%1/releases?per_page=50").arg(repo));
 }
 
 QString UpdateManager::workDir(const QString& tag) const {
@@ -359,8 +402,12 @@ void UpdateManager::stagePortable() {
         const QString output = QString::fromLocal8Bit(m_stageProcess->readAll()).trimmed();
         m_stageProcess->deleteLater();
         m_stageProcess = nullptr;
-        const bool complete = QFileInfo::exists(QDir(m_stagingDir).filePath(QStringLiteral("VrecordQt6.exe")))
-            && QFileInfo::exists(QDir(m_stagingDir).filePath(QStringLiteral("vrecord")));
+        // the Qt6 package's app is Vrecord.exe (VrecordQt6.exe in a combined
+        // development folder)
+        const QDir staged(m_stagingDir);
+        const bool complete = (QFileInfo::exists(staged.filePath(QStringLiteral("Vrecord.exe")))
+                               || QFileInfo::exists(staged.filePath(QStringLiteral("VrecordQt6.exe"))))
+            && QFileInfo::exists(staged.filePath(QStringLiteral("vrecord")));
         if (status != QProcess::NormalExit || exitCode != 0 || !complete) {
             finishDownload(false, QStringLiteral("Could not unpack %1 (tar exit %2) %3").arg(m_info.assetName).arg(exitCode).arg(output.left(300)));
             return;
@@ -415,7 +462,9 @@ bool UpdateManager::launchInstall(qint64 processId, bool relaunch, QString* erro
     // a fresh log: an old run's "done" must not pass for this one
     QFile::remove(applyLogPath());
     const QString root = QDir::toNativeSeparators(QDir(m_packageRoot).absolutePath());
-    const QString exe = root + QStringLiteral("\\VrecordQt6.exe");
+    // restart the app under the name it runs as (Vrecord.exe in the Qt6
+    // package; VrecordQt6.exe in a combined development folder)
+    const QString exe = root + QLatin1Char('\\') + QFileInfo(QCoreApplication::applicationFilePath()).fileName();
     QStringList script;
     script << QStringLiteral("$ErrorActionPreference = 'Continue'")
            << QStringLiteral("$log = %1").arg(psQuote(QDir::toNativeSeparators(applyLogPath())))

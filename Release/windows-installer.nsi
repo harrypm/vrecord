@@ -1,6 +1,6 @@
 ; vrecord Windows installer (NSIS 3, Unicode). Built by
 ; Release/build-windows-installer.sh from the assembled portable package:
-;   makensis -DVERSION=2026-03-03 -DVIVERSION=2026.3.3.0 -DPKGDIR=<package>
+;   makensis -DVERSION=1.0.0 -DVIVERSION=1.0.0.0 -DPKGDIR=<Qt6 package>
 ;            -DOUTFILE=<setup.exe> -DICON=<vrecord.ico> -DLICENSE=<LICENSE.txt>
 ;            windows-installer.nsi
 ;
@@ -26,7 +26,7 @@ SetCompressor /SOLID lzma
   !error "PKGDIR not defined"
 !endif
 
-!define APPNAME "vrecord"
+!define APPNAME "Vrecord"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\vrecord"
 !define DECKLINK_CLSID "{BA6C6F44-6DA5-4DCE-94AA-EE2D1372A676}"
 
@@ -35,21 +35,21 @@ OutFile "${OUTFILE}"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\vrecord"
 InstallDirRegKey HKCU "Software\vrecord" "InstallDir"
-BrandingText "vrecord ${VERSION}"
+BrandingText "Vrecord ${VERSION}"
 
 VIProductVersion "${VIVERSION}"
-VIAddVersionKey "ProductName" "vrecord"
+VIAddVersionKey "ProductName" "Vrecord"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "FileDescription" "vrecord installer"
+VIAddVersionKey "FileDescription" "Vrecord installer"
 VIAddVersionKey "LegalCopyright" "AMIA Open Source - see LICENSE.txt"
 VIAddVersionKey "CompanyName" "AMIA Open Source"
 
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\VrecordQt6.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Start vrecord"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\Vrecord.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Start Vrecord"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
@@ -78,10 +78,19 @@ FunctionEnd
 ; an open vrecord holds its exe: wait (silent update: the app is closing)
 ; or ask (interactive)
 Function WaitForVrecordToClose
+  ; Vrecord.exe, and VrecordQt6.exe of an install from before 1.0.0
+  StrCpy $R0 "$INSTDIR\Vrecord.exe"
+  Call WaitForExeToClose
+  StrCpy $R0 "$INSTDIR\VrecordQt6.exe"
+  Call WaitForExeToClose
+FunctionEnd
+
+; $R0 = the exe to wait for
+Function WaitForExeToClose
   StrCpy $1 0
-  ${DoWhile} ${FileExists} "$INSTDIR\VrecordQt6.exe"
+  ${DoWhile} ${FileExists} "$R0"
     ClearErrors
-    FileOpen $0 "$INSTDIR\VrecordQt6.exe" a
+    FileOpen $0 "$R0" a
     ${IfNot} ${Errors}
       FileClose $0
       ${Break}
@@ -89,11 +98,11 @@ Function WaitForVrecordToClose
     ${If} ${Silent}
       IntOp $1 $1 + 1
       ${If} $1 > 120
-        Abort "vrecord is still running"
+        Abort "Vrecord is still running"
       ${EndIf}
       Sleep 1000
     ${Else}
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "vrecord is running. Close it, then press Retry." IDRETRY retry_close
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Vrecord is running. Close it, then press Retry." IDRETRY retry_close
       Abort
       retry_close:
     ${EndIf}
@@ -116,7 +125,7 @@ Function CheckPrerequisites
   ${EndIf}
 FunctionEnd
 
-Section "vrecord (required)" SecMain
+Section "Vrecord (required)" SecMain
   SectionIn RO
   Call EnsureOwnFolder
   Call WaitForVrecordToClose
@@ -128,17 +137,28 @@ Section "vrecord (required)" SecMain
   Delete "$INSTDIR\portable.txt"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
+  ; upgrading an install from before 1.0.0: the app was VrecordQt6.exe and
+  ; the package also carried the GTK interface (now its own package)
+  Delete "$INSTDIR\VrecordQt6.exe"
+  Delete "$INSTDIR\bin\gtkdialog.exe"
+  Delete "$SMPROGRAMS\vrecord\vrecord (legacy GTK).lnk"
+  Delete "$SMPROGRAMS\vrecord\Uninstall vrecord.lnk"
+  ; a desktop shortcut from that install pointed at VrecordQt6.exe: point
+  ; it at Vrecord.exe (kept where it is, also on a silent update)
+  ${If} ${FileExists} "$DESKTOP\Vrecord.lnk"
+    CreateShortcut "$DESKTOP\Vrecord.lnk" "$INSTDIR\Vrecord.exe" "" "$INSTDIR\Vrecord.exe" 0
+  ${EndIf}
+
   CreateDirectory "$SMPROGRAMS\vrecord"
-  CreateShortcut "$SMPROGRAMS\vrecord\vrecord.lnk" "$INSTDIR\VrecordQt6.exe" "" "$INSTDIR\VrecordQt6.exe" 0
-  CreateShortcut "$SMPROGRAMS\vrecord\vrecord (legacy GTK).lnk" "$INSTDIR\Vrecord.exe"
-  CreateShortcut "$SMPROGRAMS\vrecord\Uninstall vrecord.lnk" "$INSTDIR\uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\vrecord\Vrecord.lnk" "$INSTDIR\Vrecord.exe" "" "$INSTDIR\Vrecord.exe" 0
+  CreateShortcut "$SMPROGRAMS\vrecord\Uninstall Vrecord.lnk" "$INSTDIR\uninstall.exe"
 
   WriteRegStr HKCU "Software\vrecord" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "vrecord"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "Vrecord"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "AMIA Open Source"
   WriteRegStr HKCU "${UNINSTKEY}" "URLInfoAbout" "https://github.com/amiaopensource/vrecord"
-  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\VrecordQt6.exe"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\Vrecord.exe"
   WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKCU "${UNINSTKEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
@@ -150,7 +170,7 @@ Section "vrecord (required)" SecMain
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\vrecord.lnk" "$INSTDIR\VrecordQt6.exe"
+  CreateShortcut "$DESKTOP\Vrecord.lnk" "$INSTDIR\Vrecord.exe" "" "$INSTDIR\Vrecord.exe" 0
   ; the uninstaller removes only a desktop shortcut this installer made
   WriteRegDWORD HKCU "${UNINSTKEY}" "DesktopShortcut" 1
 SectionEnd
@@ -163,8 +183,8 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
-LangString DESC_SecMain ${LANG_ENGLISH} "vrecord with its Qt6 window, the legacy GTK window, ffmpeg-ma (DeckLink) and the bundled tools."
-LangString DESC_SecDesktop ${LANG_ENGLISH} "A vrecord shortcut on the desktop."
+LangString DESC_SecMain ${LANG_ENGLISH} "Vrecord, ffmpeg-ma (DeckLink) and the bundled tools."
+LangString DESC_SecDesktop ${LANG_ENGLISH} "A Vrecord shortcut on the desktop."
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_SecMain)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} $(DESC_SecDesktop)
@@ -174,14 +194,14 @@ Section "Uninstall"
   ; only remove a folder that really is a vrecord install
   ${GetFileName} "$INSTDIR" $0
   ${If} $0 == "vrecord"
-  ${AndIf} ${FileExists} "$INSTDIR\VrecordQt6.exe"
+  ${AndIf} ${FileExists} "$INSTDIR\Vrecord.exe"
     RMDir /r "$INSTDIR"
   ${Else}
     Delete "$INSTDIR\uninstall.exe"
   ${EndIf}
   ReadRegDWORD $1 HKCU "${UNINSTKEY}" "DesktopShortcut"
   ${If} $1 == 1
-    Delete "$DESKTOP\vrecord.lnk"
+    Delete "$DESKTOP\Vrecord.lnk"
   ${EndIf}
   RMDir /r "$SMPROGRAMS\vrecord"
   DeleteRegKey HKCU "${UNINSTKEY}"

@@ -1,29 +1,31 @@
 <p align="center">
-  <img src="Resources/vrecord_logo.png" alt="vrecord" width="110">
+  <img src="Resources/vrecord_icon.png" alt="Vrecord" width="110">
 </p>
 
-<h1 align="center">vrecord</h1>
+<h1 align="center">Vrecord</h1>
 
 <p align="center">
   Open-source video capture for audiovisual archivists: analog and digital tape to preservation-quality files.
 </p>
 
 <p align="center">
-  <a href="https://github.com/harrypm/vrecord/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/harrypm/vrecord?label=release"></a>
+  <a href="https://github.com/harrypm/vrecord/releases"><img alt="Qt6 release" src="https://img.shields.io/github/v/release/harrypm/vrecord?filter=qt6-*&label=Qt6%20release"></a>
+  <a href="https://github.com/harrypm/vrecord/releases"><img alt="GTK release" src="https://img.shields.io/github/v/release/harrypm/vrecord?filter=gtk-*&label=GTK%20release"></a>
   <a href="https://github.com/harrypm/vrecord/actions/workflows/build-and-test.yml"><img alt="Build and Test" src="https://github.com/harrypm/vrecord/actions/workflows/build-and-test.yml/badge.svg?branch=windows-port"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue">
   <a href="LICENSE.txt"><img alt="License: CC BY 4.0" src="https://img.shields.io/badge/license-CC%20BY%204.0-lightgrey"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/harrypm/vrecord/releases/latest"><b>Download</b></a> ·
+  <a href="https://github.com/harrypm/vrecord/releases"><b>Download</b></a> ·
   <a href="Resources/Documentation/installation_and_setup.md">Install and use</a> ·
   <a href="Resources/Documentation/settings.md">Settings</a> ·
-  <a href="Resources/Documentation/troubleshooting.md">Troubleshooting</a>
+  <a href="Resources/Documentation/troubleshooting.md">Troubleshooting</a> ·
+  <a href="BUILD.md">Building</a>
 </p>
 
 <p align="center">
-  <img src="Resources/Documentation/images/vrecord-qt6-video-preview.png" alt="The vrecord Qt6 GUI on Windows: live input preview, output feed, level meters and playout transport" width="900">
+  <img src="Resources/Documentation/images/vrecord-qt6-video-preview.png" alt="Vrecord on Windows: live input preview, output feed, level meters and playout transport" width="900">
 </p>
 
 ---
@@ -40,30 +42,33 @@ If you want to see a more detailed description of how to digitize analog videota
 
 ## Download
 
-Ready-to-run packages for every platform are on the [**latest release**](https://github.com/harrypm/vrecord/releases/latest) page. Each file is checked against the release's `SHA256SUMS.txt`.
+Each version comes as two releases on the [releases page](https://github.com/harrypm/vrecord/releases): one per interface. Every release lists `SHA256SUMS.txt` for checking the files.
 
-| System | Package | Interface |
+| Release | For | Files |
 |---|---|---|
-| Windows 10 / 11 | Installer (`..._windows_x86_64_setup.exe`) or portable zip (`..._windows_x86_64_portable.zip`) | Qt6 GUI, plus the GTK interface |
-| Debian / Ubuntu | `..._linux_amd64.deb` | GTK interface |
-| Any x86_64 Linux | `..._linux_x86_64.AppImage` | GTK interface |
-| macOS | `..._macos_<arch>.dmg` (Apple silicon, Intel or universal) | GTK interface |
+| **Vrecord - Windows (Qt6)**, tag `qt6-v<version>` | Windows 10 / 11, the full Vrecord GUI | Installer `vrecord-qt6_<version>_windows_x86_64_setup.exe`, or portable `vrecord-qt6_<version>_windows_x86_64_portable.zip` |
+| **Vrecord - GTK**, tag `gtk-v<version>` | The classic GTK interface on Windows, Linux and macOS | `vrecord-gtk_<version>_windows_x86_64_portable.zip`, `..._linux_amd64.deb`, `..._linux_x86_64.AppImage`, `..._macos_<arch>.dmg` (Apple silicon, Intel or universal) |
 
-On macOS and Linux, vrecord can also be installed with Homebrew from the AMIA Open Source tap. See [Installing vrecord](Resources/Documentation/installation_and_setup.md#installing-vrecord) and [Installing on Linux](Resources/Documentation/linux_installation.md).
+On macOS and Linux, Vrecord can also be installed with Homebrew from the AMIA Open Source tap. See [Installing vrecord](Resources/Documentation/installation_and_setup.md#installing-vrecord) and [Installing on Linux](Resources/Documentation/linux_installation.md).
 
 ### Windows
 
 - **Requirements**:
   - Blackmagic **Desktop Video** drivers.
   - **Git for Windows** or **MSYS2** (`C:\msys64`), which provide the bash that runs the capture script.
-- **Install**: the installer is per-user and needs no administrator rights. It installs into `%LOCALAPPDATA%\Programs\vrecord`, with Start Menu shortcuts. Or unzip the portable package anywhere.
-- **Run**: `VrecordQt6.exe` starts the Qt6 GUI. It opens on Video Preview: live input preview, file playout to the card's output, level meters, a test signal generator, and Record / Passthrough / Audio Check.
-- **Updates**: set in *Config → Updates* (off, notify, or install when vrecord closes). Only published releases are offered, and every download is checked against `SHA256SUMS.txt`.
-- **Port notes**: architecture, hardware findings and test tools are in the [Windows port notes](Release/windows-port-notes.md).
+- **Install**:
+  - The Qt6 installer is per user and needs no administrator rights. It installs into `%LOCALAPPDATA%\Programs\vrecord`, with Start Menu shortcuts.
+  - Either portable zip runs from any folder.
+- **Run**: `Vrecord.exe`. In the Qt6 package, Vrecord opens on Video Preview: live input preview, file playout to the card's output, level meters, a test signal generator, and Record / Passthrough / Audio Check.
+- **Updates** (Qt6): set in *Config → Updates* (off, notify, or install when Vrecord closes). Only published Qt6 releases are offered, and every download is checked against `SHA256SUMS.txt`.
+
+### Building from source
+
+See [BUILD.md](BUILD.md): Windows, Linux and macOS builds, the tests, CI, and how releases are made.
 
 ## Documentation
 
-These guides were written for the macOS / Linux GTK interface. Most of the settings apply to the Windows Qt6 GUI as well.
+These guides were written for the GTK interface. Most of the settings apply to the Windows Qt6 GUI as well.
 
 1. [Installation and Basic Use](Resources/Documentation/installation_and_setup.md)
     1. [Installing vrecord](Resources/Documentation/installation_and_setup.md#installing-vrecord)

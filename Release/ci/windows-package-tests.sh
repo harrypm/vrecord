@@ -16,6 +16,30 @@ isolated() { /usr/bin/env -i PATH="$PKG/bin:$PKG:/c/Windows/System32:/c/Windows"
 
 echo "=== package: $PKG"
 
+# which package this is:
+#   qt6       release Qt6 package: the Qt6 app is Vrecord.exe, no gtkdialog
+#   gtk       release GTK package: Vrecord.exe is the GTK launcher, no Qt
+#   combined  development folder: VrecordQt6.exe + the GTK launcher
+if [[ -f "$PKG/VrecordQt6.exe" ]] ; then
+    FLAVOUR=combined ; APP="$PKG/VrecordQt6.exe"
+elif [[ -f "$PKG/Qt6Core.dll" ]] ; then
+    FLAVOUR=qt6 ; APP="$PKG/Vrecord.exe"
+else
+    FLAVOUR=gtk ; APP=""
+fi
+echo "=== flavour: $FLAVOUR"
+case "$FLAVOUR" in
+    qt6)
+        [[ -f "$PKG/Vrecord.exe" ]] && pass "Qt6 package: the app is Vrecord.exe" || fail "Qt6 package: Vrecord.exe missing"
+        [[ ! -e "$PKG/bin/gtkdialog.exe" ]] && pass "Qt6 package carries no gtkdialog" || fail "Qt6 package carries gtkdialog"
+        ;;
+    gtk)
+        [[ -f "$PKG/Vrecord.exe" ]] && pass "GTK package: the launcher is Vrecord.exe" || fail "GTK package: Vrecord.exe missing"
+        qt_left="$(find "$PKG" -maxdepth 1 -iname 'Qt6*.dll' -o -maxdepth 1 -iname 'VrecordQt6.exe' | head -n 1)"
+        [[ -z "$qt_left" ]] && pass "GTK package carries no Qt" || fail "GTK package carries Qt ($qt_left)"
+        ;;
+esac
+
 # ---- scripts parse
 for script in "$PKG/vrecord" "$PKG/bin/dvpackager" ; do
     if bash -n "$script" ; then pass "bash -n $(basename "$script")" ; else fail "bash -n $(basename "$script")" ; fi
@@ -65,10 +89,13 @@ tool mpv          "mpv v"                 "$PKG/bin/mpv.com" --version
 tool xmlstarlet   "1.6"                   "$PKG/bin/xml.exe" --version
 tool deckcontrol  "getcurrentstate"       "$PKG/bin/deckcontrol.exe"
 tool mkvpropedit  "mkvpropedit"           "$PKG/bin/mkvpropedit.exe" --version
-if [[ -f "$PKG/bin/gtkdialog.exe" ]] ; then
-    tool gtkdialog "gtkdialog"            "$PKG/bin/gtkdialog.exe" --version
-else
-    fail "gtkdialog.exe packaged"
+# gtkdialog: the GTK interface (GTK and combined packages only)
+if [[ "$FLAVOUR" != qt6 ]] ; then
+    if [[ -f "$PKG/bin/gtkdialog.exe" ]] ; then
+        tool gtkdialog "gtkdialog"        "$PKG/bin/gtkdialog.exe" --version
+    else
+        fail "gtkdialog.exe packaged"
+    fi
 fi
 
 # ---- dvpackager end to end on a synthetic PAL DV file (MKV, and MOV with the
@@ -106,9 +133,13 @@ else
 fi
 
 # ---- Qt6 frontend self-test (offscreen; checks that need a card SKIP in CI)
-if [[ -f "$PKG/VrecordQt6.exe" ]] ; then
+if [[ "$FLAVOUR" = gtk ]] ; then
+    : # no Qt6 frontend in the GTK package
+elif [[ "${VRECORD_TEST_SKIP_SELFTEST:-0}" = 1 ]] ; then
+    echo "SKIP  self-test (VRECORD_TEST_SKIP_SELFTEST=1: e.g. a running Vrecord has the card)"
+elif [[ -n "$APP" && -f "$APP" ]] ; then
     ( cd "$PKG" && QT_QPA_PLATFORM=offscreen VRECORD_SELFTEST_ALLOW_NO_HARDWARE=1 \
-        /usr/bin/timeout 300 ./VrecordQt6.exe --self-test > "$WORK/selftest-console.txt" 2>&1 )
+        /usr/bin/timeout 300 "./$(basename "$APP")" --self-test > "$WORK/selftest-console.txt" 2>&1 )
     rc=$?
     echo "--- self-test log:"
     cat "$PKG/VrecordQt6-selftest.log" 2>/dev/null || echo "(no log)"
@@ -120,9 +151,9 @@ if [[ -f "$PKG/VrecordQt6.exe" ]] ; then
         echo "--- self-test trace (the last line is the last step that finished):"
         cat "$PKG/VrecordQt6-selftest-trace.log" 2>/dev/null || echo "(no trace)"
     fi
-    if [[ $rc -eq 0 && -f "$PKG/VrecordQt6-selftest.log" ]] ; then pass "VrecordQt6 --self-test" ; else fail "VrecordQt6 --self-test (exit $rc)" ; fi
+    if [[ $rc -eq 0 && -f "$PKG/VrecordQt6-selftest.log" ]] ; then pass "$(basename "$APP") --self-test" ; else fail "$(basename "$APP") --self-test (exit $rc)" ; fi
 else
-    fail "VrecordQt6.exe packaged"
+    fail "Qt6 app packaged"
 fi
 
 echo "=== ${FAILS} failure(s)"
