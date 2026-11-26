@@ -46,12 +46,14 @@ if grep -q '^@SCREENSHOTS@$' "$NOTES" ; then
     GALLERY="$(gallery "$@")"
     while IFS= read -r line || [[ -n "$line" ]] ; do
         if [[ "$line" == "@SCREENSHOTS@" ]] ; then
-            [[ -n "$GALLERY" ]] && printf '%s\n' "$GALLERY"
+            # (if, not &&: an empty gallery must not end the script non-zero)
+            if [[ -n "$GALLERY" ]] ; then printf '%s\n' "$GALLERY" ; fi
         else
             printf '%s\n' "$line" | expand
         fi
     done < "$NOTES"
 else
     expand < "$NOTES"
-    [[ $# -gt 0 ]] && { echo ; gallery "$@" ; }
+    if [[ $# -gt 0 ]] ; then echo ; gallery "$@" ; fi
 fi
+exit 0
