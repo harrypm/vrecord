@@ -9,15 +9,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
-# one version for everything: the VERSION line of the vrecord shell script
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../vrecord" VRECORD_VERSION_LINE REGEX "^VERSION=\"")
-string(REGEX REPLACE "^VERSION=\"([^\"]*)\".*" "\\1" VRECORD_VERSION "${VRECORD_VERSION_LINE}")
+# the Qt6 GUI's own semantic version (qt6/VERSION): Qt6 releases (tags
+# v<x.y.z>) and the updater use it. The vrecord script's VERSION is the
+# upstream date version the GTK interface follows.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VRECORD_VERSION LIMIT_COUNT 1)
+string(STRIP "${VRECORD_VERSION}" VRECORD_VERSION)
 if(NOT VRECORD_VERSION)
   set(VRECORD_VERSION "0")
 endif()
 # GitHub repository whose published releases the updater offers
 set(VRECORD_UPDATE_REPO "harrypm/vrecord" CACHE STRING "owner/name of the GitHub repository with vrecord releases")
-message(STATUS "vrecord version ${VRECORD_VERSION}, updates from ${VRECORD_UPDATE_REPO}")
+message(STATUS "Vrecord Qt6 version ${VRECORD_VERSION}, updates from ${VRECORD_UPDATE_REPO}")
 
 set(VRECORD_BUILD_DIR "$ENV{VRECORD_BUILD}")
 if(NOT VRECORD_BUILD_DIR)

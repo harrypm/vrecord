@@ -9,7 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 RELEASE_DIR="$(pwd)"
 ROOT="$(cd .. && pwd)"
-VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' "$ROOT/vrecord")"
+# the installer carries the Qt6 GUI: its own version (qt6/VERSION)
+VERSION="$(head -n 1 "$ROOT/qt6/VERSION" | tr -d '[:space:]')"
 # overridable (tests build from a copy of the package)
 PKG="${VRECORD_PKG_DIR:-$RELEASE_DIR/artifacts/vrecord-qt6_windows_${VERSION}}"
 OUT="${VRECORD_INSTALLER_OUT:-$RELEASE_DIR/artifacts/vrecord-qt6_${VERSION}_windows_x86_64_setup.exe}"

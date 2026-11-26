@@ -1,32 +1,39 @@
 name: Build and Release
 
-# Two releases per version, from one tag: push v<major>.<minor>.<patch>
-# (e.g. v1.0.0) and this builds + tests Linux, Windows and macOS once (the
-# reusable workflows build-and-test.yml uses), then creates
-#   qt6-v1.0.0   Vrecord for Windows with the Qt6 GUI
-#                  vrecord-qt6_<version>_windows_x86_64_setup.exe
-#                  vrecord-qt6_<version>_windows_x86_64_portable.zip
-#                  + screenshots of the Qt6 tabs
-#   gtk-v1.0.0   Vrecord with the GTK interface
-#                  vrecord-gtk_<version>_windows_x86_64_portable.zip
-#                  vrecord-gtk_<version>_linux_amd64.deb / _linux_x86_64.AppImage
-#                  vrecord-gtk_<version>_macos_<arch>.dmg / .app.zip
-# each with its own SHA256SUMS.txt, both on the tagged commit.
+# Vrecord has two release lines in this repository, each from its own tag:
+#
+#   v<x.y.z>              the Qt6 GUI for Windows: its own semantic version
+#   (e.g. v1.0.0)         (qt6/VERSION). Builds and tests Windows, then
+#                         creates the release with
+#                           vrecord-qt6_<x.y.z>_windows_x86_64_setup.exe
+#                           vrecord-qt6_<x.y.z>_windows_x86_64_portable.zip
+#                           + screenshots of the Qt6 tabs
+#
+#   v<YYYY.MM.DD>-gtk     the GTK interface, following upstream vrecord's
+#   (e.g. v2026.11.26-gtk) date version (VERSION in the vrecord script).
+#                         Builds and tests Windows, Linux and macOS, then
+#                         creates the release with
+#                           vrecord-gtk_<date>_windows_x86_64_portable.zip
+#                           vrecord-gtk_<date>_linux_amd64.deb / _linux_x86_64.AppImage
+#                           vrecord-gtk_<date>_macos_<arch>.dmg / .app.zip
+#
+# Each release has its own SHA256SUMS.txt and its notes from
+# Release/release-notes/<tag>.md (see Release/ci/render-release-notes.sh);
+# without one, generated notes.
 #
 # Release kinds:
-#   v1.0.0         both created as DRAFTS (publish by hand; the Windows
-#                  updater only offers published, non-pre Qt6 releases)
-#   v1.0.0-rc1     anything with a '-suffix' makes PRE-RELEASES, published
-#                  straight away for testing (never offered by the updater)
+#   v1.0.0 / v2026.11.26-gtk        created as a DRAFT (publish by hand; the
+#                                   Windows updater only offers published,
+#                                   non-pre Qt6 releases)
+#   v1.0.0-rc1 / v2026.11.26-rc1-gtk  a '-suffix' before -gtk makes a
+#                                   PRE-RELEASE, published straight away
 #
-# The version before any '-suffix' must match VERSION in the vrecord script
-# (the updater compares the release tag with the VERSION it was built with).
-# Notes: Release/release-notes/qt6-v<version>.md and gtk-v<version>.md
-# (see Release/ci/render-release-notes.sh); without one, generated notes.
+# The tag must match its version: qt6/VERSION for v<x.y.z>, the script's
+# VERSION for -gtk tags.
 #
-# Trigger: push a v* tag, or run manually with create_release + tag_name
-# (a missing tag is created on the commit the run was started from; tick
-# prerelease to force pre-releases). A manual run without create_release
+# Trigger: push a tag, or run manually with create_release + tag_name (a
+# missing tag is created on the commit the run was started from; tick
+# prerelease to force a pre-release). A manual run without create_release
 # only builds and tests.
 
 permissions:
@@ -45,7 +52,7 @@ on:
         default: false
         type: boolean
       tag_name:
-        description: "Tag to release (e.g. v1.0.0 or v1.0.0-rc1); created if missing"
+        description: "Tag to release: v1.0.0 (Qt6) or v2026.11.26-gtk (GTK); created if missing"
         required: false
         type: string
       prerelease:
@@ -67,7 +74,7 @@ jobs:
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       publish_release: ${{ steps.resolve.outputs.publish_release }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
-      release_sha: ${{ steps.resolve.outputs.release_sha }}
+      flavour: ${{ steps.resolve.outputs.flavour }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -94,17 +101,26 @@ jobs:
             RAW="${{ github.ref_name }}"
           fi
           if [ "$PUBLISH" != "true" ]; then
+            # build-only run: build everything
             { echo "release_tag="; echo "checkout_ref=${{ github.ref }}"
-              echo "publish_release=false"; echo "prerelease=false"; echo "release_sha="; } >> "$GITHUB_OUTPUT"
+              echo "publish_release=false"; echo "prerelease=false"; echo "flavour=all"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           RAW="${RAW#refs/tags/}"
           [[ "$RAW" == v* ]] || RAW="v${RAW}"
-          if [[ ! "$RAW" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-            echo "::error::Invalid tag '$RAW' (expected v<major>.<minor>.<patch>[-suffix], e.g. v1.0.0 or v1.0.0-rc1)"; exit 1
+
+          # which release line
+          if [[ "$RAW" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(-[0-9A-Za-z.]+)?-gtk$ ]]; then
+            FLAVOUR=gtk
+            BASE="${RAW%-gtk}"
+          elif [[ "$RAW" =~ ^v[0-9]{1,3}\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ && "$RAW" != *-gtk ]]; then
+            FLAVOUR=qt6
+            BASE="$RAW"
+          else
+            echo "::error::Invalid tag '$RAW': expected v<x.y.z>[-suffix] (Qt6, e.g. v1.0.0) or v<YYYY.MM.DD>[-suffix]-gtk (GTK, e.g. v2026.11.26-gtk)"; exit 1
           fi
           PRE="false"
-          if [[ "$RAW" == *-* ]] || [ "$INPUT_PRE" = "true" ]; then PRE="true"; fi
+          if [[ "$BASE" == *-* ]] || [ "$INPUT_PRE" = "true" ]; then PRE="true"; fi
 
           # manual run: create the tag on this commit if it does not exist yet
           # (a tag pushed with GITHUB_TOKEN does not start another run)
@@ -121,24 +137,30 @@ jobs:
             echo "tag ${RAW} not visible yet (${attempt}/12); waiting 5 s"; sleep 5
           done
 
-          # the numbers before any -suffix must match VERSION at that tag
+          # the version before any -suffix must match the line's version at that tag
           git fetch -q origin "refs/tags/${RAW}:refs/tags/${RAW}" 2>/dev/null || true
-          VERSION="$(git show "refs/tags/${RAW}:vrecord" | sed -nE 's/^VERSION="([0-9.-]+)"/\1/p')"
-          BASE="${RAW%%-*}"
+          if [ "$FLAVOUR" = qt6 ]; then
+            VERSION="$(git show "refs/tags/${RAW}:qt6/VERSION" | head -n 1 | tr -d '[:space:]')"
+            WHERE="qt6/VERSION"
+          else
+            VERSION="$(git show "refs/tags/${RAW}:vrecord" | sed -nE 's/^VERSION="([0-9.-]+)"/\1/p')"
+            WHERE="VERSION in the vrecord script"
+          fi
+          NUMBERS="${BASE%%-*}"
           digits() { echo "$1" | grep -oE '[0-9]+' | sed -E 's/^0+([0-9])/\1/' | tr '\n' '.' ; }
-          if [ "$(digits "$VERSION")" != "$(digits "$BASE")" ]; then
-            echo "::error::tag ${RAW} does not match VERSION=\"${VERSION}\" in vrecord - bump VERSION (or tag v${VERSION})"
+          if [ "$(digits "$VERSION")" != "$(digits "$NUMBERS")" ]; then
+            echo "::error::tag ${RAW} does not match ${WHERE} (${VERSION})"
             exit 1
           fi
-          echo "tag ${RAW} matches VERSION ${VERSION} (prerelease=${PRE})"
-          SHA="$(git rev-parse "refs/tags/${RAW}^{commit}")"
+          echo "tag ${RAW}: ${FLAVOUR} release, version ${VERSION} (prerelease=${PRE})"
           { echo "release_tag=${RAW}"; echo "checkout_ref=refs/tags/${RAW}"
-            echo "publish_release=true"; echo "prerelease=${PRE}"
-            echo "release_sha=${SHA}"; } >> "$GITHUB_OUTPUT"
+            echo "publish_release=true"; echo "prerelease=${PRE}"; echo "flavour=${FLAVOUR}"; } >> "$GITHUB_OUTPUT"
 
   build-linux:
     name: Build Linux
     needs: resolve-tag
+    # the Qt6 release is Windows only
+    if: needs.resolve-tag.outputs.flavour != 'qt6'
     uses: ./.github/workflows/build-linux.yml
     with:
       checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
@@ -155,24 +177,32 @@ jobs:
   build-macos:
     name: Build macOS
     needs: resolve-tag
+    if: needs.resolve-tag.outputs.flavour != 'qt6'
     uses: ./.github/workflows/build-macos.yml
     with:
       checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
     secrets: inherit
 
   upload-release-assets:
-    name: Create the Qt6 and GTK releases
+    name: Create the release
     needs: [resolve-tag, build-linux, build-windows, build-macos]
-    if: ${{ needs.resolve-tag.outputs.publish_release == 'true' }}
+    # Linux / macOS are skipped for a Qt6 release, so the job runs on their
+    # result rather than the default "every need succeeded"
+    if: >-
+      always() &&
+      needs.resolve-tag.outputs.publish_release == 'true' &&
+      needs.build-windows.result == 'success' &&
+      (needs.resolve-tag.outputs.flavour == 'qt6' ||
+       (needs.build-linux.result == 'success' && needs.build-macos.result == 'success'))
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ needs.resolve-tag.outputs.release_tag }}
-      RELEASE_SHA: ${{ needs.resolve-tag.outputs.release_sha }}
       PRERELEASE: ${{ needs.resolve-tag.outputs.prerelease }}
+      FLAVOUR: ${{ needs.resolve-tag.outputs.flavour }}
       REPO: ${{ github.repository }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
-      # the release notes (Release/release-notes/<release tag>.md) and their renderer
+      # the release notes (Release/release-notes/<tag>.md) and their renderer
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
@@ -183,101 +213,95 @@ jobs:
         with:
           path: dist
 
-      - name: Sort the files into the two releases
+      - name: Collect the release files
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release-qt6 release-gtk
-          need() {   # need <release dir> <label> <file name glob>
+          mkdir -p release
+          need() {   # need <label> <file name glob>
             local found
-            found="$(find dist -type f -name "$3" | head -n 1)"
-            [ -n "$found" ] || { echo "::error::missing $2 ($3)"; exit 1; }
-            cp "$found" "$1/"
+            found="$(find dist -type f -name "$2" | head -n 1)"
+            [ -n "$found" ] || { echo "::error::missing $1 ($2)"; exit 1; }
+            cp "$found" release/
           }
-          # Qt6: the Windows Qt6 GUI
-          need release-qt6 "Qt6 installer"         'vrecord-qt6_*_windows_x86_64_setup.exe'
-          need release-qt6 "Qt6 portable zip"      'vrecord-qt6_*_windows_x86_64_portable.zip'
-          # GTK: the GTK interface on every platform
-          need release-gtk "GTK Windows portable"  'vrecord-gtk_*_windows_x86_64_portable.zip'
-          need release-gtk "GTK .deb"              'vrecord-gtk_*_linux_amd64.deb'
-          need release-gtk "GTK AppImage"          'vrecord-gtk_*_linux_x86_64.AppImage'
-          for arch in x86_64 arm64 universal; do
-            found=0
-            for f in $(find "dist/vrecord-gtk-macos-${arch}" -type f \( -name '*.dmg' -o -name '*.app.zip' \) 2>/dev/null); do
-              cp "$f" release-gtk/ ; found=1
+          if [ "$FLAVOUR" = qt6 ]; then
+            need "Qt6 installer"        'vrecord-qt6_*_windows_x86_64_setup.exe'
+            need "Qt6 portable zip"     'vrecord-qt6_*_windows_x86_64_portable.zip'
+          else
+            need "GTK Windows portable" 'vrecord-gtk_*_windows_x86_64_portable.zip'
+            need "GTK .deb"             'vrecord-gtk_*_linux_amd64.deb'
+            need "GTK AppImage"         'vrecord-gtk_*_linux_x86_64.AppImage'
+            for arch in x86_64 arm64 universal; do
+              found=0
+              for f in $(find "dist/vrecord-gtk-macos-${arch}" -type f \( -name '*.dmg' -o -name '*.app.zip' \) 2>/dev/null); do
+                cp "$f" release/ ; found=1
+              done
+              [ "$found" = 1 ] || { echo "::error::missing GTK macOS ${arch} package"; exit 1; }
             done
-            [ "$found" = 1 ] || { echo "::error::missing GTK macOS ${arch} package"; exit 1; }
-          done
-          for dir in release-qt6 release-gtk; do
-            (cd "$dir" && sha256sum * > SHA256SUMS.txt)
-          done
-          # screenshots ride along with the Qt6 release (after the sums:
-          # they are not downloads)
-          find dist/vrecord-screenshots -name 'screenshot-*.png' -exec cp {} release-qt6/ \; 2>/dev/null || true
-          ls -la release-qt6 release-gtk
+          fi
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          # screenshots ride along with a Qt6 release (after the sums: they
+          # are not downloads)
+          if [ "$FLAVOUR" = qt6 ]; then
+            find dist/vrecord-screenshots -name 'screenshot-*.png' -exec cp {} release/ \; 2>/dev/null || true
+          fi
+          ls -la release
 
-      # each release: Release/release-notes/<flavour>-<tag>.md when it exists
-      # (@SCREENSHOTS@, @DL@, @TAG@ filled in), otherwise generated notes
-      - name: Create the releases and upload the files
+      # Release/release-notes/<tag>.md when it exists (@SCREENSHOTS@, @DL@
+      # and @TAG@ filled in), otherwise generated notes
+      - name: Create the release and upload the files
         shell: bash
         run: |
           set -euo pipefail
-          for flavour in qt6 gtk; do
-            TAG="${flavour}-${RELEASE_TAG}"
-            if [ "$flavour" = qt6 ]; then
-              TITLE="Vrecord ${RELEASE_TAG} - Windows (Qt6)"
-            else
-              TITLE="Vrecord ${RELEASE_TAG} - GTK (Windows, Linux, macOS)"
-            fi
-            NOTES_SRC="src/Release/release-notes/${TAG}.md"
-            NOTE_ARGS=(--generate-notes)
-            if [ -f "$NOTES_SRC" ]; then
-              shopt -s nullglob
-              bash src/Release/ci/render-release-notes.sh "$NOTES_SRC" "$TAG" "$REPO" release-${flavour}/screenshot-*.png > "notes-${flavour}.md"
-              shopt -u nullglob
-              NOTE_ARGS=(--notes-file "notes-${flavour}.md")
-              echo "${TAG}: notes from ${NOTES_SRC}"
-            else
-              echo "${TAG}: no ${NOTES_SRC} - generated notes"
-            fi
-            KIND=(--draft)
-            [ "$PRERELEASE" = "true" ] && KIND=(--prerelease)
-            if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
-              echo "release ${TAG} already exists"
-              [ -f "notes-${flavour}.md" ] && gh release edit "$TAG" --repo "$REPO" --notes-file "notes-${flavour}.md"
-            else
-              # the flavour tag is created on the release commit (a draft's
-              # tag appears when it is published)
-              gh release create "$TAG" --repo "$REPO" --target "$RELEASE_SHA" \
-                --title "$TITLE" "${KIND[@]}" "${NOTE_ARGS[@]}"
-            fi
-            gh release upload "$TAG" release-${flavour}/* --repo "$REPO" --clobber
-          done
+          if [ "$FLAVOUR" = qt6 ]; then
+            TITLE="Vrecord ${RELEASE_TAG} - Windows (Qt6)"
+          else
+            TITLE="Vrecord ${RELEASE_TAG%-gtk} - GTK (Windows, Linux, macOS)"
+          fi
+          NOTES_SRC="src/Release/release-notes/${RELEASE_TAG}.md"
+          NOTE_ARGS=(--generate-notes)
+          if [ -f "$NOTES_SRC" ]; then
+            shopt -s nullglob
+            bash src/Release/ci/render-release-notes.sh "$NOTES_SRC" "$RELEASE_TAG" "$REPO" release/screenshot-*.png > notes.md
+            shopt -u nullglob
+            NOTE_ARGS=(--notes-file notes.md)
+            echo "notes from ${NOTES_SRC}"
+          else
+            echo "no ${NOTES_SRC} - generated notes"
+          fi
+          KIND=(--draft)
+          [ "$PRERELEASE" = "true" ] && KIND=(--prerelease)
+          if gh release view "$RELEASE_TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "release ${RELEASE_TAG} already exists"
+            [ -f notes.md ] && gh release edit "$RELEASE_TAG" --repo "$REPO" --notes-file notes.md
+          else
+            gh release create "$RELEASE_TAG" --repo "$REPO" --verify-tag \
+              --title "$TITLE" "${KIND[@]}" "${NOTE_ARGS[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" release/* --repo "$REPO" --clobber
 
       - name: Summary
         shell: bash
         run: |
           {
-            echo "### Vrecord ${RELEASE_TAG}"
+            echo "### Vrecord ${RELEASE_TAG} (${FLAVOUR})"
             if [ "$PRERELEASE" = "true" ]; then
-              echo "Published as **pre-releases** (the Windows updater does not offer them)."
+              echo "Published as a **pre-release** (the Windows updater does not offer it)."
             else
-              echo "Created as **drafts**: publish both to make them the latest releases (the Qt6 one is what the Windows updater offers)."
+              echo "Created as a **draft**: publish it to make it a current release."
             fi
-            for flavour in qt6 gtk; do
-              TAG="${flavour}-${RELEASE_TAG}"
-              echo
-              echo "#### ${TAG}"
-              echo "https://github.com/${REPO}/releases/tag/${TAG}"
-              echo
-              for f in release-${flavour}/*; do
-                n="$(basename "$f")"
-                case "$n" in screenshot-*) continue ;; esac
-                echo "- [${n}](https://github.com/${REPO}/releases/download/${TAG}/${n})"
-              done
-              echo
-              echo '```'
-              cat "release-${flavour}/SHA256SUMS.txt"
-              echo '```'
+            echo
+            echo "https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
+            echo
+            echo "#### Downloads"
+            for f in release/*; do
+              n="$(basename "$f")"
+              case "$n" in screenshot-*) continue ;; esac
+              echo "- [${n}](https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${n})"
             done
+            echo
+            echo "#### SHA256"
+            echo '```'
+            cat release/SHA256SUMS.txt
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

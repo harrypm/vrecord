@@ -23,7 +23,7 @@ pass() { echo "PASS  $*" ; }
 fail() { echo "FAIL  $*" ; FAILS=$((FAILS + 1)) ; }
 win() { cygpath -w "$1" ; }
 url() { echo "file:///$(cygpath -m "$1")" ; }
-TAG="qt6-v999.1.1"   # flavour prefix + a semantic version above any real one (< 1000: not a date)
+TAG="v999.1.1"   # a Qt6 release above any real version (< 1000: not a date version)
 UNINSTKEY='HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\vrecord'
 # robocopy, not cp: to MSYS, "vrecord" (the backend script) and "Vrecord.exe"
 # are the same name, so cp skips one of them
@@ -51,8 +51,8 @@ show_apply_log() { [[ -n "$APPLY_LOG" ]] && sed 's/^/    apply: /' "$APPLY_LOG" 
 # ---- the fake release
 REL="$WORK/release"
 mkdir -p "$REL"
-ZIP_NAME="vrecord-qt6_${TAG#qt6-v}_windows_x86_64_portable.zip"
-SETUP_NAME="vrecord-qt6_${TAG#qt6-v}_windows_x86_64_setup.exe"
+ZIP_NAME="vrecord-qt6_${TAG#v}_windows_x86_64_portable.zip"
+SETUP_NAME="vrecord-qt6_${TAG#v}_windows_x86_64_setup.exe"
 {
     echo "$(sha256sum "$ZIP" | cut -c1-64)  ${ZIP_NAME}"
     echo "$(sha256sum "$SETUP" | cut -c1-64)  ${SETUP_NAME}"

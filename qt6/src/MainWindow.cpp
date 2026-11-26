@@ -2696,25 +2696,28 @@ QStringList MainWindow::runSelfTest() {
     // beat the old date versions, and the release list yields the newest
     // published Qt6 release (not GTK, not a pre-release or draft)
     {
-        const bool compareOk = UpdateManager::compareVersions(QStringLiteral("qt6-v1.0.0"), QStringLiteral("1.0.0")) == 0
-                               && UpdateManager::compareVersions(QStringLiteral("qt6-v1.0.1"), QStringLiteral("1.0.0")) > 0
-                               && UpdateManager::compareVersions(QStringLiteral("qt6-v1.10.0"), QStringLiteral("qt6-v1.9.9")) > 0
+        const bool compareOk = UpdateManager::compareVersions(QStringLiteral("v1.0.0"), QStringLiteral("1.0.0")) == 0
+                               && UpdateManager::compareVersions(QStringLiteral("v1.0.1"), QStringLiteral("1.0.0")) > 0
+                               && UpdateManager::compareVersions(QStringLiteral("v1.10.0"), QStringLiteral("v1.9.9")) > 0
                                && UpdateManager::compareVersions(QStringLiteral("v1.0.0"), QStringLiteral("2026-11-25")) > 0
                                && UpdateManager::compareVersions(QStringLiteral("2026-11-25"), QStringLiteral("0.0.1")) < 0;
+        // a GTK release (upstream date version, -gtk), a pre-release, a
+        // draft and an old date-versioned release are all passed over
         const QByteArray list = R"([
-            {"tag_name":"gtk-v1.2.0","draft":false,"prerelease":false,"assets":[]},
-            {"tag_name":"qt6-v1.3.0-rc1","draft":false,"prerelease":true,"assets":[]},
-            {"tag_name":"qt6-v1.2.0","draft":true,"prerelease":false,"assets":[]},
-            {"tag_name":"qt6-v1.1.0","draft":false,"prerelease":false,"html_url":"https://example.invalid/qt6-v1.1.0","assets":[
+            {"tag_name":"v2026.11.26-gtk","draft":false,"prerelease":false,"assets":[]},
+            {"tag_name":"v1.3.0-rc1","draft":false,"prerelease":true,"assets":[]},
+            {"tag_name":"v1.2.0","draft":true,"prerelease":false,"assets":[]},
+            {"tag_name":"v1.1.0","draft":false,"prerelease":false,"html_url":"https://example.invalid/v1.1.0","assets":[
               {"name":"vrecord-qt6_1.1.0_windows_x86_64_setup.exe","browser_download_url":"https://example.invalid/setup.exe","size":1},
               {"name":"SHA256SUMS.txt","browser_download_url":"https://example.invalid/sums","size":1}]},
-            {"tag_name":"qt6-v1.0.0","draft":false,"prerelease":false,"assets":[]}
+            {"tag_name":"v2026.11.25","draft":false,"prerelease":false,"assets":[]},
+            {"tag_name":"v1.0.0","draft":false,"prerelease":false,"assets":[]}
         ])";
         UpdateInfo picked;
         QString pickMessage;
         const bool parsed = UpdateManager::parseRelease(list, false, &picked, &pickMessage);
         check(QStringLiteral("Updater: Qt6 release picked from the list, semantic versions beat date versions"),
-              compareOk && parsed && picked.tag == QStringLiteral("qt6-v1.1.0")
+              compareOk && parsed && picked.tag == QStringLiteral("v1.1.0")
                   && picked.assetName == QStringLiteral("vrecord-qt6_1.1.0_windows_x86_64_setup.exe"),
               QStringLiteral("compare=%1 picked=%2 asset=%3 %4").arg(int(compareOk)).arg(picked.tag, picked.assetName, pickMessage));
     }

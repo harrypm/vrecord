@@ -4,18 +4,21 @@ How the packages are built, tested and released. To install or use Vrecord inste
 
 ## What gets built
 
-Each version is released twice: once for each interface.
+Vrecord has two release lines with their own versions:
+
+- **GTK** follows upstream vrecord: its version is the date in the `VERSION="YYYY-MM-DD"` line of the `vrecord` script, shared with upstream.
+- **Qt6** is semi-independent: the Windows Qt6 GUI has its own semantic version in `qt6/VERSION` (e.g. `1.0.0`). `qt6/CMakeLists.txt` reads it, and the updater compares against it.
 
 | Release | Interface | Packages |
 |---|---|---|
-| `qt6-v<version>` | Qt6 GUI (Windows) | `vrecord-qt6_<version>_windows_x86_64_setup.exe`, `vrecord-qt6_<version>_windows_x86_64_portable.zip` |
-| `gtk-v<version>` | GTK interface | `vrecord-gtk_<version>_windows_x86_64_portable.zip`, `vrecord-gtk_<version>_linux_amd64.deb`, `vrecord-gtk_<version>_linux_x86_64.AppImage`, `vrecord-gtk_<version>_macos_<x86_64\|arm64\|universal>.dmg` / `.app.zip` |
+| `v<x.y.z>` (e.g. `v1.0.0`) | Qt6 GUI (Windows) | `vrecord-qt6_<x.y.z>_windows_x86_64_setup.exe`, `vrecord-qt6_<x.y.z>_windows_x86_64_portable.zip` |
+| `v<YYYY.MM.DD>-gtk` (e.g. `v2026.11.26-gtk`) | GTK interface | `vrecord-gtk_<date>_windows_x86_64_portable.zip`, `vrecord-gtk_<date>_linux_amd64.deb`, `vrecord-gtk_<date>_linux_x86_64.AppImage`, `vrecord-gtk_<date>_macos_<x86_64\|arm64\|universal>.dmg` / `.app.zip` |
 
 Every release has its own `SHA256SUMS.txt`. In both packages the program is called **Vrecord**:
 - In the Qt6 package, `Vrecord.exe` is the Qt6 GUI.
 - In the GTK package, `Vrecord.exe` is the launcher for the GTK interface.
 
-**Version** is the `VERSION="x.y.z"` line of the `vrecord` script, a semantic version. The capture script, the Qt6 build (read by `qt6/CMakeLists.txt`), the packages and the updater all use it. Releases before 1.0.0 used date versions (`2026-11-25`); the updater treats those as older than any semantic version.
+The Qt6 updater treats the date versions of Qt6 builds from before 1.0.0 (`2026-11-25`) as older than any semantic version.
 
 ## Windows (MSYS2 UCRT64)
 
@@ -93,7 +96,7 @@ The `.deb` and the AppImage bundle the GTK interface with Homebrew-built tools (
 ./Release/build-appimage.sh    # Release/artifacts/vrecord-gtk_<version>_linux_x86_64.AppImage
 ```
 
-The `.deb` version carries the epoch `1:` (`1:1.0.0`), so apt treats it as newer than the older date-versioned packages.
+The `.deb` takes its version from the script's date `VERSION`.
 
 ## macOS
 
@@ -117,17 +120,25 @@ The Windows job caches the build inputs, keyed on the recipe and the week.
 
 ## Releasing
 
-1. **Version**: set `VERSION="x.y.z"` in `vrecord` and commit.
-2. **Notes**: add `Release/release-notes/qt6-vx.y.z.md` and `Release/release-notes/gtk-vx.y.z.md`. They support three placeholders:
+Each line is released on its own, from its own tag.
+
+1. **Version**:
+   - Qt6: set `qt6/VERSION` (e.g. `1.1.0`).
+   - GTK: set `VERSION="YYYY-MM-DD"` in `vrecord`, following upstream.
+
+   Commit the change.
+2. **Notes**: add `Release/release-notes/<tag>.md`, e.g. `v1.1.0.md` or `v2026.12.01-gtk.md`. Notes support three placeholders:
    - `@TAG@` becomes the release tag;
    - `@DL@` becomes the release's download address, so `[Installer](@DL@/vrecord-qt6_x.y.z_windows_x86_64_setup.exe)` links the file;
    - a line holding only `@SCREENSHOTS@` becomes the screenshot gallery (Qt6).
 
    Without a notes file, GitHub's generated notes are used.
-3. **Tag**: `git tag -a vx.y.z -m "Vrecord x.y.z"` and `git push origin vx.y.z`. The tag must match `VERSION`.
-   - `vx.y.z` creates **draft** releases `qt6-vx.y.z` and `gtk-vx.y.z`. Check them, then publish both.
-   - `vx.y.z-rc1` (any `-suffix`) publishes **pre-releases** straight away.
-4. **Updates**: installed Qt6 copies offer the newest published, non-pre-release `qt6-v*` release (Config → Updates). The GTK packages are updated by hand.
+3. **Tag**: push the tag. It must match its line's version.
+   - Qt6: `git tag -a v1.1.0 -m "Vrecord 1.1.0 (Qt6)"` then `git push origin v1.1.0`. This builds and tests Windows only.
+   - GTK: `git tag -a v2026.12.01-gtk -m "Vrecord 2026-12-01 (GTK)"` then `git push origin v2026.12.01-gtk`. This builds and tests Windows, Linux and macOS.
+
+   Either kind creates a **draft** release: check it, then publish it. A `-suffix` (`v1.1.0-rc1`, `v2026.12.01-rc1-gtk`) publishes a **pre-release** straight away.
+4. **Updates**: installed Qt6 copies offer the newest published, non-pre-release Qt6 release (Config → Updates). GTK packages are updated by hand.
 
 A manual run (*Actions → Build and Release → Run workflow*) with *create_release* and a tag name creates a missing tag on the chosen branch and releases it.
 

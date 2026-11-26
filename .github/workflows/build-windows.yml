@@ -97,18 +97,22 @@ jobs:
       - name: Test the Qt6 package (no capture hardware)
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
-          bash Release/ci/windows-package-tests.sh "Release/artifacts/vrecord-qt6_windows_${VERSION}"
+          QTV="$(head -n 1 qt6/VERSION | tr -d '[:space:]')"   # the Qt6 GUI's own version
+          bash Release/ci/windows-package-tests.sh "Release/artifacts/vrecord-qt6_windows_${QTV}"
 
       - name: Test the GTK package
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          QTV="$(head -n 1 qt6/VERSION | tr -d '[:space:]')"   # the Qt6 GUI's own version
           bash Release/ci/windows-package-tests.sh "Release/artifacts/vrecord-gtk_windows_${VERSION}"
 
       - name: Test the installer and the updater (fake release, no network)
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          QTV="$(head -n 1 qt6/VERSION | tr -d '[:space:]')"   # the Qt6 GUI's own version
           A=Release/artifacts
-          bash Release/ci/windows-update-tests.sh "$A/vrecord-qt6_windows_${VERSION}"             "$A/vrecord-qt6_${VERSION}_windows_x86_64_portable.zip" "$A/vrecord-qt6_${VERSION}_windows_x86_64_setup.exe"
+          bash Release/ci/windows-update-tests.sh "$A/vrecord-qt6_windows_${QTV}" \
+            "$A/vrecord-qt6_${QTV}_windows_x86_64_portable.zip" "$A/vrecord-qt6_${QTV}_windows_x86_64_setup.exe"
 
       # one PNG per Qt6 tab for the release notes (off-screen, default
       # settings, no home paths): Vrecord.exe --screenshots. A failure
@@ -118,7 +122,8 @@ jobs:
         continue-on-error: true
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
-          PKG="Release/artifacts/vrecord-qt6_windows_${VERSION}"
+          QTV="$(head -n 1 qt6/VERSION | tr -d '[:space:]')"   # the Qt6 GUI's own version
+          PKG="Release/artifacts/vrecord-qt6_windows_${QTV}"
           OUT="$(pwd)/artifacts/screenshots"
           mkdir -p "$OUT"
           ( cd "$PKG" && QT_QPA_PLATFORM=offscreen /usr/bin/timeout 120 ./Vrecord.exe --screenshots "$(cygpath -w "$OUT")" )
@@ -141,12 +146,13 @@ jobs:
         if: always() && steps.portable.outcome == 'success'
         run: |
           VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' vrecord)"
+          QTV="$(head -n 1 qt6/VERSION | tr -d '[:space:]')"   # the Qt6 GUI's own version
           A=Release/artifacts
           mkdir -p artifacts/qt6-portable artifacts/qt6-setup artifacts/gtk-portable
-          cp "$A/vrecord-qt6_${VERSION}_windows_x86_64_portable.zip" artifacts/qt6-portable/
+          cp "$A/vrecord-qt6_${QTV}_windows_x86_64_portable.zip" artifacts/qt6-portable/
           cp "$A/vrecord-gtk_${VERSION}_windows_x86_64_portable.zip" artifacts/gtk-portable/
-          if [ -f "$A/vrecord-qt6_${VERSION}_windows_x86_64_setup.exe" ]; then
-            cp "$A/vrecord-qt6_${VERSION}_windows_x86_64_setup.exe" artifacts/qt6-setup/
+          if [ -f "$A/vrecord-qt6_${QTV}_windows_x86_64_setup.exe" ]; then
+            cp "$A/vrecord-qt6_${QTV}_windows_x86_64_setup.exe" artifacts/qt6-setup/
           fi
           ls -la artifacts/*
 

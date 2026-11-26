@@ -136,12 +136,14 @@ bool UpdateManager::parseRelease(const QByteArray& json, bool portable, UpdateIn
     QJsonObject release;
     if (document.isArray()) {
         // the release list: the newest published (not draft, not
-        // pre-release) Qt6 release - tag qt6-v<version>
+        // pre-release) Qt6 release - tag v<version>; GTK releases
+        // (v<date>-gtk) follow the upstream script and are never offered
+        static const QRegularExpression qt6Tag(QStringLiteral("^v\\d"), QRegularExpression::CaseInsensitiveOption);
         for (const QJsonValue& value : document.array()) {
             const QJsonObject candidate = value.toObject();
             const QString tag = candidate.value(QStringLiteral("tag_name")).toString();
             if (candidate.value(QStringLiteral("draft")).toBool() || candidate.value(QStringLiteral("prerelease")).toBool()
-                || !tag.startsWith(QStringLiteral("qt6-v"), Qt::CaseInsensitive)) {
+                || !qt6Tag.match(tag).hasMatch() || tag.endsWith(QStringLiteral("-gtk"), Qt::CaseInsensitive)) {
                 continue;
             }
             if (release.isEmpty() || compareVersions(tag, release.value(QStringLiteral("tag_name")).toString()) > 0) {
@@ -221,9 +223,9 @@ QUrl UpdateManager::apiUrl() const {
     if (!overrideUrl.isEmpty()) {
         return QUrl(overrideUrl);
     }
-    // the release LIST: each version has a Qt6 and a GTK release
-    // (qt6-v1.2.3 / gtk-v1.2.3), so "latest" could be the GTK one;
-    // parseRelease picks the newest published Qt6 release from the list
+    // the release LIST: Qt6 releases (v1.2.3) and GTK releases
+    // (v2026.11.26-gtk) share the repository, so "latest" could be a GTK
+    // one; parseRelease picks the newest published Qt6 release
     const QString repo = m_settings->value(QStringLiteral("update/repo"), repository()).toString();
     return QUrl(QStringLiteral("https://api.github.com/repos/%1/releases?per_page=50").arg(repo));
 }

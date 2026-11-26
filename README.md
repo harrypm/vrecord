@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/harrypm/vrecord/releases"><img alt="Qt6 release" src="https://img.shields.io/github/v/release/harrypm/vrecord?filter=qt6-*&label=Qt6%20release"></a>
-  <a href="https://github.com/harrypm/vrecord/releases"><img alt="GTK release" src="https://img.shields.io/github/v/release/harrypm/vrecord?filter=gtk-*&label=GTK%20release"></a>
+  <a href="https://github.com/harrypm/vrecord/releases"><img alt="Qt6 release" src="https://img.shields.io/github/v/release/harrypm/vrecord?filter=!*-gtk&label=Qt6%20release"></a>
+  <a href="https://github.com/harrypm/vrecord/releases"><img alt="GTK release" src="https://img.shields.io/github/v/release/harrypm/vrecord?filter=*-gtk&label=GTK%20release"></a>
   <a href="https://github.com/harrypm/vrecord/actions/workflows/build-and-test.yml"><img alt="Build and Test" src="https://github.com/harrypm/vrecord/actions/workflows/build-and-test.yml/badge.svg?branch=windows-port"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue">
   <a href="LICENSE.txt"><img alt="License: CC BY 4.0" src="https://img.shields.io/badge/license-CC%20BY%204.0-lightgrey"></a>
@@ -42,12 +42,12 @@ If you want to see a more detailed description of how to digitize analog videota
 
 ## Download
 
-Each version comes as two releases on the [releases page](https://github.com/harrypm/vrecord/releases): one per interface. Every release lists `SHA256SUMS.txt` for checking the files.
+There are two release lines on the [releases page](https://github.com/harrypm/vrecord/releases). The **Qt6** GUI for Windows has its own versions (1.0.0, ...). The **GTK** interface follows upstream vrecord's date versions. Every release lists `SHA256SUMS.txt` for checking the files.
 
 | Release | For | Files |
 |---|---|---|
-| **Vrecord - Windows (Qt6)**, tag `qt6-v<version>` | Windows 10 / 11, the full Vrecord GUI | Installer `vrecord-qt6_<version>_windows_x86_64_setup.exe`, or portable `vrecord-qt6_<version>_windows_x86_64_portable.zip` |
-| **Vrecord - GTK**, tag `gtk-v<version>` | The classic GTK interface on Windows, Linux and macOS | `vrecord-gtk_<version>_windows_x86_64_portable.zip`, `..._linux_amd64.deb`, `..._linux_x86_64.AppImage`, `..._macos_<arch>.dmg` (Apple silicon, Intel or universal) |
+| **Vrecord - Windows (Qt6)**, e.g. `v1.0.0` | Windows 10 / 11, the full Vrecord GUI | Installer `vrecord-qt6_<version>_windows_x86_64_setup.exe`, or portable `vrecord-qt6_<version>_windows_x86_64_portable.zip` |
+| **Vrecord - GTK**, e.g. `v2026.11.26-gtk` | The classic GTK interface on Windows, Linux and macOS | `vrecord-gtk_<version>_windows_x86_64_portable.zip`, `..._linux_amd64.deb`, `..._linux_x86_64.AppImage`, `..._macos_<arch>.dmg` (Apple silicon, Intel or universal) |
 
 On macOS and Linux, Vrecord can also be installed with Homebrew from the AMIA Open Source tap. See [Installing vrecord](Resources/Documentation/installation_and_setup.md#installing-vrecord) and [Installing on Linux](Resources/Documentation/linux_installation.md).
 

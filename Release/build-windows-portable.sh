@@ -13,6 +13,9 @@ cd "$(dirname "$0")"
 RELEASE_DIR="$(pwd)"
 ROOT="$(cd .. && pwd)"
 VERSION="$(sed -nE 's/^VERSION="([0-9.-]+)"/\1/p' "$ROOT/vrecord")"
+# the Qt6 GUI has its own version (qt6/VERSION); the script VERSION above
+# is the upstream date version of the GTK interface
+QT_VERSION="$(head -n 1 "$ROOT/qt6/VERSION" | tr -d '[:space:]')"
 BUILD_DIR="${VRECORD_BUILD:-$HOME/vrecord-build}"
 ICON_RC="$RELEASE_DIR/appicon.rc"
 ICON_ICO="$RELEASE_DIR/vrecord.ico"
@@ -173,7 +176,7 @@ EOF
 #   vrecord-gtk_windows_<v>/  GTK interface (Vrecord.exe launcher + gtkdialog)
 # A DLL leaves a package only when the removed programs needed it and
 # nothing that stays does (ldd), so shared tools never lose a library.
-QT_PKG="$ARTIFACTS/vrecord-qt6_windows_${VERSION}"
+QT_PKG="$ARTIFACTS/vrecord-qt6_windows_${QT_VERSION}"
 GTK_PKG="$ARTIFACTS/vrecord-gtk_windows_${VERSION}"
 
 # every DLL inside <pkg> that the given binaries load (resolved paths, lower case)
@@ -263,11 +266,13 @@ make_flavour "$GTK_PKG" "${QT_PARTS[@]}"
 
 write_readme() {   # write_readme <package> <qt6|gtk>
   local pkg="$1" flavour="$2"
+  local v="$VERSION"
+  if [[ "$flavour" = qt6 ]] ; then v="$QT_VERSION" ; fi
   {
     if [[ "$flavour" = qt6 ]] ; then
-      echo "Vrecord ${VERSION} for Windows"
+      echo "Vrecord ${v} for Windows"
     else
-      echo "Vrecord ${VERSION} for Windows (GTK interface)"
+      echo "Vrecord ${v} for Windows (GTK interface)"
     fi
     echo "======================================="
     echo
@@ -315,7 +320,7 @@ write_readme() {   # write_readme <package> <qt6|gtk>
   # marks a portable copy (the Qt6 installer deletes it: an installed copy
   # updates with the setup)
   {
-    echo "Vrecord ${VERSION} portable package."
+    echo "Vrecord ${v} portable package."
     if [[ "$flavour" = qt6 ]] ; then echo "Updates (Config > Updates) unpack the new portable zip over this folder." ; fi
     echo "Delete this file only if this folder was installed with the Vrecord setup."
   } > "$pkg/portable.txt"
@@ -334,7 +339,7 @@ zip_package() {   # zip_package <package dir> <zip name>
     fi
   )
 }
-QT_ZIP="vrecord-qt6_${VERSION}_windows_x86_64_portable.zip"
+QT_ZIP="vrecord-qt6_${QT_VERSION}_windows_x86_64_portable.zip"
 GTK_ZIP="vrecord-gtk_${VERSION}_windows_x86_64_portable.zip"
 zip_package "$QT_PKG" "$QT_ZIP"
 zip_package "$GTK_PKG" "$GTK_ZIP"
