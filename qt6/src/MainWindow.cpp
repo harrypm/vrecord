@@ -2740,6 +2740,11 @@ QStringList MainWindow::runSelfTest() {
             {"tag_name":"v1.2.0","draft":true,"prerelease":false,"assets":[]},
             {"tag_name":"v1.1.0","draft":false,"prerelease":false,"html_url":"https://example.invalid/v1.1.0","assets":[
               {"name":"vrecord-qt6_1.1.0_windows_x86_64_setup.exe","browser_download_url":"https://example.invalid/setup.exe","size":1},
+              {"name":"vrecord-qt6_1.1.0_macos_x86_64.app.zip","browser_download_url":"https://example.invalid/mac-x86_64.zip","size":1},
+              {"name":"vrecord-qt6_1.1.0_macos_arm64.app.zip","browser_download_url":"https://example.invalid/mac-arm64.zip","size":1},
+              {"name":"vrecord-qt6_1.1.0_linux_amd64.deb","browser_download_url":"https://example.invalid/amd64.deb","size":1},
+              {"name":"vrecord-qt6_1.1.0_linux_arm64.deb","browser_download_url":"https://example.invalid/arm64.deb","size":1},
+              {"name":"vrecord-gtk_2026.11.26_linux_amd64.deb","browser_download_url":"https://example.invalid/gtk.deb","size":1},
               {"name":"SHA256SUMS.txt","browser_download_url":"https://example.invalid/sums","size":1}]},
             {"tag_name":"v2026.11.25","draft":false,"prerelease":false,"assets":[]},
             {"tag_name":"v1.0.0","draft":false,"prerelease":false,"assets":[]}
@@ -2748,8 +2753,10 @@ QStringList MainWindow::runSelfTest() {
         QString pickMessage;
         const bool parsed = UpdateManager::parseRelease(list, false, &picked, &pickMessage);
         check(QStringLiteral("Updater: Qt6 release picked from the list, semantic versions beat date versions"),
+              // this platform's Qt6 package (Windows setup / macOS bundle /
+              // Linux .deb), never the GTK .deb beside it
               compareOk && parsed && picked.tag == QStringLiteral("v1.1.0")
-                  && picked.assetName == QStringLiteral("vrecord-qt6_1.1.0_windows_x86_64_setup.exe"),
+                  && picked.assetName.startsWith(QStringLiteral("vrecord-qt6_1.1.0_")),
               QStringLiteral("compare=%1 picked=%2 asset=%3 %4").arg(int(compareOk)).arg(picked.tag, picked.assetName, pickMessage));
     }
     // audio constraints: Opus only in MKV / MP4, 2 capture channels drop the 3 & 4 mappings

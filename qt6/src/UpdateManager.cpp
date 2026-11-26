@@ -30,7 +30,7 @@ namespace {
 // the release asset that installs this copy: name prefix and suffix (the
 // GTK packages share the suffixes on macOS / Linux, so the prefix matters)
 #if defined(Q_OS_WIN)
-const QString kAssetPrefix = QStringLiteral("vrecord_");
+const QString kAssetPrefix = QStringLiteral("vrecord-qt6_");
 const QString kSetupSuffix = QStringLiteral("_windows_x86_64_setup.exe");
 const QString kPortableSuffix = QStringLiteral("_windows_x86_64_portable.zip");
 const QString kPlatformName = QStringLiteral("Windows");
