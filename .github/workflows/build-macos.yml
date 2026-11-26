@@ -9,12 +9,24 @@ on:
         description: "Branch, tag or SHA to build (default: the selected ref)"
         required: false
         type: string
+      all_arches:
+        description: "Also build arm64 and universal (Apple-silicon runners)"
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       checkout_ref:
         required: false
         type: string
         default: ""
+      # arm64 + universal need Apple-silicon runners, which are scarce:
+      # only release runs (build-and-release.yml) ask for them; branch /
+      # PR runs (build-and-test.yml) build Intel only
+      all_arches:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -22,17 +34,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Discrete per-arch builds on native runners, plus a universal
-          # package. Note: gtkdialog, MKVToolNix, and dvrescue have no arm64
-          # prebuilt binaries and are bundled as x86_64 in every package
-          # (Rosetta 2 on Apple Silicon); see Release/Release_Mac.sh.
-          - arch: x86_64
-            runner: macos-15-intel
-          - arch: arm64
-            runner: macos-15
-          - arch: universal
-            runner: macos-15
+        # Discrete per-arch builds on native runners, plus a universal
+        # package (release runs only; branch runs build x86_64). Note:
+        # gtkdialog, MKVToolNix, and dvrescue have no arm64 prebuilt
+        # binaries and are bundled as x86_64 in every package (Rosetta 2 on
+        # Apple Silicon); see Release/Release_Mac.sh.
+        include: ${{ fromJSON(inputs.all_arches && '[{"arch":"x86_64","runner":"macos-15-intel"},{"arch":"arm64","runner":"macos-15"},{"arch":"universal","runner":"macos-15"}]' || '[{"arch":"x86_64","runner":"macos-15-intel"}]') }}
     runs-on: ${{ matrix.runner }}
     env:
       ARCH: ${{ matrix.arch }}
