@@ -42,11 +42,11 @@ If you want to see a more detailed description of how to digitize analog videota
 
 ## Download
 
-There are two release lines on the [releases page](https://github.com/harrypm/vrecord/releases). The **Qt6** GUI for Windows has its own versions (1.0.0, ...). The **GTK** interface follows upstream vrecord's date versions. Every release lists `SHA256SUMS.txt` for checking the files.
+There are two release lines on the [releases page](https://github.com/harrypm/vrecord/releases). The **Qt6** GUI (Windows, macOS, Linux) has its own versions (1.0.0, ...). The **GTK** interface follows upstream vrecord's date versions. Every release lists `SHA256SUMS.txt` for checking the files.
 
 | Release | For | Files |
 |---|---|---|
-| **Vrecord - Windows (Qt6)**, e.g. `v1.0.0` | Windows 10 / 11, the full Vrecord GUI | Installer `vrecord-qt6_<version>_windows_x86_64_setup.exe`, or portable `vrecord-qt6_<version>_windows_x86_64_portable.zip` |
+| **Vrecord - Qt6**, e.g. `v1.0.0` | The full Vrecord GUI on Windows 10 / 11, macOS and Linux | Windows installer `vrecord-qt6_<version>_windows_x86_64_setup.exe` or portable `..._windows_x86_64_portable.zip`; macOS `..._macos_<x86_64\|arm64>.app.zip`; Linux `..._linux_amd64.deb` (on top of the GTK `.deb`) |
 | **Vrecord - GTK**, e.g. `v2026.11.26-gtk` | The classic GTK interface on Windows, Linux and macOS | `vrecord-gtk_<version>_windows_x86_64_portable.zip`, `..._linux_amd64.deb`, `..._linux_x86_64.AppImage`, `..._macos_<arch>.dmg` (Apple silicon, Intel or universal) |
 
 On macOS and Linux, Vrecord can also be installed with Homebrew from the AMIA Open Source tap. See [Installing vrecord](Resources/Documentation/installation_and_setup.md#installing-vrecord) and [Installing on Linux](Resources/Documentation/linux_installation.md).
@@ -68,7 +68,7 @@ See [BUILD.md](BUILD.md): Windows, Linux and macOS builds, the tests, CI, and ho
 
 ## Documentation
 
-These guides were written for the GTK interface. Most of the settings apply to the Windows Qt6 GUI as well.
+These guides were written for the GTK interface. Most of the settings apply to the Qt6 GUI as well.
 
 1. [Installation and Basic Use](Resources/Documentation/installation_and_setup.md)
     1. [Installing vrecord](Resources/Documentation/installation_and_setup.md#installing-vrecord)

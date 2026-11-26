@@ -14,9 +14,8 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 
-#include <DeckLinkAPI.h>
-
-#include <comdef.h>
+#include "DeckLinkPlatform.h"
+#include "Platform.h"
 
 #include <iostream>
 
@@ -27,7 +26,7 @@ std::string toHex(HRESULT value) {
     return buffer;
 }
 
-std::string fourCCText(LONGLONG value) {
+std::string fourCCText(DeckLinkPlatform::DLInt value) {
     std::string text;
     for (int shift = 24; shift >= 0; shift -= 8) {
         const char c = static_cast<char>((value >> shift) & 0xFF);
@@ -38,26 +37,12 @@ std::string fourCCText(LONGLONG value) {
 
 
 
-// tasklist prints "INFO: No tasks are running..." when nothing matches.
 int ffmpegProcessCount() {
-    QProcess tasklist;
-    tasklist.start(QStringLiteral("tasklist.exe"),
-                   {QStringLiteral("/NH"), QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq ffmpeg-ma.exe")});
-    tasklist.waitForFinished(5000);
-    const QString out = QString::fromUtf8(tasklist.readAllStandardOutput());
-    return out.count(QStringLiteral("ffmpeg-ma.exe"));
+    return Platform::countProcesses(QStringLiteral("ffmpeg-ma"));
 }
 
 bool isPidAlive(qint64 pid) {
-    if (pid <= 0) {
-        return false;
-    }
-    QProcess tasklist;
-    tasklist.start(QStringLiteral("tasklist.exe"),
-                   {QStringLiteral("/NH"), QStringLiteral("/FI"), QStringLiteral("PID eq %1").arg(pid)});
-    tasklist.waitForFinished(5000);
-    const QString out = QString::fromUtf8(tasklist.readAllStandardOutput());
-    return !out.contains(QStringLiteral("INFO:"));
+    return Platform::pidAlive(pid);
 }
 
 qint64 readPidFile(const QString& path) {
@@ -95,7 +80,7 @@ QString lastLogLine(const QString& path) {
     return lines.isEmpty() ? QString() : lines.last().trimmed();
 }
 
-QString describeConnection(LONGLONG value) {
+QString describeConnection(DeckLinkPlatform::DLInt value) {
     switch (value) {
         case bmdVideoConnectionSDI: return QStringLiteral("SDI");
         case bmdVideoConnectionHDMI: return QStringLiteral("HDMI");
@@ -118,7 +103,7 @@ QString packageRootForTest() {
 // the test recording goes.
 int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopEarly, bool ffplay, bool passthrough) {
     VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
-    config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-monitortest.conf"));
+    config.configPath = QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-monitortest.conf"));
     config.setValue(QStringLiteral("FFPLAY_MONITOR_CHOICE"), ffplay ? QStringLiteral("true") : QStringLiteral("false"));
     config.setValue(QStringLiteral("DIR"), outDir.isEmpty() ? QDir::tempPath() : QDir::fromNativeSeparators(outDir));
     config.setValue(QStringLiteral("ID"), QStringLiteral("qt6monitortest"));
@@ -185,7 +170,7 @@ int runMonitorTest(const QString& packageRoot, const QString& outDir, bool stopE
 // the pane at the card rate, and put a mode the card supports on the output.
 int runManagedSignalTest(const QString& packageRoot) {
     VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
-    config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-signaltest.conf"));
+    config.configPath = QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-signaltest.conf"));
     config.setValue(QStringLiteral("OUTPUT_STANDARD_CHOICE"), QStringLiteral("Auto (match file)"));
     BackendController backend(packageRoot);
     backend.setManagedOutputs(true);
@@ -253,7 +238,7 @@ int runManagedSignalTest(const QString& packageRoot) {
 // file -> Play resumes from the halted frame.
 int runTransportTest(const QString& packageRoot, const QString& file) {
     VrecordConfig config = VrecordConfig::load(QStringLiteral("vrecord"));
-    config.configPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-transporttest.conf"));
+    config.configPath = QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-transporttest.conf"));
     if (!file.isEmpty()) {
         config.setValue(QStringLiteral("VRECORD_PLAY_FILE"), QDir::fromNativeSeparators(file));
     }
@@ -321,16 +306,11 @@ int runTransportTest(const QString& packageRoot, const QString& file) {
 
 // write bmdDeckLinkConfigVideoOutputConnection exactly (mask, e.g. 0x2 = HDMI),
 // persist it, and read it back
-int runSetOutputConnection(LONGLONG mask) {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    });
+int runSetOutputConnection(DeckLinkPlatform::DLInt mask) {
+    DeckLinkPlatform::ComScope com(true);
     IDeckLinkIterator* iterator = nullptr;
     IDeckLink* deckLink = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator))) || !iterator
+    if (!(iterator = DeckLinkPlatform::createIterator())
         || iterator->Next(&deckLink) != S_OK || !deckLink) {
         std::cout << "setout: no device" << std::endl;
         return 1;
@@ -342,11 +322,11 @@ int runSetOutputConnection(LONGLONG mask) {
         std::cout << "setout: no configuration interface" << std::endl;
         return 1;
     }
-    LONGLONG before = 0;
+    DeckLinkPlatform::DLInt before = 0;
     configuration->GetInt(bmdDeckLinkConfigVideoOutputConnection, &before);
     const HRESULT setHr = configuration->SetInt(bmdDeckLinkConfigVideoOutputConnection, mask);
     const HRESULT writeHr = configuration->WriteConfigurationToPreferences();
-    LONGLONG after = 0;
+    DeckLinkPlatform::DLInt after = 0;
     configuration->GetInt(bmdDeckLinkConfigVideoOutputConnection, &after);
     configuration->Release();
     std::cout << "setout: 0x" << std::hex << before << " -> requested 0x" << mask << " -> now 0x" << after << std::dec
@@ -355,14 +335,10 @@ int runSetOutputConnection(LONGLONG mask) {
 }
 
 int runSdkOutputTest(const QString& modeCode, int seconds) {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    });
+    DeckLinkPlatform::ComScope com(true);
+    HRESULT hr = S_OK;
     IDeckLinkIterator* iterator = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator))) || !iterator) {
+    if (!(iterator = DeckLinkPlatform::createIterator())) {
         std::cout << "sdktest: DeckLink iterator unavailable" << std::endl;
         return 1;
     }
@@ -442,7 +418,7 @@ int runSdkOutputTest(const QString& modeCode, int seconds) {
             if (lastHr == S_OK) {
                 ++shown;
             } else {
-                Sleep(DWORD(frameMs));
+                QThread::msleep(frameMs);
             }
             if (shown > 0 && shown % (5000 / std::max(1, frameMs)) == 0) {
                 std::cout << "sdktest: " << clock.elapsed() / 1000 << " s, " << shown << " frames" << std::endl;
@@ -456,21 +432,15 @@ int runSdkOutputTest(const QString& modeCode, int seconds) {
 }
 
 int runProbe() {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool comInitialized = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    auto uninit = qScopeGuard([&] {
-        if (SUCCEEDED(hr)) {
-            CoUninitialize();
-        }
-    });
-    if (!comInitialized) {
+    DeckLinkPlatform::ComScope com;
+    if (!com.ok()) {
         std::cout << "probe: COM init failed" << std::endl;
         return 1;
     }
 
     IDeckLinkIterator* iterator = nullptr;
-    hr = CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, reinterpret_cast<void**>(&iterator));
-    if (FAILED(hr) || !iterator) {
+    iterator = DeckLinkPlatform::createIterator();
+    if (!iterator) {
         std::cout << "probe: DeckLink iterator unavailable" << std::endl;
         return 1;
     }
@@ -479,17 +449,12 @@ int runProbe() {
     IDeckLink* deckLink = nullptr;
     while (iterator->Next(&deckLink) == S_OK && deckLink) {
         auto deviceGuard = qScopeGuard([&] { deckLink->Release(); });
-        BSTR nameBstr = nullptr;
-        QString name;
-        if (deckLink->GetModelName(&nameBstr) == S_OK) {
-            name = QString::fromWCharArray(nameBstr);
-            SysFreeString(nameBstr);
-        }
+        const QString name = DeckLinkPlatform::takeString([&](DeckLinkPlatform::DLString* text) { return deckLink->GetModelName(text); });
         std::cout << "Device: " << name.toStdString() << std::endl;
 
         IDeckLinkConfiguration* configuration = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkConfiguration, reinterpret_cast<void**>(&configuration)) == S_OK && configuration) {
-            LONGLONG connection = 0;
+            DeckLinkPlatform::DLInt connection = 0;
             if (configuration->GetInt(bmdDeckLinkConfigVideoOutputConnection, &connection) == S_OK) {
                 std::cout << "  configured output connection: " << describeConnection(connection).toStdString() << std::endl;
             } else {
@@ -500,16 +465,16 @@ int runProbe() {
             } else {
                 std::cout << "  configured input connection: <unreadable>" << std::endl;
             }
-            LONGLONG passThrough = 0;
+            DeckLinkPlatform::DLInt passThrough = 0;
             if (configuration->GetInt(bmdDeckLinkConfigCapturePassThroughMode, &passThrough) == S_OK) {
                 // 'pdis' disabled, 'pdir' direct (input looped to output), 'pcln' clean switch
                 std::cout << "  capture pass-through mode: " << fourCCText(passThrough) << std::endl;
             }
-            LONGLONG analogFlags = 0;
+            DeckLinkPlatform::DLInt analogFlags = 0;
             if (configuration->GetInt(bmdDeckLinkConfigAnalogVideoOutputFlags, &analogFlags) == S_OK) {
                 std::cout << "  analog output flags: 0x" << std::hex << analogFlags << std::dec << std::endl;
             }
-            BOOL lowLatency = FALSE;
+            DeckLinkPlatform::DLBool lowLatency = false;
             if (configuration->GetFlag(bmdDeckLinkConfigLowLatencyVideoOutput, &lowLatency) == S_OK) {
                 std::cout << "  low latency output: " << (lowLatency ? "on" : "off") << std::endl;
             }
@@ -518,9 +483,9 @@ int runProbe() {
 
         IDeckLinkProfileAttributes* attributes = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkProfileAttributes, reinterpret_cast<void**>(&attributes)) == S_OK && attributes) {
-            LONGLONG profileId = 0;
-            LONGLONG duplex = 0;
-            LONGLONG outputConnections = 0;
+            DeckLinkPlatform::DLInt profileId = 0;
+            DeckLinkPlatform::DLInt duplex = 0;
+            DeckLinkPlatform::DLInt outputConnections = 0;
             if (attributes->GetInt(BMDDeckLinkProfileID, &profileId) == S_OK) {
                 std::cout << "  device profile: 0x" << std::hex << profileId << std::dec << std::endl;
             }
@@ -530,7 +495,7 @@ int runProbe() {
             if (attributes->GetInt(BMDDeckLinkVideoOutputConnections, &outputConnections) == S_OK) {
                 std::cout << "  supported output connections: 0x" << std::hex << outputConnections << std::dec << std::endl;
             }
-            LONGLONG inputConnections = 0;
+            DeckLinkPlatform::DLInt inputConnections = 0;
             if (attributes->GetInt(BMDDeckLinkVideoInputConnections, &inputConnections) == S_OK) {
                 std::cout << "  supported input connections: 0x" << std::hex << inputConnections << std::dec << std::endl;
             }
@@ -539,9 +504,9 @@ int runProbe() {
 
         IDeckLinkStatus* status = nullptr;
         if (deckLink->QueryInterface(IID_IDeckLinkStatus, reinterpret_cast<void**>(&status)) == S_OK && status) {
-            LONGLONG outputMode = 0;
-            LONGLONG busy = 0;
-            LONGLONG lastPixelFormat = 0;
+            DeckLinkPlatform::DLInt outputMode = 0;
+            DeckLinkPlatform::DLInt busy = 0;
+            DeckLinkPlatform::DLInt lastPixelFormat = 0;
             if (status->GetInt(bmdDeckLinkStatusCurrentVideoOutputMode, &outputMode) == S_OK) {
                 std::cout << "  active output mode: 0x" << std::hex << outputMode << std::dec << std::endl;
             }
@@ -550,7 +515,7 @@ int runProbe() {
                 std::cout << "  last output pixel format: " << std::string(pix, 4) << " (0x" << std::hex
                           << lastPixelFormat << ")" << std::dec << std::endl;
             }
-            LONGLONG hdmiMode = 0;
+            DeckLinkPlatform::DLInt hdmiMode = 0;
             const HRESULT hdmiResult = status->GetInt(bmdDeckLinkStatusHDMIOutputActualMode, &hdmiMode);
             if (hdmiResult == S_OK) {
                 std::cout << "  HDMI output actual mode: " << fourCCText(hdmiMode) << std::endl;
@@ -570,8 +535,8 @@ int runProbe() {
             if (status->GetInt(bmdDeckLinkStatusBusy, &busy) == S_OK) {
                 std::cout << "  device busy state: " << busy << std::endl;
             }
-            LONGLONG inputLocked = 0;
-            LONGLONG detectedInputMode = 0;
+            DeckLinkPlatform::DLInt inputLocked = 0;
+            DeckLinkPlatform::DLInt detectedInputMode = 0;
             if (status->GetInt(bmdDeckLinkStatusVideoInputSignalLocked, &inputLocked) == S_OK) {
                 std::cout << "  input signal locked: " << (inputLocked != 0 ? "YES" : "NO") << std::endl;
             }
@@ -633,7 +598,7 @@ int main(int argc, char** argv) {
     }
 
     const QString packageRoot = QCoreApplication::applicationDirPath();
-    const QString ffmpegPath = QDir(packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    const QString ffmpegPath = Platform::toolPath(packageRoot, QStringLiteral("ffmpeg-ma"));
     if (!QFileInfo::exists(ffmpegPath)) {
         std::cout << "ERROR: run vsignal from the vrecord package root (missing "
                   << QDir::toNativeSeparators(ffmpegPath).toStdString() << ")" << std::endl;
@@ -675,7 +640,7 @@ int main(int argc, char** argv) {
     }
 
     if (command == QStringLiteral("status")) {
-        const qint64 pid = readPidFile(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.pid")));
+        const qint64 pid = readPidFile(QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.pid")));
         const int ffmpegCount = ffmpegProcessCount();
         std::cout << "Test signal: " << (isPidAlive(pid) || ffmpegCount > 0 ? "RUNNING" : "STOPPED")
                   << " (pid file: " << (pid > 0 ? QString::number(pid) : QString("none")).toStdString()
@@ -708,17 +673,17 @@ int main(int argc, char** argv) {
             std::cout << "FAILED: " << error.toStdString() << std::endl;
             return 1;
         }
-        const qint64 pid = readPidFile(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.pid")));
+        const qint64 pid = readPidFile(QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.pid")));
         std::cout << "Started. Verifying hardware output is live..." << std::endl;
         QThread::msleep(1500);
         const bool live = isPidAlive(pid) || ffmpegProcessCount() > 0;
         if (!live) {
-            const QString logTail = lastLogLine(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.log")));
+            const QString logTail = lastLogLine(QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.log")));
             std::cout << "FAILED: output died immediately. "
                       << (logTail.isEmpty() ? "See VrecordQt6-testsignal.log" : logTail.toStdString()) << std::endl;
             return 1;
         }
-        const QString signalLogPath = QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.log"));
+        const QString signalLogPath = QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.log"));
         const long long frames1 = frameProgressCount(signalLogPath);
         QThread::msleep(1500);
         const long long frames2 = frameProgressCount(signalLogPath);
@@ -769,7 +734,7 @@ int main(int argc, char** argv) {
                     streaming = ffmpegProcessCount() > 0;
                 }
                 if (!streaming) {
-                    detail = error.isEmpty() ? lastLogLine(QDir(packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.log")))
+                    detail = error.isEmpty() ? lastLogLine(QDir(Platform::stateDir(packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.log")))
                                              : error;
                 }
                 if (!started || !streaming) {

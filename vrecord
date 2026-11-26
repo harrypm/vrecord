@@ -4446,12 +4446,23 @@ esac
 # manage an include file to pass variables to gtkdialog
 VRECORD_VARS_FILE="/tmp/v_$(echo "${0}" | sed -e "s/[^A-Za-z0-9.]/_/g")_variables.txt"
 
-# setup extra binary path for packaged version
-if [[ "$(dirname "$(command -v "${0}")")" = "/usr/local/bin" ]] ; then
-    if [[ -d "/usr/local/lib/vrecord/bin" ]] ; then
-        export PATH="/usr/local/lib/vrecord/bin:${PATH}"
+# setup extra binary path for packaged versions: the .pkg / .deb put their
+# tools in <prefix>/lib/vrecord/bin beside <prefix>/bin/vrecord. The packaged
+# script puts them first on PATH. Any other copy (a git checkout, a wrapper
+# script, Homebrew) appends an installed package's tools instead, so the
+# tools PATH lacks - deckcontrol in particular, which Homebrew users often
+# do not have - are still found while PATH's own tools keep priority.
+VRECORD_REAL_DIR="$(cd "$(dirname "$(readlink -f "${0}" 2>/dev/null || echo "${0}")")" 2>/dev/null && pwd)"
+for PACKAGED_BIN in "${VRECORD_REAL_DIR}/../lib/vrecord/bin" "/usr/local/lib/vrecord/bin" ; do
+    [[ -d "${PACKAGED_BIN}" ]] || continue
+    PACKAGED_BIN="$(cd "${PACKAGED_BIN}" && pwd)"
+    if [[ "$(cd "${PACKAGED_BIN}/../../../bin" 2>/dev/null && pwd)" = "${VRECORD_REAL_DIR}" ]] ; then
+        export PATH="${PACKAGED_BIN}:${PATH}"
+    else
+        export PATH="${PATH}:${PACKAGED_BIN}"
     fi
-fi
+    break
+done
 
 _process_vars_for_gtk
 

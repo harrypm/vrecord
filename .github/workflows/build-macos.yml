@@ -44,6 +44,8 @@ jobs:
       - name: Install build dependencies
         run: |
           brew install bison flex texinfo libxml2 libxslt automake autoconf
+          # the Qt6 frontend (per-architecture builds; Homebrew's Qt is single-arch)
+          if [ "$ARCH" != universal ] ; then brew install cmake ninja qtbase ; fi
 
       - name: Build vrecord .pkg and .dmg (Release_Mac.sh)
         env:
@@ -53,9 +55,31 @@ jobs:
           ./Release/Release_Mac.sh || echo "::warning::Release_Mac.sh incomplete - collecting partial output"
         continue-on-error: true
 
+      - name: Build and self-test the Qt6 frontend
+        if: matrix.arch != 'universal'
+        run: |
+          # the DeckLink SDK headers Release_Mac.sh clones (again if it stopped early)
+          [ -f Release/decklink-sdk-headers/DeckLinkSDK/Mac/include/DeckLinkAPI.h ] \
+            || git clone --depth 1 https://github.com/MediaArea/decklink-sdk-headers.git Release/decklink-sdk-headers
+          cmake -S qt6 -B qt6/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qtbase)" \
+            -DDECKLINK_SDK="$PWD/Release/decklink-sdk-headers/DeckLinkSDK/Mac/include"
+          cmake --build qt6/build
+          # the GUI's own checks, offscreen, against this checkout as the package
+          # (the card checks SKIP: no DeckLink on a runner)
+          export QT_QPA_PLATFORM=offscreen VRECORD_SELFTEST_ALLOW_NO_HARDWARE=1 VRECORD_PACKAGE_ROOT="$PWD"
+          LOGDIR="$HOME/Library/Application Support/vrecord/vrecord-qt6"
+          if ./qt6/build/VrecordQt6.app/Contents/MacOS/VrecordQt6 --self-test ; then
+            echo "self-test passed" ; grep -c '^PASS' "$LOGDIR/VrecordQt6-selftest.log"
+          else
+            echo "::error::VrecordQt6 --self-test failed" ; cat "$LOGDIR/VrecordQt6-selftest.log" || true ; exit 1
+          fi
+          echo "QT6_BUILD=$PWD/qt6/build" >> "$GITHUB_ENV"
+
       - name: Build vrecord .app bundle
         run: |
           chmod +x Release/build-mac-app.sh
+          # QT6_BUILD (set above) adds "vrecord Qt6.app" (vrecord-qt6_*.app.zip) beside the GTK bundle
           ./Release/build-mac-app.sh
 
       - name: Collect artifacts

@@ -2,11 +2,13 @@ name: Build and Release
 
 # Vrecord has two release lines in this repository, each from its own tag:
 #
-#   v<x.y.z>              the Qt6 GUI for Windows: its own semantic version
-#   (e.g. v1.0.0)         (qt6/VERSION). Builds and tests Windows, then
-#                         creates the release with
+#   v<x.y.z>              the Qt6 GUI: its own semantic version
+#   (e.g. v1.0.0)         (qt6/VERSION). Builds and tests Windows, Linux
+#                         and macOS, then creates the release with
 #                           vrecord-qt6_<x.y.z>_windows_x86_64_setup.exe
 #                           vrecord-qt6_<x.y.z>_windows_x86_64_portable.zip
+#                           vrecord-qt6_<x.y.z>_linux_amd64.deb (needs the GTK vrecord .deb)
+#                           vrecord-qt6_<x.y.z>_macos_<x86_64|arm64>.app.zip
 #                           + screenshots of the Qt6 tabs
 #
 #   v<YYYY.MM.DD>-gtk     the GTK interface, following upstream vrecord's
@@ -159,8 +161,6 @@ jobs:
   build-linux:
     name: Build Linux
     needs: resolve-tag
-    # the Qt6 release is Windows only
-    if: needs.resolve-tag.outputs.flavour != 'qt6'
     uses: ./.github/workflows/build-linux.yml
     with:
       checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
@@ -177,7 +177,6 @@ jobs:
   build-macos:
     name: Build macOS
     needs: resolve-tag
-    if: needs.resolve-tag.outputs.flavour != 'qt6'
     uses: ./.github/workflows/build-macos.yml
     with:
       checkout_ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
@@ -186,14 +185,7 @@ jobs:
   upload-release-assets:
     name: Create the release
     needs: [resolve-tag, build-linux, build-windows, build-macos]
-    # Linux / macOS are skipped for a Qt6 release, so the job runs on their
-    # result rather than the default "every need succeeded"
-    if: >-
-      always() &&
-      needs.resolve-tag.outputs.publish_release == 'true' &&
-      needs.build-windows.result == 'success' &&
-      (needs.resolve-tag.outputs.flavour == 'qt6' ||
-       (needs.build-linux.result == 'success' && needs.build-macos.result == 'success'))
+    if: ${{ needs.resolve-tag.outputs.publish_release == 'true' }}
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ needs.resolve-tag.outputs.release_tag }}
@@ -227,13 +219,16 @@ jobs:
           if [ "$FLAVOUR" = qt6 ]; then
             need "Qt6 installer"        'vrecord-qt6_*_windows_x86_64_setup.exe'
             need "Qt6 portable zip"     'vrecord-qt6_*_windows_x86_64_portable.zip'
+            need "Qt6 .deb"             'vrecord-qt6_*_linux_*.deb'
+            need "Qt6 macOS x86_64"     'vrecord-qt6_*_macos_x86_64.app.zip'
+            need "Qt6 macOS arm64"      'vrecord-qt6_*_macos_arm64.app.zip'
           else
             need "GTK Windows portable" 'vrecord-gtk_*_windows_x86_64_portable.zip'
             need "GTK .deb"             'vrecord-gtk_*_linux_amd64.deb'
             need "GTK AppImage"         'vrecord-gtk_*_linux_x86_64.AppImage'
             for arch in x86_64 arm64 universal; do
               found=0
-              for f in $(find "dist/vrecord-gtk-macos-${arch}" -type f \( -name '*.dmg' -o -name '*.app.zip' \) 2>/dev/null); do
+              for f in $(find "dist/vrecord-gtk-macos-${arch}" -type f \( -name 'vrecord-gtk_*.dmg' -o -name 'vrecord-gtk_*.app.zip' \) 2>/dev/null); do
                 cp "$f" release/ ; found=1
               done
               [ "$found" = 1 ] || { echo "::error::missing GTK macOS ${arch} package"; exit 1; }
@@ -254,7 +249,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$FLAVOUR" = qt6 ]; then
-            TITLE="Vrecord ${RELEASE_TAG} - Windows (Qt6)"
+            TITLE="Vrecord ${RELEASE_TAG} - Qt6 (Windows, Linux, macOS)"
           else
             TITLE="Vrecord ${RELEASE_TAG%-gtk} - GTK (Windows, Linux, macOS)"
           fi

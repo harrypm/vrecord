@@ -3,6 +3,7 @@
 #include "DeckLinkDiscovery.h"
 #include "Wss.h"
 #include "PipeFeed.h"
+#include "Platform.h"
 #include "VrecordOptions.h"
 
 #include <QCoreApplication>
@@ -22,8 +23,6 @@
 
 #include <cmath>
 #include <cstring>
-
-#include <windows.h>
 
 namespace {
 bool s_testMode = false;
@@ -142,17 +141,8 @@ QString describeMode(const QString& code) {
                                                 QString::number(mode.fps(), 'f', mode.rateDen == 1 ? 0 : 2));
 }
 
-// tasklist prints "INFO: No tasks are running..." when nothing matches.
 bool pidAlive(qint64 pid) {
-    if (pid <= 0) {
-        return false;
-    }
-    QProcess tasklist;
-    tasklist.start(QStringLiteral("tasklist.exe"),
-                   {QStringLiteral("/NH"), QStringLiteral("/FI"), QStringLiteral("PID eq %1").arg(pid)});
-    tasklist.waitForFinished(5000);
-    const QString out = QString::fromUtf8(tasklist.readAllStandardOutput());
-    return !out.contains(QStringLiteral("INFO:"));
+    return Platform::pidAlive(pid);
 }
 
 QString lastLogLines(const QString& logPath, int count) {
@@ -182,77 +172,16 @@ QString quoteForBash(QString value) {
     return QStringLiteral("'%1'").arg(value);
 }
 
-QString toBashPath(QString value) {
-    value.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    if (value.size() >= 3 && value[1] == QLatin1Char(':') && value[2] == QLatin1Char('/')) {
-        const QChar drive = value[0].toLower();
-        return QStringLiteral("/%1/%2").arg(drive, value.mid(3));
-    }
-    return value;
+QString toBashPath(const QString& value) {
+    return Platform::toBashPath(value);
 }
 
-// belt and braces like the shell backend's pkill: a detached launcher can die
-// while its ffmpeg child survives and keeps holding the card (every later
-// launch then fails with 'Could not enable video output'). Sweep any orphan
-// carrying our test-signal metadata marker.
 void sweepOrphanedTestStreams(bool background = false) {
-    // background (GUI): never block the window on PowerShell, and spare our
-    // own children (a test signal started meanwhile is not an orphan)
-    const QString command = QStringLiteral("Get-CimInstance Win32_Process -Filter \"Name='ffmpeg-ma.exe'\" | "
-                                           "Where-Object { $_.CommandLine -match 'vrecord-test-signal' -and $_.ParentProcessId -ne %1 } | "
-                                           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
-                                .arg(QCoreApplication::applicationPid());
-    const QStringList arguments{QStringLiteral("-NoProfile"), QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"),
-                                QStringLiteral("-Command"), command};
-    if (background) {
-        QProcess::startDetached(QStringLiteral("powershell.exe"), arguments);
-        return;
-    }
-    QProcess sweeper;
-    sweeper.start(QStringLiteral("powershell.exe"), arguments);
-    sweeper.waitForFinished(5000);
-}
-
-// the shell names its player window "mode:record - ..." / "mode:passthrough
-// - ..." (WINDOW_NAME in _setup_vrecord_process); post WM_CLOSE to each
-int closePlayerWindows() {
-    int count = 0;
-    EnumWindows([](HWND hwnd, LPARAM param) -> BOOL {
-        wchar_t title[64] = {};
-        if (IsWindowVisible(hwnd) && GetWindowTextW(hwnd, title, 64) > 0 && wcsncmp(title, L"mode:", 5) == 0) {
-            PostMessageW(hwnd, WM_CLOSE, 0, 0);
-            ++*reinterpret_cast<int*>(param);
-        }
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&count));
-    return count;
-}
-
-QString findBashExecutable() {
-    const QString msysBash = QStringLiteral("C:/msys64/usr/bin/bash.exe");
-    if (QFileInfo::exists(msysBash)) {
-        return msysBash;
-    }
-    const QString gitBash = QStringLiteral("%1/Git/bin/bash.exe").arg(QDir::fromNativeSeparators(qEnvironmentVariable("ProgramFiles")));
-    if (QFileInfo::exists(gitBash)) {
-        return gitBash;
-    }
-    return {};
-}
-
-// the POSIX tools directory that belongs to that bash (sed, awk, grep, ...)
-QString posixToolsDir(const QString& bash) {
-    const QString dir = QFileInfo(bash).absolutePath();
-    if (dir.endsWith(QStringLiteral("/Git/bin"), Qt::CaseInsensitive)) {
-        return QDir(dir).filePath(QStringLiteral("../usr/bin"));
-    }
-    return dir;
+    Platform::sweepOrphanedTestStreams(background);
 }
 
 void hideConsole(QProcess* process) {
-    process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-        args->flags |= CREATE_NO_WINDOW;
-    });
+    Platform::prepareChild(process);
 }
 
 int parseRational(const QString& text, int* num, int* den) {
@@ -287,11 +216,11 @@ QString BackendController::packageRoot() const {
 }
 
 QString BackendController::ffmpegPath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    return Platform::toolPath(m_packageRoot, QStringLiteral("ffmpeg-ma"));
 }
 
 QString BackendController::ffprobePath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("bin/ffprobe-ma.exe"));
+    return Platform::toolPath(m_packageRoot, QStringLiteral("ffprobe-ma"));
 }
 
 QString BackendController::deviceForOutput(const VrecordConfig& config) {
@@ -321,7 +250,7 @@ bool BackendController::saveConfig(const VrecordConfig& config, QString* errorMe
 FrameFeed* BackendController::startFeed(const QString& kind, const QList<FrameFeed::Attempt>& attempts, int width, int height, int delayFrames) {
     auto* feed = new FrameFeed(ffmpegPath(), attempts, width, height, this);
     feed->setDisplayDelayFrames(delayFrames);
-    feed->setLogPath(QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-feeds.log")));
+    feed->setLogPath(QDir(Platform::stateDir(m_packageRoot)).filePath(QStringLiteral("VrecordQt6-feeds.log")));
     const bool isInput = kind == QStringLiteral("input");
     // feed as the context object: queued frames of a feed that has been
     // replaced are dropped together with it
@@ -434,7 +363,7 @@ bool BackendController::startAudioCheck(const VrecordConfig& config, QString* er
 }
 
 QString BackendController::shellLogPath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-backend.log"));
+    return QDir(Platform::stateDir(m_packageRoot)).filePath(QStringLiteral("VrecordQt6-backend.log"));
 }
 
 bool BackendController::isShellRunning() const {
@@ -460,10 +389,10 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
         return true;
     }
 
-    const QString bash = findBashExecutable();
+    const QString bash = Platform::findBash();
     if (bash.isEmpty()) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find MSYS2 (C:\\msys64) or Git Bash to run the vrecord backend.");
+            *errorMessage = QStringLiteral("Could not find bash to run the vrecord backend. %1").arg(Platform::bashMissingHint());
         }
         return false;
     }
@@ -476,50 +405,40 @@ bool BackendController::startShellSession(const QString& mode, const QStringList
 
     releaseDeckLink();
 
-    // same environment the native Vrecord.exe launcher gives the GTK
-    // frontend: package bin first, the POSIX tools, HOME = the real profile
-    // (so ~/.vrecord.conf is the file this frontend writes), resources in MSYS
-    // form, and no MSYS argument mangling of the filter graphs
+    // same environment the native launchers give the GTK frontend: package
+    // tools first, the POSIX tools, the resources in the shell's path form.
+    // Windows also needs HOME = the real profile (so ~/.vrecord.conf is the
+    // file this frontend writes) and no MSYS argument mangling of the filter
+    // graphs.
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+#ifdef Q_OS_WIN
     const QString nativeRoot = QDir::toNativeSeparators(m_packageRoot);
     env.insert(QStringLiteral("PATH"), QStringLiteral("%1\\bin;%2;%3")
-                                           .arg(nativeRoot, QDir::toNativeSeparators(posixToolsDir(bash)), env.value(QStringLiteral("PATH"))));
-    env.insert(QStringLiteral("VRECORD_RESOURCES"), toBashPath(QDir(m_packageRoot).filePath(QStringLiteral("Resources"))));
+                                           .arg(nativeRoot, QDir::toNativeSeparators(Platform::posixToolsDir(bash)), env.value(QStringLiteral("PATH"))));
     const QString profile = env.value(QStringLiteral("USERPROFILE"));
     if (!profile.isEmpty()) {
         env.insert(QStringLiteral("HOME"), profile);
     }
     env.insert(QStringLiteral("MSYS2_ARG_CONV_EXCL"), QStringLiteral("*"));
     env.insert(QStringLiteral("MSYS_NO_PATHCONV"), QStringLiteral("1"));
+#else
+    env.insert(QStringLiteral("PATH"), Platform::childPath(m_packageRoot, env.value(QStringLiteral("PATH"))));
+#endif
+    const QString resources = Platform::resourcesDir(m_packageRoot);
+    if (!resources.isEmpty()) {
+        env.insert(QStringLiteral("VRECORD_RESOURCES"), toBashPath(resources));
+    }
     // the ffplay view shape picked in the GUI (16:9 / 21:9 / 5:4)
     env.insert(QStringLiteral("VRECORD_VIEW_ASPECT"), config.value(QStringLiteral("FFPLAY_VIEW_ASPECT_CHOICE"), QStringLiteral("16:9")));
     // ffplay monitor window: the shell makes the Visual view 16:9 (so a
     // fullscreen view fills a 1080p monitor); open it at two thirds of the
     // SMALLEST attached monitor's height so it fits whichever screen it is
     // dragged to (a primary ultrawide must not size it past a 1080p one).
-    // ffplay (SDL) is DPI-unaware, so logical pixels; a user-set value wins.
+    // A user-set value wins.
     if (!env.contains(QStringLiteral("VRECORD_FFPLAY_HEIGHT"))) {
-        HDC screenDc = GetDC(nullptr);
-        const int dpi = screenDc ? GetDeviceCaps(screenDc, LOGPIXELSY) : 96;
-        if (screenDc) {
-            ReleaseDC(nullptr, screenDc);
-        }
-        const double dpiScale = dpi > 0 ? dpi / 96.0 : 1.0;
-        int smallestHeight = 0;
-        EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
-            MONITORINFO info{};
-            info.cbSize = sizeof(info);
-            if (GetMonitorInfoW(monitor, &info)) {
-                auto* smallest = reinterpret_cast<int*>(data);
-                const int height = info.rcMonitor.bottom - info.rcMonitor.top;
-                if (height > 0 && (*smallest == 0 || height < *smallest)) {
-                    *smallest = height;
-                }
-            }
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&smallestHeight));
+        const int smallestHeight = Platform::smallestScreenHeight();
         if (smallestHeight > 0) {
-            env.insert(QStringLiteral("VRECORD_FFPLAY_HEIGHT"), QString::number(qRound(smallestHeight / dpiScale * 2.0 / 3.0)));
+            env.insert(QStringLiteral("VRECORD_FFPLAY_HEIGHT"), QString::number(qRound(smallestHeight * 2.0 / 3.0)));
         }
     }
 
@@ -589,7 +508,7 @@ void BackendController::startSessionMonitor(const VrecordConfig& config, QProces
     });
     feed->start();
     // levels: the monitor player appends astats blocks to this file
-    m_monitorLevelsPath = QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-monitor-levels.txt"));
+    m_monitorLevelsPath = QDir(Platform::stateDir(m_packageRoot)).filePath(QStringLiteral("VrecordQt6-monitor-levels.txt"));
     QFile::remove(m_monitorLevelsPath);
     QFile(m_monitorLevelsPath).open(QIODevice::WriteOnly);
     m_monitorLevelsOffset = 0;
@@ -677,16 +596,13 @@ bool BackendController::stopShell() {
         m_monitorFeed->stop();
         closed = 1;
     } else {
-        closed = closePlayerWindows();
+        closed = Platform::closePlayerWindows(m_shellProcess ? m_shellProcess->processId() : 0);
     }
     if (closed > 0 && m_shellProcess && m_shellProcess->waitForFinished(20000)) {
         return true;
     }
     if (m_shellProcess) {
-        QProcess killer;
-        killer.start(QStringLiteral("taskkill.exe"),
-                     {QStringLiteral("/PID"), QString::number(m_shellProcess->processId()), QStringLiteral("/T"), QStringLiteral("/F")});
-        killer.waitForFinished(5000);
+        Platform::killTree(m_shellProcess->processId());
     }
     return true;
 }
@@ -1976,10 +1892,10 @@ bool BackendController::startDetachedProgramWithLog(const QString& program, cons
         }
         return true;
     }
-    const QString bashPath = findBashExecutable();
+    const QString bashPath = Platform::findBash();
     if (bashPath.isEmpty()) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Could not find MSYS2 or Git Bash for backend launch.");
+            *errorMessage = QStringLiteral("Could not find bash for backend launch. %1").arg(Platform::bashMissingHint());
         }
         return false;
     }
@@ -1988,11 +1904,21 @@ bool BackendController::startDetachedProgramWithLog(const QString& program, cons
     for (const QString& argument : arguments) {
         commandParts << quoteForBash(argument);
     }
+#ifdef Q_OS_WIN
     const QString commandLine = QStringLiteral("export PATH='/usr/bin:/ucrt64/bin:$PATH'; %1 > %2 2>&1")
                                     .arg(commandParts.join(QLatin1Char(' ')),
                                          quoteForBash(toBashPath(logPath)));
+    const QString bashMode = QStringLiteral("-lc");
+#else
+    // exec: the tracked PID is the program itself, not a waiting shell
+    const QString commandLine = QStringLiteral("export PATH=%1; exec %2 > %3 2>&1")
+                                    .arg(quoteForBash(Platform::childPath(m_packageRoot, qEnvironmentVariable("PATH"))),
+                                         commandParts.join(QLatin1Char(' ')),
+                                         quoteForBash(logPath));
+    const QString bashMode = QStringLiteral("-c");
+#endif
     if (!QProcess::startDetached(QDir::toNativeSeparators(bashPath),
-                                 {QStringLiteral("-lc"), commandLine},
+                                 {bashMode, commandLine},
                                  m_packageRoot,
                                  pid)) {
         if (errorMessage) {
@@ -2004,11 +1930,11 @@ bool BackendController::startDetachedProgramWithLog(const QString& program, cons
 }
 
 QString BackendController::testSignalPidPath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.pid"));
+    return QDir(Platform::stateDir(m_packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.pid"));
 }
 
 QString BackendController::testSignalLogPath() const {
-    return QDir(m_packageRoot).filePath(QStringLiteral("VrecordQt6-testsignal.log"));
+    return QDir(Platform::stateDir(m_packageRoot)).filePath(QStringLiteral("VrecordQt6-testsignal.log"));
 }
 
 bool BackendController::stopTrackedProcess(const QString& pidFilePath, QString* errorMessage) const {
@@ -2029,9 +1955,7 @@ bool BackendController::stopTrackedProcess(const QString& pidFilePath, QString* 
     const QString pid = QString::fromUtf8(pidFile.readAll()).trimmed();
     pidFile.close();
     if (!pid.isEmpty()) {
-        QProcess killer;
-        killer.start(QStringLiteral("taskkill.exe"), {QStringLiteral("/PID"), pid, QStringLiteral("/T"), QStringLiteral("/F")});
-        killer.waitForFinished(5000);
+        Platform::killTree(pid.toLongLong());
     }
     QFile::remove(pidFilePath);
     return true;

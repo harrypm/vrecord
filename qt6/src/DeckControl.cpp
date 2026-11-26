@@ -7,27 +7,22 @@
 #include <QRegularExpression>
 #include <QTimer>
 
-#include <windows.h>
+#include "Platform.h"
 
 namespace {
 void prepare(QProcess* process, const QString& packageRoot) {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("PATH"), QStringLiteral("%1;%2").arg(QDir::toNativeSeparators(QDir(packageRoot).filePath(QStringLiteral("bin"))),
-                                                               env.value(QStringLiteral("PATH"))));
+    env.insert(QStringLiteral("PATH"), Platform::childPath(packageRoot, env.value(QStringLiteral("PATH"))));
     process->setProcessEnvironment(env);
     process->setProcessChannelMode(QProcess::MergedChannels);
-    process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-        args->flags |= CREATE_NO_WINDOW;
-    });
+    Platform::prepareChild(process);
 }
 }  // namespace
 
 DeckControl::DeckControl(const QString& packageRoot, QObject* parent)
     : QObject(parent), m_packageRoot(packageRoot) {
-    const QString packaged = QDir(packageRoot).filePath(QStringLiteral("bin/deckcontrol.exe"));
-    if (QFileInfo::exists(packaged)) {
-        m_program = packaged;
-    }
+    // the packaged deckcontrol, else one installed elsewhere (PATH, the .pkg)
+    m_program = Platform::findTool(packageRoot, QStringLiteral("deckcontrol"));
     m_timer = new QTimer(this);
     m_timer->setInterval(500);
     connect(m_timer, &QTimer::timeout, this, &DeckControl::poll);

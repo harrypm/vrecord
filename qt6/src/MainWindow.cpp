@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+
+#include "Platform.h"
 #include <cstdio>
 
 #include "DeckLinkDiscovery.h"
@@ -46,6 +48,9 @@
 #include <QStyleHints>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QScreen>
+#include <QScrollArea>
+#include <QGuiApplication>
 #include <QTextStream>
 #include <QTime>
 #include <QTimer>
@@ -58,6 +63,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QFileInfo>
 #include <QProxyStyle>
 
 namespace {
@@ -94,7 +100,7 @@ void selfTestTrace(const QString& step) {
     if (!BackendController::testMode()) {
         return;
     }
-    QFile file(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
+    QFile file(QDir(Platform::stateDir(QCoreApplication::applicationDirPath())).filePath(QStringLiteral("VrecordQt6-selftest-trace.log")));
     if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
         file.write(QStringLiteral("%1 trace %2\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate), step).toUtf8());
     }
@@ -486,9 +492,7 @@ void MainWindow::runNextTimecodeScan() {
     const QString type = m_timecodeScanQueue.takeFirst();
     m_timecodeScanProcess = new QProcess(this);
     m_timecodeScanProcess->setProcessChannelMode(QProcess::MergedChannels);
-    m_timecodeScanProcess->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-        args->flags |= 0x08000000;   // CREATE_NO_WINDOW
-    });
+    Platform::prepareChild(m_timecodeScanProcess);
     auto* timeout = new QTimer(m_timecodeScanProcess);
     timeout->setSingleShot(true);
     connect(timeout, &QTimer::timeout, m_timecodeScanProcess, &QProcess::kill);
@@ -501,7 +505,7 @@ void MainWindow::runNextTimecodeScan() {
         m_timecodeScanText->appendPlainText(QStringLiteral("%1 %2").arg(type, -13).arg(match.hasMatch() ? match.captured(1) : QStringLiteral("none")));
         runNextTimecodeScan();
     });
-    const QString ffmpeg = QDir(m_backend.packageRoot()).filePath(QStringLiteral("bin/ffmpeg-ma.exe"));
+    const QString ffmpeg = Platform::toolPath(m_backend.packageRoot(), QStringLiteral("ffmpeg-ma"));
     m_timecodeScanProcess->start(ffmpeg, {QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("info"),
                                           QStringLiteral("-timecode_format"), type,
                                           QStringLiteral("-video_input"), VrecordOptions::ffmpegVideoInput(m_config.value(QStringLiteral("VIDEO_INPUT_CHOICE"))),
@@ -1577,7 +1581,34 @@ void MainWindow::buildUi() {
     // a file the playout file (the specific boxes above take precedence)
     registerDropTarget(central, nullptr, false);
     setWindowTitle(QStringLiteral("Vrecord"));
-    resize(1380, 920);
+
+    // every tab page scrolls when the window is shorter / narrower than the
+    // page needs (a 13" MacBook has ~820 points of height under the menu
+    // bar; the Decklink page alone needs ~660), so the window can shrink to
+    // the screen instead of running off it. Pages that fit show no bars.
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        QWidget* page = m_tabs->widget(i);
+        const QString title = m_tabs->tabText(i);
+        m_tabs->removeTab(i);
+        auto* scroll = new QScrollArea(m_tabs);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->viewport()->setAutoFillBackground(false);
+        page->setAutoFillBackground(false);
+        scroll->setWidget(page);
+        m_tabs->insertTab(i, scroll, title);
+    }
+    m_tabs->setCurrentIndex(0);
+
+    // open at the preferred size, clamped to the screen's usable area minus
+    // the title bar (28 points on macOS, ~31 on Windows) - every point counts
+    // on a 13" MacBook, where the Video Preview page just fits
+    QSize initial(1380, 920);
+    if (const QScreen* screen = QGuiApplication::primaryScreen()) {
+        const QRect available = screen->availableGeometry();
+        initial = initial.boundedTo(QSize(available.width() - 16, available.height() - 32));
+    }
+    resize(initial);
 
     const auto updateSlots = [this] {
         updateDerivedState();
@@ -1601,7 +1632,7 @@ void MainWindow::buildUi() {
                         m_dvOptionSCheck, m_dvOptionDCheck, m_dvOptionTCheck, m_dvOptionTcCheck, m_ccVttCheck,
                         m_ccSrtCheck, m_capToMp4Check, m_colorSafeCheck, m_invertPhase2Check, m_invertPhase4Check,
                         m_previewRelayCheck, m_filePlayAutoCheck, m_testSignalOutputCheck, m_enforceAspectCheck}) {
-        connect(check, &QCheckBox::checkStateChanged, this, updateSlots);
+        connect(check, &QCheckBox::toggled, this, updateSlots);
     }
     for (auto* radio : m_inputChoiceRadios) {
         connect(radio, &QRadioButton::toggled, this, updateSlots);
@@ -1627,7 +1658,7 @@ void MainWindow::buildUi() {
         syncConfigFromUi();
         outputNameLabel->setText(m_config.outputFilename());
     });
-    connect(m_enableSuffixCheck, &QCheckBox::checkStateChanged, this, [outputNameLabel, this] {
+    connect(m_enableSuffixCheck, &QCheckBox::toggled, this, [outputNameLabel, this] {
         if (m_populating) {
             return;
         }
@@ -2669,7 +2700,7 @@ QStringList MainWindow::runSelfTest() {
     // test saves must never touch the user's real configuration
     const VrecordConfig originalConfig = m_config;
     VrecordConfig testConfig = originalConfig;
-    testConfig.configPath = QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf"));
+    testConfig.configPath = QDir(Platform::stateDir(m_backend.packageRoot())).filePath(QStringLiteral("VrecordQt6-selftest.conf"));
     QFile::remove(testConfig.configPath);
     m_config = testConfig;
     BackendController::setTestMode(true);
@@ -2885,8 +2916,9 @@ QStringList MainWindow::runSelfTest() {
 
     {
         // drag and drop: real QDragEnter/QDrop events through the filters
-        const QString folder = QDir(m_backend.packageRoot()).absolutePath();
-        const QString file = QCoreApplication::applicationFilePath();   // a real file in the package
+        // a file that surely exists (this program) and its folder
+        const QString file = QCoreApplication::applicationFilePath();
+        const QString folder = QFileInfo(file).absolutePath();
         const auto dropOnto = [](QWidget* widget, const QString& path) {
             QMimeData mime;
             mime.setUrls({QUrl::fromLocalFile(path)});
@@ -2944,7 +2976,7 @@ QStringList MainWindow::runSelfTest() {
         }
     }
     check(QStringLiteral("User settings are restored intact after the test"), changed.isEmpty(), changed.join(QStringLiteral("; ")));
-    QFile::remove(QDir(m_backend.packageRoot()).filePath(QStringLiteral("VrecordQt6-selftest.conf")));
+    QFile::remove(QDir(Platform::stateDir(m_backend.packageRoot())).filePath(QStringLiteral("VrecordQt6-selftest.conf")));
 
     BackendController::setTestMode(false);
     BackendController::clearCaptured();

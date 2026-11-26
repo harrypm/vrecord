@@ -7,11 +7,11 @@ How the packages are built, tested and released. To install or use Vrecord inste
 Vrecord has two release lines with their own versions:
 
 - **GTK** follows upstream vrecord: its version is the date in the `VERSION="YYYY-MM-DD"` line of the `vrecord` script, shared with upstream.
-- **Qt6** is semi-independent: the Windows Qt6 GUI has its own semantic version in `qt6/VERSION` (e.g. `1.0.0`). `qt6/CMakeLists.txt` reads it, and the updater compares against it.
+- **Qt6** is semi-independent: the Qt6 GUI (Windows, macOS, Linux) has its own semantic version in `qt6/VERSION` (e.g. `1.0.0`). `qt6/CMakeLists.txt` reads it, and the updater compares against it.
 
 | Release | Interface | Packages |
 |---|---|---|
-| `v<x.y.z>` (e.g. `v1.0.0`) | Qt6 GUI (Windows) | `vrecord-qt6_<x.y.z>_windows_x86_64_setup.exe`, `vrecord-qt6_<x.y.z>_windows_x86_64_portable.zip` |
+| `v<x.y.z>` (e.g. `v1.0.0`) | Qt6 GUI | `vrecord-qt6_<x.y.z>_windows_x86_64_setup.exe`, `vrecord-qt6_<x.y.z>_windows_x86_64_portable.zip`, `vrecord-qt6_<x.y.z>_macos_<x86_64\|arm64>.app.zip`, `vrecord-qt6_<x.y.z>_linux_amd64.deb` |
 | `v<YYYY.MM.DD>-gtk` (e.g. `v2026.11.26-gtk`) | GTK interface | `vrecord-gtk_<date>_windows_x86_64_portable.zip`, `vrecord-gtk_<date>_linux_amd64.deb`, `vrecord-gtk_<date>_linux_x86_64.AppImage`, `vrecord-gtk_<date>_macos_<x86_64\|arm64\|universal>.dmg` / `.app.zip` |
 
 Every release has its own `SHA256SUMS.txt`. In both packages the program is called **Vrecord**:
@@ -134,7 +134,7 @@ Each line is released on its own, from its own tag.
 
    Without a notes file, GitHub's generated notes are used. A Qt6 release's screenshots are also pushed to the `release-assets` branch (`<tag>/`). The gallery loads them from there, so it displays while the release is still a draft.
 3. **Tag**: push the tag. It must match its line's version.
-   - Qt6: `git tag -a v1.1.0 -m "Vrecord 1.1.0 (Qt6)"` then `git push origin v1.1.0`. This builds and tests Windows only.
+   - Qt6: `git tag -a v1.1.0 -m "Vrecord 1.1.0 (Qt6)"` then `git push origin v1.1.0`. This builds and tests Windows, Linux and macOS.
    - GTK: `git tag -a v2026.12.01-gtk -m "Vrecord 2026-12-01 (GTK)"` then `git push origin v2026.12.01-gtk`. This builds and tests Windows, Linux and macOS.
 
    Either kind creates a **draft** release: check it, then publish it. A `-suffix` (`v1.1.0-rc1`, `v2026.12.01-rc1-gtk`) publishes a **pre-release** straight away.
